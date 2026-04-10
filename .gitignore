@@ -18,3 +18,6 @@ dist/
 build/
 .release/
 *.spec
+
+# MCP (Model Context Protocol)
+.familiar-ai.json
