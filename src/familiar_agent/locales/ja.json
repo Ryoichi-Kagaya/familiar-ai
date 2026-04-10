@@ -50,7 +50,7 @@
   "desire_turn_marker": "（内的衝動に従って行動）",
   "summary_lang": "日本語",
   "curiosity_none": "なし",
-  "default_companion_name": "カガヤ",
+  "default_companion_name": "人間",
   "morning_no_history": "[これは最初のセッション。過去の記憶はまだない。比較や昨日よりという表現は使わないこと。]",
   "morning_header": "[昨日からのうち — セッションをまたいで続く自分]:",
   "action_recall": "💭 思い出している...",
