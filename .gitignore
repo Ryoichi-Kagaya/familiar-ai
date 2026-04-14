@@ -21,3 +21,6 @@ build/
 
 # MCP (Model Context Protocol)
 .familiar-ai.json
+
+# go2rtc
+go2rtc/
