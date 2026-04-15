@@ -17,6 +17,7 @@ dependencies = [
     "mcp>=1.0.0",
     "google-generativeai>=0.8.6",
     "uvloop>=0.22.1; sys_platform != 'win32'",
+    "onvif-zeep>=0.2.12",
 ]
 
 [project.optional-dependencies]
