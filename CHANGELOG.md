@@ -27,10 +27,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - Online temporal-self context during ordinary turns, with resurfaced memories, unresolved-thread prompts, and within-session self-narrative capture
 - Lightweight adaptive confidence updates for semantic facts and behavior policies, including revision history for experience-driven value shifts
 - Lightweight layered self continuity with inertial proto-self updates, recent intention-result traces, and persistent active concerns
+- Freshness-aware MCP interoception ingestion, persisted heartbeat carryover state, SQLite-backed relationship storage with legacy JSON import, and sample autonomy config files for drives / schedule / operator wrappers
 
 ### Changed
 - Lint and test workflows now run for both `develop` and `main`, matching the new default-branch strategy
 - CI now runs the full pytest suite again instead of excluding GUI async stability coverage
+- Camera discovery now browses `_onvif._tcp.local.` via zeroconf, respects RTSP TXT paths when present, and falls back to socket-based local-prefix detection when `ip route` is unavailable
 - GUI settings dialog now keeps JP labels fully visible (including short labels like `名`), refreshed the app to a bright, soft, rounded light theme, split first-turn startup status from "thinking", and increased GUI font sizing for readability.
 - GUI startup now shows the window before heavyweight agent warmup finishes, and surfaces readiness phases such as setup check, agent init, embedding warmup, MCP connect, and realtime STT connect
 - GUI / TUI / REPL setup paths now share the same runtime-oriented env schema, exposing `BASE_URL`, `TOOLS_MODE`, `UTILITY_*`, `SCENE_*`, `REALTIME_STT`, and `FAMILIAR_AUTO_*` consistently
