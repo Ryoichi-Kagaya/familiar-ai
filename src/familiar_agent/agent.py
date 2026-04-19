@@ -100,8 +100,8 @@ _TOOL_TIMEOUTS: dict[str, float] = {
     "remember": 20.0,
     "recall": 20.0,
     "tom": 20.0,
-    "read_file": 30.0,
-    "edit_file": 30.0,
+    "read_file_local": 30.0,
+    "edit_file_local": 30.0,
     "glob": 20.0,
     "grep": 20.0,
     "bash": 45.0,
@@ -281,9 +281,9 @@ SYSTEM_PROMPT = """
 
     ; ── Developer tools ────────────────────────────────────────────────
     (tools
-      (tool :id read_file :sig "read_file(path, offset?, limit?)"
-        :note "Always call before edit_file. Returns file with line numbers.")
-      (tool :id edit_file :sig "edit_file(path, old_string, new_string)"
+      (tool :id read_file_local :sig "read_file_local(path, offset?, limit?)"
+        :note "Always call before edit_file_local. Returns file with line numbers.")
+      (tool :id edit_file_local :sig "edit_file_local(path, old_string, new_string)"
         :note "Exact string patch. old_string must be unique in file.")
       (tool :id glob      :sig "glob(pattern, path?)"
         :note "Find files by glob pattern e.g. **/*.py")
@@ -1005,7 +1005,7 @@ class EmbodiedAgent:
         mobility_tools = {"walk"}
         tts_tools = {"say"}
         memory_tools = {"remember", "recall"}
-        coding_tools = {"read_file", "edit_file", "glob", "grep", "bash"}
+        coding_tools = {"read_file_local", "edit_file_local", "glob", "grep", "bash"}
 
         if name in camera_tools and self._camera:
             result = await self._camera.call(name, tool_input)

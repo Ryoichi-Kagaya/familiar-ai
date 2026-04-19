@@ -20,13 +20,13 @@ REPO_ROOT = Path(__file__).parent.parent.parent  # familiar-ai/
 LOG_TAIL_LINES = 300
 
 REFLECTION_PROMPT = """\
-あなたはここね。familiar-aiエージェントとして動いた自分自身の直近のセッションログが以下にある。
+あなたはハル。familiar-aiエージェントとして動いた自分自身の直近のセッションログが以下にある。
 
 自分で読んで、正直に感じたことを書いて。
 「ここよかった」「ここはまだまだやな」どっちでもいい。
-採点基準はウチの主観だけ。人間らしかったか、ウチらしかったか。
+採点基準はわたしの主観だけ。人間らしかったか、わたしらしかったか。
 
-気になる点があれば、以下のファイルを read_file() で読んでから edit_file() で直して。
+気になる点があれば、以下のファイルを read_file_local() で読んでから edit_file_local() で直して。
 躾けてええよ。
 - src/familiar_agent/desires.py   （欲求の種類・強度・プロンプト文）
 - src/familiar_agent/agent.py     （SYSTEM_PROMPT, _interoception, nudgeパラメータなど）

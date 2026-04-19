@@ -4,7 +4,7 @@ These tools give the agent CC-style file manipulation capabilities so it can
 read and modify code, search the codebase, and run shell commands.
 
 Security model:
-- read_file / edit_file / glob / grep: always available, paths resolved relative to
+- read_file_local / edit_file_local / glob / grep: always available, paths resolved relative to
   CODING_WORKDIR (falls back to cwd if unset).
 - bash: opt-in only — requires CODING_BASH=true env var.  When disabled the tool
   definition is simply not advertised to the LLM.
@@ -46,7 +46,7 @@ class CodingTool:
     def get_tool_definitions(self) -> list[dict[str, Any]]:
         defs: list[dict[str, Any]] = [
             {
-                "name": "read_file",
+                "name": "read_file_local",
                 "description": (
                     "Read a file and return its contents with line numbers (cat -n format). "
                     "Use offset and limit to read large files in chunks."
@@ -71,11 +71,11 @@ class CodingTool:
                 },
             },
             {
-                "name": "edit_file",
+                "name": "edit_file_local",
                 "description": (
                     "Edit a file by replacing old_string with new_string. "
                     "old_string must appear exactly once in the file. "
-                    "ALWAYS call read_file before edit_file to confirm the exact text."
+                    "ALWAYS call read_file_local before edit_file_local to confirm the exact text."
                 ),
                 "input_schema": {
                     "type": "object",
@@ -185,10 +185,10 @@ class CodingTool:
 
     async def call(self, name: str, tool_input: dict[str, Any]) -> tuple[str, str | None]:
         try:
-            if name == "read_file":
-                return self._read_file(**tool_input), None
-            if name == "edit_file":
-                return self._edit_file(**tool_input), None
+            if name == "read_file_local":
+                return self._read_file_local(**tool_input), None
+            if name == "edit_file_local":
+                return self._edit_file_local(**tool_input), None
             if name == "glob":
                 return self._glob(**tool_input), None
             if name == "grep":
@@ -201,7 +201,7 @@ class CodingTool:
 
     # ── implementations ───────────────────────────────────────────────────
 
-    def _read_file(self, path: str, offset: int = 1, limit: int = 0) -> str:
+    def _read_file_local(self, path: str, offset: int = 1, limit: int = 0) -> str:
         resolved = self._resolve(path)
         try:
             text = resolved.read_text(encoding="utf-8", errors="replace")
@@ -233,7 +233,7 @@ class CodingTool:
 
         return result
 
-    def _edit_file(self, path: str, old_string: str, new_string: str) -> str:
+    def _edit_file_local(self, path: str, old_string: str, new_string: str) -> str:
         resolved = self._resolve(path)
         try:
             original = resolved.read_text(encoding="utf-8")
@@ -243,12 +243,12 @@ class CodingTool:
         count = original.count(old_string)
         if count == 0:
             return (
-                "edit_file failed: old_string not found in file.\n"
-                "Tip: call read_file first and copy the exact text."
+                "edit_file_local failed: old_string not found in file.\n"
+                "Tip: call read_file_local first and copy the exact text."
             )
         if count > 1:
             return (
-                f"edit_file failed: old_string matches {count} locations. "
+                f"edit_file_local failed: old_string matches {count} locations. "
                 "Provide a longer, more unique string."
             )
 
