@@ -1,4 +1,4 @@
-"""Self-reflection loop — Kokone reads her own session log and rewrites herself.
+"""Self-reflection loop — Hal reads her own session log and rewrites herself.
 
 Run:
     uv run python -m familiar_agent.reflect          # latest log
@@ -83,7 +83,7 @@ def run_reflection(dry: bool = False) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Kokone self-reflection loop")
+    parser = argparse.ArgumentParser(description="Hal self-reflection loop")
     parser.add_argument("--dry", action="store_true", help="Print prompt only, don't run claude")
     args = parser.parse_args()
 
