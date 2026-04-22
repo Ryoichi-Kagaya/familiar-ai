@@ -108,7 +108,7 @@ async def test_execute_tool_routes_tom():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool_name", ["read_file", "edit_file", "glob", "grep", "bash"])
+@pytest.mark.parametrize("tool_name", ["read_file_local", "edit_file_local", "glob", "grep", "bash"])
 async def test_execute_tool_routes_coding_tools(tool_name: str):
     agent = _make_agent()
     result, _ = await agent._execute_tool(tool_name, {})
