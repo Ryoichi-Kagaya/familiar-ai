@@ -19,8 +19,5 @@ build/
 .release/
 *.spec
 
-# MCP (Model Context Protocol)
+# MCP config
 .familiar-ai.json
-
-# go2rtc
-go2rtc/
