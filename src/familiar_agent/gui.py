@@ -1,4 +1,4 @@
-"""PySide6 GUI for familiar-ai — Soft Daylight theme.
+"""PySide6 GUI for familiar-ai — Monokai dark theme.
 
 Provides a native desktop window with:
 - Scrollable conversation log with styled HTML-like bubbles (ChatLog)
@@ -94,20 +94,20 @@ logger = logging.getLogger(__name__)
 # Color palette
 # ---------------------------------------------------------------------------
 
-_BG_BASE = "#f8fbff"
-_BG_SURFACE = "#ffffff"
-_BG_CARD = "#ffffff"
-_BG_ELEVATED = "#fff8fc"
-_BG_HOVER = "rgba(255, 167, 190, 0.16)"
-_ACCENT = "#ff8db1"
-_ACCENT_DEEP = "#ff6e9d"
-_ACCENT_DIM = "#ffd7e7"
-_TEXT_PRIMARY = "#342c44"
-_TEXT_SECONDARY = "#7f7394"
-_BORDER = "rgba(255, 169, 192, 0.42)"
-_BUBBLE_USER_BG = "#ffe9f3"
-_BUBBLE_AGENT_BG = "#ffffff"
-_BUBBLE_TOOL_BG = "#eef6ff"
+_BG_BASE = "#272822"
+_BG_SURFACE = "#2D2E27"
+_BG_CARD = "#2D2E27"
+_BG_ELEVATED = "#3E3D32"
+_BG_HOVER = "#49483E"
+_ACCENT = "#A6E22E"
+_ACCENT_DEEP = "#F92672"
+_ACCENT_DIM = "#75715E"
+_TEXT_PRIMARY = "#F8F8F2"
+_TEXT_SECONDARY = "#A59F85"
+_BORDER = "#49483E"
+_BUBBLE_USER_BG = "#3E3D32"
+_BUBBLE_AGENT_BG = "#2D2E27"
+_BUBBLE_TOOL_BG = "#1E1F1C"
 _UI_FONT_STACK = (
     "'Noto Sans CJK JP', 'Yu Gothic UI', 'Hiragino Sans', 'Meiryo', 'Segoe UI', sans-serif"
 )
@@ -187,86 +187,125 @@ _ENV_PATH: Path = resolve_env_path()
 
 
 def _apply_global_style(app: QApplication) -> None:
-    """Apply the Soft Daylight stylesheet to the whole application."""
+    """Apply Monokai dark theme to the whole application."""
     app.setStyleSheet(
         f"""
         QWidget {{
             color: {_TEXT_PRIMARY};
             font-family: {_UI_FONT_STACK};
             font-size: {_px(13)}px;
+            background: {_BG_BASE};
         }}
+
         QMainWindow {{
-            background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #fefeff, stop:1 {_BG_BASE});
+            background: {_BG_BASE};
         }}
+
         QDialog {{
             background: {_BG_SURFACE};
             border: 1px solid {_BORDER};
-            border-radius: 20px;
+            border-radius: 12px;
         }}
+
         QLabel {{ color: {_TEXT_PRIMARY}; }}
 
-        /* Scrollbar — soft rounded */
+        /* Scrollbar — Monokai style */
         QScrollBar:vertical {{
-            background: transparent; width: 6px; border-radius: 3px;
+            background: transparent; width: 8px;
         }}
         QScrollBar::handle:vertical {{
-            background: rgba(127,115,148,0.34); border-radius: 3px; min-height: 24px;
+            background: {_ACCENT_DIM};
+            border-radius: 4px;
+            min-height: 24px;
         }}
-        QScrollBar::handle:vertical:hover {{ background: rgba(255,141,177,0.72); }}
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        QScrollBar::handle:vertical:hover {{
+            background: {_ACCENT};
+        }}
+        QScrollBar::add-line:vertical, 
+        QScrollBar::sub-line:vertical {{
+            height: 0;
+        }}
 
         /* Inputs */
         QLineEdit {{
-            background: {_BG_SURFACE}; color: {_TEXT_PRIMARY};
-            border: 1px solid {_BORDER}; border-radius: 15px; padding: 10px 14px;
-            selection-background-color: {_ACCENT_DIM};
+            background: {_BG_SURFACE};
+            color: {_TEXT_PRIMARY};
+            border: 1px solid {_BORDER};
+            border-radius: 8px;
+            padding: 8px 12px;
+            selection-background-color: {_ACCENT};
         }}
         QLineEdit:focus {{
             border-color: {_ACCENT};
-            background: #fffaff;
+            background: {_BG_ELEVATED};
         }}
 
         /* Buttons */
         QPushButton {{
-            background: #fff4fa; color: {_TEXT_PRIMARY};
-            border: 1px solid {_BORDER}; border-radius: 16px; padding: 10px 18px;
+            background: {_BG_ELEVATED};
+            color: {_TEXT_PRIMARY};
+            border: 1px solid {_BORDER};
+            border-radius: 8px;
+            padding: 8px 16px;
         }}
-        QPushButton:hover {{ background: #ffe8f2; border-color: rgba(255,141,177,0.75); }}
-        QPushButton:pressed {{ background: #ffdfea; }}
+        QPushButton:hover {{
+            background: {_BG_HOVER};
+            border-color: {_ACCENT};
+        }}
+        QPushButton:pressed {{
+            background: {_ACCENT_DEEP};
+            color: #272822;
+        }}
         QPushButton:disabled {{
-            background: #f7f3f8; color: {_TEXT_SECONDARY};
-            border-color: rgba(127,115,148,0.20);
+            background: {_BG_SURFACE};
+            color: {_TEXT_SECONDARY};
+            border-color: {_BORDER};
         }}
 
         /* ComboBox */
         QComboBox {{
-            background: {_BG_SURFACE}; color: {_TEXT_PRIMARY};
-            border: 1px solid {_BORDER}; border-radius: 15px; padding: 10px 14px;
+            background: {_BG_SURFACE};
+            color: {_TEXT_PRIMARY};
+            border: 1px solid {_BORDER};
+            border-radius: 8px;
+            padding: 8px 12px;
         }}
-        QComboBox::drop-down {{ border: none; padding-right: 8px; }}
+        QComboBox::drop-down {{
+            border: none;
+        }}
         QComboBox QAbstractItemView {{
-            background: {_BG_CARD}; color: {_TEXT_PRIMARY};
-            selection-background-color: #ffe1ee;
+            background: {_BG_CARD};
+            color: {_TEXT_PRIMARY};
+            selection-background-color: {_ACCENT};
             border: 1px solid {_BORDER};
         }}
 
         /* Tabs */
         QTabWidget::pane {{
-            border: 1px solid {_BORDER}; background: {_BG_SURFACE}; top: -1px;
-            border-radius: 16px;
+            border: 1px solid {_BORDER};
+            background: {_BG_SURFACE};
+            border-radius: 10px;
         }}
+
         QTabBar::tab {{
-            background: #fff7fc; color: {_TEXT_SECONDARY};
-            padding: 10px 22px; border-radius: 18px; margin-right: 6px;
-            border: 1px solid rgba(255,169,192,0.28);
+            background: {_BG_ELEVATED};
+            color: {_TEXT_SECONDARY};
+            padding: 8px 18px;
+            border-radius: 10px;
+            margin-right: 4px;
+            border: 1px solid {_BORDER};
         }}
+
         QTabBar::tab:selected {{
-            background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
-                stop:0 {_ACCENT_DEEP}, stop:1 {_ACCENT});
-            color: white;
-            border-color: rgba(255,110,157,0.8);
+            background: {_ACCENT};
+            color: #272822;
+            border-color: {_ACCENT};
         }}
-        QTabBar::tab:hover:!selected {{ background: #ffeef6; color: {_TEXT_PRIMARY}; }}
+
+        QTabBar::tab:hover:!selected {{
+            background: {_BG_HOVER};
+            color: {_TEXT_PRIMARY};
+        }}
         """
     )
 
@@ -372,8 +411,8 @@ class ChatLog(QScrollArea):
         if text.startswith("[error]"):
             self._add_bubble(
                 f"⚠ {text[7:].strip()}",
-                bg="#ffe9ee",
-                text_color="#d83d58",
+                bg="#3E1F24",
+                text_color="#F92672",
                 ml=20,
                 mr=20,
                 small=True,
@@ -1098,10 +1137,10 @@ class FamiliarWindow(QMainWindow):
         settings_btn.setFixedHeight(48)
         settings_btn.setMinimumWidth(160)
         settings_btn.setStyleSheet(
-            f"QPushButton {{ background: #fff2f8; border-radius: 16px;"
+            f"QPushButton {{ background: {_BG_SURFACE}; border-radius: 16px;"
             f" border: 1px solid {_BORDER};"
             f" padding: 0 16px; font-size: {_px(12)}px; color: {_TEXT_SECONDARY}; }}"
-            f"QPushButton:hover {{ background: #ffe7f2; color: {_TEXT_PRIMARY}; }}"
+            f"QPushButton:hover {{ background: {_BG_SURFACE}; color: {_TEXT_PRIMARY}; }}"
         )
         settings_btn.clicked.connect(self._open_settings)
         header_layout.addWidget(settings_btn)
@@ -1154,7 +1193,7 @@ class FamiliarWindow(QMainWindow):
         self._status_error_label = QLabel("")
         self._status_error_label.setWordWrap(True)
         self._status_error_label.setStyleSheet(
-            "color: #c13f4d; font-size: 12px; background: transparent;"
+            "color: #F92672; font-size: 12px; background: transparent;"
         )
         status_layout.addWidget(self._status_error_label)
 
@@ -1206,7 +1245,7 @@ class FamiliarWindow(QMainWindow):
             f" font-family: {_UI_FONT_STACK};"
             f"}}"
             f"QLineEdit#msgInput:focus {{"
-            f" border-color: {_ACCENT}; background: #fff8fc;"
+            f" border-color: {_ACCENT}; background: {_BG_SURFACE};"
             f"}}"
         )
         self._input.returnPressed.connect(self._on_send)
