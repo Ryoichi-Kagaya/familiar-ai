@@ -51,6 +51,7 @@ class CameraTool:
         self._cam_onvif: Any = None
         self._ptz: Any = None
         self._profile_token: str | None = None
+        self._ptz_connect_failed_at: float = 0.0
 
         self._cap: cv2.VideoCapture | None = None
         self._last_frame: Any = None
@@ -144,6 +145,10 @@ class CameraTool:
         if self._cam_onvif is not None:
             return True
 
+        # Don't retry within 60 s of a previous failure to avoid blocking every look() call.
+        if self._ptz_connect_failed_at > 0 and time.monotonic() - self._ptz_connect_failed_at < 60.0:
+            return False
+
         hostname, username, password, port = self._get_ptz_connection_params()
         if hostname is None:
             return False
@@ -164,7 +169,7 @@ class CameraTool:
             if fallback != port:
                 ports_to_try.append(fallback)
 
-        last_error: Exception | None = None
+        errors_by_port: dict[int, str] = {}
         for try_port in ports_to_try:
             try:
                 cam = ONVIFCamera(hostname, try_port, username, password, wsdl_dir=wsdl_dir)
@@ -174,20 +179,26 @@ class CameraTool:
                 self._profile_token = profiles[0].token if profiles else "Profile_1"
                 self._ptz = await cam.create_ptz_service()
                 self._cam_onvif = cam
+                self._ptz_connect_failed_at = 0.0
                 logger.info("Camera PTZ connected via ONVIF: %s (port %d)", hostname, try_port)
                 return True
             except Exception as e:
+                errors_by_port[try_port] = str(e)
                 logger.debug("ONVIF PTZ port %d failed for %s: %s", try_port, hostname, e)
-                last_error = e
 
+        self._ptz_connect_failed_at = time.monotonic()
         logger.warning(
-            "ONVIF PTZ unavailable for %s (tried ports %s). "
-            "Pan/tilt will be disabled. Last error: %s. "
-            "Tip: set CAMERA_PTZ_PORT to the correct ONVIF port for your camera "
-            "(Tapo=2020, Eufy=8080).",
+            "ONVIF PTZ unavailable for %s (tried ports %s). Pan/tilt will be disabled.",
             hostname,
             ports_to_try,
-            last_error,
+        )
+        for p, err in errors_by_port.items():
+            logger.warning("  port %d: %s", p, err)
+        logger.warning(
+            "Tip: if port 2020 was working before, open the Tapo app → camera settings "
+            "→ Advanced → and confirm that 'Local Access' / ONVIF is still enabled. "
+            "Firmware updates sometimes reset this. "
+            "You can also set CAMERA_PTZ_PORT to override the port (Tapo=2020, Eufy=8080)."
         )
         return False
 
