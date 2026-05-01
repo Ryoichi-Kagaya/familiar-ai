@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import base64
 import threading
-from unittest.mock import patch
+import time
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -33,6 +34,7 @@ def _make_camera_tool(host: str = "192.168.1.100"):
         cam._cam_onvif = None
         cam._ptz = None
         cam._profile_token = None
+        cam._ptz_connect_failed_at = 0.0
         cam._cap = None
         cam._last_frame = None
         cam._running = False
@@ -44,6 +46,24 @@ def _make_camera_tool(host: str = "192.168.1.100"):
 def _make_fake_frame(height: int = 480, width: int = 640) -> "np.ndarray":
     """Create a fake BGR numpy frame."""
     return np.zeros((height, width, 3), dtype=np.uint8)
+
+
+def _make_mock_onvif_cam(profile_token: str = "profile_1"):
+    """Return a MagicMock that mimics onvif-zeep-async >=4.x (all sync methods)."""
+    mock_profile = MagicMock()
+    mock_profile.token = profile_token
+
+    mock_media = MagicMock()
+    mock_media.GetProfiles.return_value = [mock_profile]
+
+    mock_ptz = MagicMock()
+
+    mock_cam = MagicMock()
+    mock_cam.update_xaddrs = MagicMock(return_value=None)  # sync, returns None
+    mock_cam.create_media_service.return_value = mock_media
+    mock_cam.create_ptz_service.return_value = mock_ptz
+
+    return mock_cam, mock_ptz, mock_profile.token
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +194,166 @@ async def test_call_unknown_tool_returns_error():
     result, img = await cam.call("nonexistent", {})
 
     assert "Unknown" in result or "nonexistent" in result
+
+
+# ---------------------------------------------------------------------------
+# Tests: _ensure_connected()  — onvif-zeep-async >=4.x sync API
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ensure_connected_success():
+    """_ensure_connected() wires up _cam_onvif, _ptz, and _profile_token."""
+    cam = _make_camera_tool()
+    mock_cam, mock_ptz, token = _make_mock_onvif_cam("profile_1")
+
+    with patch("familiar_agent.tools.camera.ONVIFCamera", return_value=mock_cam):
+        result = await cam._ensure_connected()
+
+    assert result is True
+    assert cam._cam_onvif is mock_cam
+    assert cam._ptz is mock_ptz
+    assert cam._profile_token == "profile_1"
+    assert cam._ptz_connect_failed_at == 0.0
+
+
+@pytest.mark.asyncio
+async def test_ensure_connected_already_connected():
+    """_ensure_connected() returns True immediately if already connected."""
+    cam = _make_camera_tool()
+    cam._cam_onvif = MagicMock()
+
+    with patch("familiar_agent.tools.camera.ONVIFCamera") as mock_cls:
+        result = await cam._ensure_connected()
+
+    mock_cls.assert_not_called()
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_ensure_connected_failure_sets_cooldown():
+    """_ensure_connected() records failure time when all ports fail."""
+    cam = _make_camera_tool()
+    mock_cam = MagicMock()
+    mock_cam.update_xaddrs.side_effect = ConnectionError("connection refused")
+
+    with patch("familiar_agent.tools.camera.ONVIFCamera", return_value=mock_cam):
+        result = await cam._ensure_connected()
+
+    assert result is False
+    assert cam._ptz_connect_failed_at > 0.0
+    assert cam._cam_onvif is None
+
+
+@pytest.mark.asyncio
+async def test_ensure_connected_respects_cooldown():
+    """_ensure_connected() skips all retries within the 60 s cooldown window."""
+    cam = _make_camera_tool()
+    cam._ptz_connect_failed_at = time.monotonic()  # just failed
+
+    with patch("familiar_agent.tools.camera.ONVIFCamera") as mock_cls:
+        result = await cam._ensure_connected()
+
+    mock_cls.assert_not_called()
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_ensure_connected_retries_after_cooldown_expires():
+    """_ensure_connected() retries once the cooldown window has passed."""
+    cam = _make_camera_tool()
+    cam._ptz_connect_failed_at = time.monotonic() - 61.0  # expired
+
+    mock_cam, mock_ptz, _ = _make_mock_onvif_cam()
+
+    with patch("familiar_agent.tools.camera.ONVIFCamera", return_value=mock_cam):
+        result = await cam._ensure_connected()
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_ensure_connected_skips_usb_host():
+    """_ensure_connected() returns False for integer (USB) camera sources."""
+    cam = _make_camera_tool(host="0")
+    cam.ptz_host = "0"
+
+    with patch("familiar_agent.tools.camera.ONVIFCamera") as mock_cls:
+        result = await cam._ensure_connected()
+
+    mock_cls.assert_not_called()
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: move()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_move_right_sends_negative_pan():
+    """move('right', 30) sends a negative x pan to RelativeMove."""
+    cam = _make_camera_tool()
+    cam._cam_onvif = MagicMock()
+    cam._ptz = MagicMock()
+    cam._ptz.RelativeMove = MagicMock(return_value=None)
+    cam._profile_token = "profile_1"
+
+    result = await cam.move("right", 30)
+
+    assert "right" in result
+    assert "30" in result
+    called_params = cam._ptz.RelativeMove.call_args[0][0]
+    assert called_params["Translation"]["PanTilt"]["x"] < 0
+
+
+@pytest.mark.asyncio
+async def test_move_left_sends_positive_pan():
+    """move('left', 30) sends a positive x pan to RelativeMove."""
+    cam = _make_camera_tool()
+    cam._cam_onvif = MagicMock()
+    cam._ptz = MagicMock()
+    cam._ptz.RelativeMove = MagicMock(return_value=None)
+    cam._profile_token = "profile_1"
+
+    result = await cam.move("left", 30)
+
+    assert "left" in result
+    called_params = cam._ptz.RelativeMove.call_args[0][0]
+    assert called_params["Translation"]["PanTilt"]["x"] > 0
+
+
+@pytest.mark.asyncio
+async def test_move_resets_connection_on_failure():
+    """move() clears _cam_onvif so the next call retries the connection."""
+    cam = _make_camera_tool()
+    cam._cam_onvif = MagicMock()
+    cam._ptz = MagicMock()
+    cam._ptz.RelativeMove = MagicMock(side_effect=RuntimeError("PTZ error"))
+    cam._profile_token = "profile_1"
+
+    result = await cam.move("left", 30)
+
+    assert "failed" in result.lower()
+    assert cam._cam_onvif is None
+
+
+@pytest.mark.asyncio
+async def test_move_returns_unsupported_when_ptz_unavailable():
+    """move() returns a clear message when PTZ connection cannot be established."""
+    cam = _make_camera_tool()
+    mock_cam = MagicMock()
+    mock_cam.update_xaddrs.side_effect = ConnectionError("refused")
+
+    with patch("familiar_agent.tools.camera.ONVIFCamera", return_value=mock_cam):
+        result = await cam.move("right", 30)
+
+    assert "not supported" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# Tests: PTZ connection params
+# ---------------------------------------------------------------------------
 
 
 def test_ptz_params_fall_back_to_stream_url_credentials():

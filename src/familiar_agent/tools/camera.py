@@ -173,11 +173,13 @@ class CameraTool:
         for try_port in ports_to_try:
             try:
                 cam = ONVIFCamera(hostname, try_port, username, password, wsdl_dir=wsdl_dir)
-                await cam.update_xaddrs()
-                media = await cam.create_media_service()
-                profiles = await media.GetProfiles()
+                # onvif-zeep-async >=4.x: all service methods are synchronous; run in thread pool
+                # to avoid blocking the async event loop.
+                await asyncio.to_thread(cam.update_xaddrs)
+                media = cam.create_media_service()
+                profiles = await asyncio.to_thread(media.GetProfiles)
                 self._profile_token = profiles[0].token if profiles else "Profile_1"
-                self._ptz = await cam.create_ptz_service()
+                self._ptz = cam.create_ptz_service()
                 self._cam_onvif = cam
                 self._ptz_connect_failed_at = 0.0
                 logger.info("Camera PTZ connected via ONVIF: %s (port %d)", hostname, try_port)
@@ -287,12 +289,13 @@ class CameraTool:
             elif direction == "down":
                 tilt_delta = degrees / 90.0
 
-            # Relative move via ONVIF PTZ service
-            await self._ptz.RelativeMove(
+            # Relative move via ONVIF PTZ service (sync call; run in thread pool)
+            await asyncio.to_thread(
+                self._ptz.RelativeMove,
                 {
                     "ProfileToken": self._profile_token,
                     "Translation": {"PanTilt": {"x": pan_delta, "y": tilt_delta}},
-                }
+                },
             )
             await asyncio.sleep(0.4)
             return f"Looked {direction} by ~{degrees} degrees."
