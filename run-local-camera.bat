@@ -1,5 +1,4 @@
 @echo off
-
 cd /d "C:\Users\Blue-\mediamtx"
 start "" mediamtx.exe
 timeout /t 3 >nul
