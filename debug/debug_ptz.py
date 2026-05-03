@@ -1,4 +1,8 @@
-"""PTZ debug script — run with: uv run python debug_ptz.py"""
+"""PTZ debug script — run with: uv run python debug/debug_ptz.py
+
+Tests both pan (left/right) and tilt (up/down), and dumps PTZ capabilities
+and current position so you can diagnose why tilt might not move.
+"""
 
 from __future__ import annotations
 
@@ -38,6 +42,10 @@ def ng(msg: str) -> None:
 
 def info(msg: str) -> None:
     print(f"  [--]  {msg}")
+
+
+def warn(msg: str) -> None:
+    print(f"  [!!]  {msg}")
 
 
 # ── 1. Config dump ────────────────────────────────────────────
@@ -116,32 +124,159 @@ async def run_onvif_checks() -> tuple[object | None, object | None, str | None]:
     return None, None, None
 
 
-# ── 4. PTZ move ──────────────────────────────────────────────
-async def try_ptz_move(ptz: object, token: str) -> None:
-    sep("4. PTZ move test (right 10°, then left 10°)")
+# ── 4. PTZ capabilities ──────────────────────────────────────
+async def check_ptz_capabilities(ptz: object, token: str) -> None:
+    sep("4. PTZ capabilities")
+
+    # GetConfigurations: shows pan/tilt/zoom limits
+    try:
+        configs = await asyncio.to_thread(ptz.GetConfigurations)  # type: ignore[union-attr]
+        for cfg in configs:
+            info(f"Config name: {getattr(cfg, 'Name', '?')!r}  token: {getattr(cfg, 'token', '?')!r}")
+            limits = getattr(cfg, "PanTiltLimits", None)
+            if limits:
+                r = getattr(limits, "Range", None)
+                if r:
+                    xr = getattr(r, "XRange", None)
+                    yr = getattr(r, "YRange", None)
+                    if xr:
+                        info(f"  Pan  (x) range : Min={getattr(xr, 'Min', '?')}  Max={getattr(xr, 'Max', '?')}")
+                    if yr:
+                        info(f"  Tilt (y) range : Min={getattr(yr, 'Min', '?')}  Max={getattr(yr, 'Max', '?')}")
+                        y_min = getattr(yr, "Min", None)
+                        y_max = getattr(yr, "Max", None)
+                        if y_min is not None and y_max is not None and float(y_min) == float(y_max) == 0.0:
+                            warn("Tilt range is 0–0: this camera may NOT support tilt!")
+            else:
+                warn("No PanTiltLimits in configuration (tilt may be unsupported)")
+        ok("GetConfigurations succeeded")
+    except Exception as e:
+        ng(f"GetConfigurations failed: {e}")
+
+    # GetStatus: current pan/tilt position
+    try:
+        status = await asyncio.to_thread(
+            ptz.GetStatus,  # type: ignore[union-attr]
+            {"ProfileToken": token},
+        )
+        pos = getattr(status, "Position", None)
+        if pos:
+            pt = getattr(pos, "PanTilt", None)
+            if pt:
+                info(f"Current position — Pan(x)={getattr(pt, 'x', '?')}  Tilt(y)={getattr(pt, 'y', '?')}")
+            else:
+                warn("Position.PanTilt not present in GetStatus response")
+        ok("GetStatus succeeded")
+    except Exception as e:
+        ng(f"GetStatus failed: {e}")
+
+    # GetNodes: exposes supported move modes
+    try:
+        nodes = await asyncio.to_thread(ptz.GetNodes)  # type: ignore[union-attr]
+        for node in nodes:
+            info(f"Node: {getattr(node, 'Name', '?')!r}")
+            supported = getattr(node, "SupportedPTZSpaces", None)
+            if supported:
+                rel_spaces = getattr(supported, "RelativePanTiltTranslationSpace", [])
+                if rel_spaces:
+                    ok(f"  RelativeMove PanTilt spaces: {[getattr(s, 'URI', s) for s in rel_spaces]}")
+                else:
+                    warn("  No RelativePanTiltTranslationSpace — RelativeMove may not be supported!")
+        ok("GetNodes succeeded")
+    except Exception as e:
+        ng(f"GetNodes failed: {e}")
+
+
+# ── 5. Pan test ──────────────────────────────────────────────
+async def try_pan_move(ptz: object, token: str) -> None:
+    sep("5. Pan test (right 10°, then left 10° to return)")
+    # ONVIF convention: positive x = right, negative x = left
+    # camera.py inverts this (left=positive, right=negative) — pan reportedly works,
+    # so this camera likely uses the inverted convention.
+    info("Using camera.py sign convention: right=-0.056, left=+0.056")
     try:
         await asyncio.to_thread(
             ptz.RelativeMove,  # type: ignore[union-attr]
             {"ProfileToken": token, "Translation": {"PanTilt": {"x": -10 / 180.0, "y": 0.0}}},
         )
-        ok("RelativeMove RIGHT succeeded")
-        await asyncio.sleep(0.8)
+        ok("RelativeMove pan RIGHT (-x) succeeded")
+        await asyncio.sleep(1.0)
         await asyncio.to_thread(
             ptz.RelativeMove,  # type: ignore[union-attr]
             {"ProfileToken": token, "Translation": {"PanTilt": {"x": 10 / 180.0, "y": 0.0}}},
         )
-        ok("RelativeMove LEFT (return) succeeded")
+        ok("RelativeMove pan LEFT (+x, return) succeeded")
+        await asyncio.sleep(1.0)
     except Exception as e:
-        ng(f"RelativeMove failed: {e}")
-        print("  Possible cause: camera does not expose PTZ service even though ONVIF is reachable.")
+        ng(f"Pan RelativeMove failed: {e}")
+
+
+# ── 6. Tilt test ─────────────────────────────────────────────
+async def try_tilt_move(ptz: object, token: str) -> None:
+    sep("6. Tilt test — four variants to find which sign works")
+
+    # camera.py uses: up → y = -degrees/90, down → y = +degrees/90
+    # Standard ONVIF:  up → y = +degrees/90, down → y = -degrees/90
+    # We test both so you can see which actually moves the camera.
+
+    moves: list[tuple[str, float]] = [
+        ("camera.py 'up'   (y = -0.111, should tilt UP)",   -10 / 90.0),
+        ("camera.py 'down' (y = +0.111, should tilt DOWN)", +10 / 90.0),
+    ]
+
+    for label, y_val in moves:
+        info(f"Sending y={y_val:.4f}  [{label}]")
+        try:
+            await asyncio.to_thread(
+                ptz.RelativeMove,  # type: ignore[union-attr]
+                {"ProfileToken": token, "Translation": {"PanTilt": {"x": 0.0, "y": y_val}}},
+            )
+            ok(f"RelativeMove succeeded (y={y_val:.4f}) — did camera move?")
+        except Exception as e:
+            ng(f"RelativeMove failed (y={y_val:.4f}): {e}")
+        await asyncio.sleep(1.5)
+
+    # After both moves the net displacement should be ~0 (returned to start).
+    # If neither moved, the camera likely reports OK but ignores tilt.
+    print()
+    warn("Check physically: did the camera tilt at all during step 6?")
+    warn("If it moved on 'down' but not 'up', camera.py signs are correct.")
+    warn("If it moved on 'up' but not 'down', signs are inverted (bug in camera.py).")
+    warn("If neither moved, tilt is hardware-unsupported or requires a different move type.")
+
+
+# ── 7. AbsoluteMove tilt fallback ────────────────────────────
+async def try_absolute_tilt(ptz: object, token: str) -> None:
+    sep("7. AbsoluteMove tilt fallback (some cameras ignore RelativeMove tilt)")
+    info("Sending AbsoluteMove to tilt position y=0.3 (up), then y=0.0 (center)")
+    try:
+        await asyncio.to_thread(
+            ptz.AbsoluteMove,  # type: ignore[union-attr]
+            {"ProfileToken": token, "Position": {"PanTilt": {"x": 0.0, "y": 0.3}}},
+        )
+        ok("AbsoluteMove y=0.3 succeeded — did camera tilt up?")
+        await asyncio.sleep(1.5)
+        await asyncio.to_thread(
+            ptz.AbsoluteMove,  # type: ignore[union-attr]
+            {"ProfileToken": token, "Position": {"PanTilt": {"x": 0.0, "y": 0.0}}},
+        )
+        ok("AbsoluteMove y=0.0 (center) succeeded")
+    except Exception as e:
+        ng(f"AbsoluteMove failed: {e}")
+        info("AbsoluteMove not supported — only RelativeMove is available.")
 
 
 async def main() -> None:
     cam, ptz, token = await run_onvif_checks()
     if ptz is None or token is None:
         return
-    await try_ptz_move(ptz, token)
-    sep("Done")
+
+    await check_ptz_capabilities(ptz, token)
+    await try_pan_move(ptz, token)
+    await try_tilt_move(ptz, token)
+    await try_absolute_tilt(ptz, token)
+
+    sep("Done — review [!!] warnings above for tilt diagnosis")
 
 
 asyncio.run(main())
