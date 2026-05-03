@@ -25,6 +25,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
@@ -940,6 +941,7 @@ class FamiliarWindow(QMainWindow):
         self._status_timer.setInterval(350)
         self._status_timer.timeout.connect(self._refresh_status_card)
         self._status_timer.start()
+        self._log_path = self._open_log_file()
 
         self.setWindowTitle("familiar-ai")
         self.resize(1020, 720)
@@ -951,6 +953,19 @@ class FamiliarWindow(QMainWindow):
 
         self._queue_task = self._create_task(self._process_queue())
         self._init_task = self._create_task(self._initialize_agent())
+
+    def _open_log_file(self) -> Path:
+        log_dir = Path.home() / ".cache" / "familiar-ai"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "chat.log"
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(f"\n{'─' * 60}\n[{datetime.now():%Y-%m-%d %H:%M:%S}] セッション開始\n")
+        return log_path
+
+    def _append_log(self, line: str) -> None:
+        plain = re.sub(r"\[/?[^\[\]]*\]", "", line)
+        with self._log_path.open("a", encoding="utf-8") as f:
+            f.write(plain + "\n")
 
     def _create_task(self, coro) -> asyncio.Task[Any]:
         """Create an asyncio task from GUI sync callbacks safely.
@@ -1440,6 +1455,7 @@ class FamiliarWindow(QMainWindow):
         self._input.clear()
         self._stream.clear_status()
         self._log.append_line(f"[{self._companion_display_name}] {text}")
+        self._append_log(f"{self._companion_display_name} ▶ {text}")
         self._input_queue.put_nowait(text)
         qsize = self._input_queue.qsize()
         if qsize >= _GUI_QUEUE_WARN_SIZE:
@@ -1467,6 +1483,7 @@ class FamiliarWindow(QMainWindow):
             return
         self._stream.clear_status()
         self._log.append_line(f"[{self._companion_display_name}] {spoken}")
+        self._append_log(f"{self._companion_display_name} 🎤 {spoken}")
 
     def _on_realtime_stt_restart(self, reason: str) -> None:
         if self._closing:
@@ -1690,6 +1707,7 @@ class FamiliarWindow(QMainWindow):
                 clean = re.sub(r"\[.*?\]", "", raw).strip()
                 if clean:
                     self._log.append_line(f"[{self._agent_display_name}] {clean}")
+                    self._append_log(f"{self._agent_display_name} 🔊 {clean}")
             else:
                 self._log.append_action(name, tool_input)
             if name == "look":
@@ -1726,14 +1744,17 @@ class FamiliarWindow(QMainWindow):
                 display = committed.strip() or final_text.strip()
                 if display:
                     self._log.append_line(f"[{self._agent_display_name}] {display}")
+                    self._append_log(f"{self._agent_display_name} ▶ {display}")
         except asyncio.CancelledError:
             self._stream.commit_and_clear()
             if not self._cancel_requested:
                 self._log.append_line("[interrupted]")
+                self._append_log("[interrupted]")
         except Exception as exc:
             logger.exception("Agent run error")
             self._set_last_error(str(exc))
             self._log.append_line(f"[error] {exc}")
+            self._append_log(f"[error] {exc}")
         finally:
             thinking_timer.stop()
             self._stream.clear_status()
