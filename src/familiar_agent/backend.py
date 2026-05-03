@@ -18,21 +18,22 @@ if TYPE_CHECKING:
     from .config import AgentConfig
 
 
-def _detect_image_media_type(b64_data: str) -> str:
+def _detect_image_media_type(b64_data: str) -> str | None:
     """Detect image MIME type from base64-encoded bytes via magic bytes."""
     try:
-        header = base64.b64decode(b64_data[:16] + "==")[:8]
+        padding = (4 - len(b64_data[:16]) % 4) % 4
+        header = base64.b64decode(b64_data[:16] + "=" * padding)[:12]
     except Exception:
-        return "image/jpeg"
+        raise ValueError("base64データのデコードに失敗しました") from None
     if header[:8] == b"\x89PNG\r\n\x1a\n":
         return "image/png"
     if header[:2] == b"\xff\xd8":
         return "image/jpeg"
     if header[:6] in (b"GIF87a", b"GIF89a"):
         return "image/gif"
-    if header[:4] == b"RIFF" and len(header) >= 8:
+    if header[:4] == b"RIFF" and header[8:12] == b"WEBP":  # WEBP確認を追加
         return "image/webp"
-    return "image/jpeg"
+    return None
 
 
 # ── Prompt-based tool calling ─────────────────────────────────────
