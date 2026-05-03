@@ -427,11 +427,14 @@ class OpenAICompatibleBackend:
         # Tool result messages: text only.
         # Images go in a separate user message — Gemini (and many APIs) reject
         # image_url inside "role: tool" messages.
+        # All tool result messages must be contiguous — inserting user messages
+        # between them causes "tool_call_id without response" errors on strict APIs.
         msgs: list[dict[str, Any]] = []
+        image_msgs: list[dict[str, Any]] = []
         for tc, (text, image) in zip(tool_calls, results):
             msgs.append({"role": "tool", "tool_call_id": tc.id, "content": text})
             if image:
-                msgs.append(
+                image_msgs.append(
                     {
                         "role": "user",
                         "content": [
@@ -443,6 +446,7 @@ class OpenAICompatibleBackend:
                         ],
                     }
                 )
+        msgs.extend(image_msgs)
         return msgs
 
     def _make_prompt_tool_results(
@@ -708,11 +712,13 @@ class KimiBackend:
         tool_calls: list[ToolCall],
         results: list[tuple[str, str | None]],
     ) -> list[dict]:
+        # All tool result messages must be contiguous before any user messages.
         msgs: list[dict] = []
+        image_msgs: list[dict] = []
         for tc, (text, image) in zip(tool_calls, results):
             msgs.append({"role": "tool", "tool_call_id": tc.id, "content": text})
             if image:
-                msgs.append(
+                image_msgs.append(
                     {
                         "role": "user",
                         "content": [
@@ -723,6 +729,7 @@ class KimiBackend:
                         ],
                     }
                 )
+        msgs.extend(image_msgs)
         return msgs
 
     def make_system_message(self, content: str) -> dict:
@@ -883,11 +890,13 @@ class GLMBackend:
         tool_calls: list[ToolCall],
         results: list[tuple[str, str | None]],
     ) -> list[dict]:
+        # All tool result messages must be contiguous before any user messages.
         msgs: list[dict] = []
+        image_msgs: list[dict] = []
         for tc, (text, image) in zip(tool_calls, results):
             msgs.append({"role": "tool", "tool_call_id": tc.id, "content": text})
             if image:
-                msgs.append(
+                image_msgs.append(
                     {
                         "role": "user",
                         "content": [
@@ -898,6 +907,7 @@ class GLMBackend:
                         ],
                     }
                 )
+        msgs.extend(image_msgs)
         return msgs
 
     def make_system_message(self, content: str) -> dict:
