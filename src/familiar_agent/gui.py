@@ -112,7 +112,7 @@ _UI_FONT_STACK = (
     "'Noto Sans CJK JP', 'Yu Gothic UI', 'Hiragino Sans', 'Meiryo', 'Segoe UI', sans-serif"
 )
 _MONO_FONT_STACK = "'Cascadia Mono', 'Consolas', 'Courier New', monospace"
-_FONT_SCALE = 1.9
+_FONT_SCALE = 1.0
 
 _DESIRE_COLORS: dict[str, str] = {
     "look_around": "#57b8ff",
@@ -216,7 +216,7 @@ def _apply_global_style(app: QApplication) -> None:
         QScrollBar::handle:vertical {{
             background: {_ACCENT_DIM};
             border-radius: 4px;
-            min-height: 24px;
+            min-height: 16px;
         }}
         QScrollBar::handle:vertical:hover {{
             background: {_ACCENT};
@@ -231,8 +231,8 @@ def _apply_global_style(app: QApplication) -> None:
             background: {_BG_SURFACE};
             color: {_TEXT_PRIMARY};
             border: 1px solid {_BORDER};
-            border-radius: 8px;
-            padding: 8px 12px;
+            border-radius: 6px;
+            padding: 5px 10px;
             selection-background-color: {_ACCENT};
         }}
         QLineEdit:focus {{
@@ -245,8 +245,8 @@ def _apply_global_style(app: QApplication) -> None:
             background: {_BG_ELEVATED};
             color: {_TEXT_PRIMARY};
             border: 1px solid {_BORDER};
-            border-radius: 8px;
-            padding: 8px 16px;
+            border-radius: 6px;
+            padding: 5px 12px;
         }}
         QPushButton:hover {{
             background: {_BG_HOVER};
@@ -267,8 +267,8 @@ def _apply_global_style(app: QApplication) -> None:
             background: {_BG_SURFACE};
             color: {_TEXT_PRIMARY};
             border: 1px solid {_BORDER};
-            border-radius: 8px;
-            padding: 8px 12px;
+            border-radius: 6px;
+            padding: 5px 10px;
         }}
         QComboBox::drop-down {{
             border: none;
@@ -290,8 +290,8 @@ def _apply_global_style(app: QApplication) -> None:
         QTabBar::tab {{
             background: {_BG_ELEVATED};
             color: {_TEXT_SECONDARY};
-            padding: 8px 18px;
-            border-radius: 10px;
+            padding: 5px 12px;
+            border-radius: 7px;
             margin-right: 4px;
             border: 1px solid {_BORDER};
         }}
@@ -469,13 +469,13 @@ class ChatLog(QScrollArea):
         label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         if accent_left:
             label.setStyleSheet(
-                f"background: {bg}; border-radius: 16px; padding: 10px 16px;"
+                f"background: {bg}; border-radius: 10px; padding: 6px 12px;"
                 f" border: 1px solid {_BORDER};"
                 f" border-left: 3px solid {_ACCENT};"
             )
         else:
             label.setStyleSheet(
-                f"background: {bg}; border-radius: 16px; padding: 10px 16px;"
+                f"background: {bg}; border-radius: 10px; padding: 6px 12px;"
                 f" border: 1px solid {_BORDER};"
             )
         label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
@@ -518,7 +518,7 @@ class StreamLabel(QWidget):
         self._label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self._label.setStyleSheet(
             f"background: {_BG_SURFACE}; color: {_TEXT_PRIMARY};"
-            f" padding: 10px 16px; border-radius: 14px;"
+            f" padding: 6px 12px; border-radius: 10px;"
             f" border: 1px solid {_BORDER}; border-left: 3px solid {_ACCENT};"
             f" font-family: {_UI_FONT_STACK}; font-size: {_px(13)}px;"
         )
@@ -598,7 +598,7 @@ class StreamLabel(QWidget):
 class CameraView(QLabel):
     """Displays the latest camera image (base64-encoded JPEG/PNG)."""
 
-    _PLACEHOLDER_SIZE = QSize(320, 240)
+    _PLACEHOLDER_SIZE = QSize(240, 180)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -671,7 +671,7 @@ class DesireBar(QWidget):
         self._bar.setRange(0, 100)
         self._bar.setValue(0)
         self._bar.setTextVisible(False)
-        self._bar.setFixedHeight(6)
+        self._bar.setFixedHeight(4)
         self._bar.setStyleSheet(
             f"QProgressBar {{ background: rgba(127,115,148,0.16); border-radius: 3px; border: none; }}"
             f"QProgressBar::chunk {{"
@@ -710,8 +710,8 @@ class DesirePanel(QWidget):
         self._bars: dict[str, DesireBar] = {}
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(5)
 
         title = QLabel(_t("desire_panel_title"))
         title.setStyleSheet(
@@ -843,7 +843,7 @@ class SettingsDialog(QDialog):
         except KeyError:
             text = key_or_text
         label = QLabel(text)
-        label.setMinimumWidth(180)
+        label.setMinimumWidth(140)
         label.setStyleSheet(
             f"color: {_TEXT_PRIMARY}; font-size: {_px(13)}px; font-weight: 600;"
             f"padding-right: 6px; background: transparent;"
@@ -1121,7 +1121,7 @@ class FamiliarWindow(QMainWindow):
             f"background: {_BG_SURFACE}; border-radius: 16px; border: 1px solid {_BORDER};"
         )
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(16, 10, 10, 10)
+        header_layout.setContentsMargins(12, 6, 8, 6)
         header_layout.setSpacing(8)
 
         title_lbl = QLabel("✦ familiar-ai")
@@ -1134,26 +1134,26 @@ class FamiliarWindow(QMainWindow):
 
         settings_btn = QPushButton(_t("settings_button"))
         settings_btn.setToolTip(_t("settings_button_tooltip"))
-        settings_btn.setFixedHeight(48)
-        settings_btn.setMinimumWidth(160)
+        settings_btn.setFixedHeight(30)
+        settings_btn.setMinimumWidth(110)
         settings_btn.setStyleSheet(
-            f"QPushButton {{ background: {_BG_SURFACE}; border-radius: 16px;"
+            f"QPushButton {{ background: {_BG_SURFACE}; border-radius: 8px;"
             f" border: 1px solid {_BORDER};"
-            f" padding: 0 16px; font-size: {_px(12)}px; color: {_TEXT_SECONDARY}; }}"
-            f"QPushButton:hover {{ background: {_BG_SURFACE}; color: {_TEXT_PRIMARY}; }}"
+            f" padding: 0 12px; font-size: {_px(12)}px; color: {_TEXT_SECONDARY}; }}"
+            f"QPushButton:hover {{ background: {_BG_ELEVATED}; color: {_TEXT_PRIMARY}; }}"
         )
         settings_btn.clicked.connect(self._open_settings)
         header_layout.addWidget(settings_btn)
 
         self._restart_stt_btn = QPushButton("↻ STT")
         self._restart_stt_btn.setToolTip("Restart realtime STT")
-        self._restart_stt_btn.setFixedHeight(48)
-        self._restart_stt_btn.setMinimumWidth(130)
+        self._restart_stt_btn.setFixedHeight(30)
+        self._restart_stt_btn.setMinimumWidth(90)
         self._restart_stt_btn.setStyleSheet(
-            f"QPushButton {{ background: #f7fbff; border-radius: 16px;"
+            f"QPushButton {{ background: {_BG_ELEVATED}; border-radius: 8px;"
             f" border: 1px solid {_BORDER};"
-            f" padding: 0 16px; font-size: {_px(12)}px; color: {_TEXT_SECONDARY}; }}"
-            f"QPushButton:hover {{ background: #eef6ff; color: {_TEXT_PRIMARY}; }}"
+            f" padding: 0 12px; font-size: {_px(12)}px; color: {_TEXT_SECONDARY}; }}"
+            f"QPushButton:hover {{ background: {_BG_HOVER}; color: {_TEXT_PRIMARY}; }}"
             f"QPushButton:disabled {{ background: rgba(127,115,148,0.12); color: {_TEXT_SECONDARY}; }}"
         )
         self._restart_stt_btn.setEnabled(self._realtime_stt is not None)
@@ -1166,7 +1166,7 @@ class FamiliarWindow(QMainWindow):
             f"background: {_BG_SURFACE}; border-radius: 16px; border: 1px solid {_BORDER};"
         )
         status_layout = QVBoxLayout(status_card)
-        status_layout.setContentsMargins(16, 12, 16, 12)
+        status_layout.setContentsMargins(12, 8, 12, 8)
         status_layout.setSpacing(8)
 
         self._status_headline = QLabel("Starting up")
@@ -1193,7 +1193,7 @@ class FamiliarWindow(QMainWindow):
         self._status_error_label = QLabel("")
         self._status_error_label.setWordWrap(True)
         self._status_error_label.setStyleSheet(
-            "color: #F92672; font-size: 12px; background: transparent;"
+            f"color: #F92672; font-size: {_px(11)}px; background: transparent;"
         )
         status_layout.addWidget(self._status_error_label)
 
@@ -1227,7 +1227,7 @@ class FamiliarWindow(QMainWindow):
 
         # Stream label
         self._stream = StreamLabel()
-        self._stream.setMinimumHeight(110)
+        self._stream.setMinimumHeight(70)
         left_layout.addWidget(self._stream, stretch=1)
 
         # Input row — pill QLineEdit + circular send button
@@ -1239,7 +1239,7 @@ class FamiliarWindow(QMainWindow):
         self._input.setObjectName("msgInput")
         self._input.setStyleSheet(
             f"QLineEdit#msgInput {{"
-            f" border-radius: 999px; padding: 10px 20px;"
+            f" border-radius: 999px; padding: 6px 14px;"
             f" background: {_BG_SURFACE}; border: 1px solid {_BORDER};"
             f" color: {_TEXT_PRIMARY}; font-size: {_px(13)}px;"
             f" font-family: {_UI_FONT_STACK};"
@@ -1252,14 +1252,14 @@ class FamiliarWindow(QMainWindow):
         input_row.addWidget(self._input)
 
         self._send_btn = QPushButton("⬆")
-        self._send_btn.setFixedSize(60, 60)
+        self._send_btn.setFixedSize(40, 40)
         self._send_btn.setObjectName("sendBtn")
         self._send_btn.setStyleSheet(
             f"QPushButton#sendBtn {{"
             f" background: qlineargradient(x1:0,y1:0,x2:1,y2:1,"
             f" stop:0 {_ACCENT_DEEP}, stop:1 {_ACCENT});"
-            f" border-radius: 30px; border: none;"
-            f" font-size: {_px(18)}px; color: white;"
+            f" border-radius: 20px; border: none;"
+            f" font-size: {_px(14)}px; color: white;"
             f"}}"
             f"QPushButton#sendBtn:hover {{"
             f" background: qlineargradient(x1:0,y1:0,x2:1,y2:1,"
@@ -1273,14 +1273,14 @@ class FamiliarWindow(QMainWindow):
         input_row.addWidget(self._send_btn)
 
         self._stop_btn = QPushButton("■")
-        self._stop_btn.setFixedSize(60, 60)
+        self._stop_btn.setFixedSize(40, 40)
         self._stop_btn.setObjectName("stopBtn")
         self._stop_btn.setToolTip(_t("gui_cancel_turn_tooltip"))
         self._stop_btn.setStyleSheet(
             f"QPushButton#stopBtn {{"
             f" background: rgba(255,107,115,0.20);"
-            f" border-radius: 30px; border: 1px solid rgba(255,107,115,0.52);"
-            f" font-size: {_px(14)}px; color: #e34f5d;"
+            f" border-radius: 20px; border: 1px solid rgba(255,107,115,0.52);"
+            f" font-size: {_px(12)}px; color: #e34f5d;"
             f"}}"
             f"QPushButton#stopBtn:hover {{"
             f" background: rgba(255,107,115,0.30); color: #c13f4d;"
@@ -1297,7 +1297,7 @@ class FamiliarWindow(QMainWindow):
 
         # ── Right panel ─────────────────────────────────────────
         right = QWidget()
-        right.setFixedWidth(340)
+        right.setFixedWidth(260)
         right.setStyleSheet(f"background: {_BG_BASE};")
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
