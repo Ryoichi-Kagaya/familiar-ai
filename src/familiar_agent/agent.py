@@ -1010,7 +1010,7 @@ class EmbodiedAgent:
         scene_db_path = str(_Path.home() / ".familiar_ai" / "observations.db")
         try:
             _Path(scene_db_path).parent.mkdir(parents=True, exist_ok=True)
-            scene_conn = _sqlite3.connect(scene_db_path)
+            scene_conn = _sqlite3.connect(scene_db_path, check_same_thread=False)
             self._scene = SceneTracker(scene_conn)
         except Exception as exc:
             logger.warning("SceneTracker init failed: %s", exc)
