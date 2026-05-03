@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -15,6 +16,24 @@ from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from .config import AgentConfig
+
+
+def _detect_image_media_type(b64_data: str) -> str:
+    """Detect image MIME type from base64-encoded bytes via magic bytes."""
+    try:
+        header = base64.b64decode(b64_data[:16] + "==")[:8]
+    except Exception:
+        return "image/jpeg"
+    if header[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if header[:2] == b"\xff\xd8":
+        return "image/jpeg"
+    if header[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if header[:4] == b"RIFF" and len(header) >= 8:
+        return "image/webp"
+    return "image/jpeg"
+
 
 # ── Prompt-based tool calling ─────────────────────────────────────
 # Used when the model doesn't support native function calling (most local VLMs).
@@ -199,7 +218,7 @@ class AnthropicBackend:
                 result_content.append(
                     {
                         "type": "image",
-                        "source": {"type": "base64", "media_type": "image/jpeg", "data": image},
+                        "source": {"type": "base64", "media_type": _detect_image_media_type(image), "data": image},
                     }
                 )
             content.append({"type": "tool_result", "tool_use_id": tc.id, "content": result_content})
@@ -418,7 +437,7 @@ class OpenAICompatibleBackend:
                             {"type": "text", "text": "(camera image attached)"},
                             {
                                 "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{image}"},
+                                "image_url": {"url": f"data:{_detect_image_media_type(image)};base64,{image}"},
                             },
                         ],
                     }
@@ -438,7 +457,7 @@ class OpenAICompatibleBackend:
                 parts.append(
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image}"},
+                        "image_url": {"url": f"data:{_detect_image_media_type(image)};base64,{image}"},
                     }
                 )
         return [{"role": "user", "content": parts}]
@@ -698,7 +717,7 @@ class KimiBackend:
                         "content": [
                             {
                                 "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{image}"},
+                                "image_url": {"url": f"data:{_detect_image_media_type(image)};base64,{image}"},
                             }
                         ],
                     }
@@ -873,7 +892,7 @@ class GLMBackend:
                         "content": [
                             {
                                 "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{image}"},
+                                "image_url": {"url": f"data:{_detect_image_media_type(image)};base64,{image}"},
                             }
                         ],
                     }
@@ -1046,7 +1065,7 @@ class GeminiBackend:
         for tc, (text, image) in zip(tool_calls, results):
             parts.append({"function_response": {"name": tc.name, "response": {"result": text}}})
             if image:
-                parts.append({"inline_data": {"mime_type": "image/jpeg", "data": image}})
+                parts.append({"inline_data": {"mime_type": _detect_image_media_type(image), "data": image}})
         return [{"role": "user", "parts": parts}]
 
     # ── API calls ─────────────────────────────────────────────────
