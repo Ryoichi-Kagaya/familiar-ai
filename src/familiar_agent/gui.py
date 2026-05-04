@@ -1336,7 +1336,7 @@ class FamiliarWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.setStyleSheet(
-            "QSplitter::handle { background: rgba(255,169,192,0.42); width: 2px; }"
+            "QSplitter::handle { background: transparent; width: 2px; }"
         )
         splitter.addWidget(left)
         splitter.addWidget(right)
