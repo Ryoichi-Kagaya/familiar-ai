@@ -161,6 +161,22 @@ print("=" * 60)
 
 MCP_CMD = ["uv", "run", "--project", str(GITHUB_DISCUSS_SRC), "github-discuss-mcp"]
 print(f"  コマンド: {' '.join(MCP_CMD)}")
+print(f"  cwd:     {GITHUB_DISCUSS_SRC}")
+print()
+
+# ── StdioServerParameters の cwd サポート確認 ────────────────────────────────
+print("  [確認] StdioServerParameters の cwd サポート:")
+try:
+    from mcp import StdioServerParameters
+    import inspect
+    sig = inspect.signature(StdioServerParameters)
+    if "cwd" in sig.parameters:
+        print(f"    [OK] cwd パラメータあり → familiar-ai は cwd を渡せます")
+    else:
+        print(f"    [WARN] cwd パラメータなし → MCP ライブラリのバージョンが古い可能性")
+except ImportError:
+    print("    [ERROR] mcp パッケージが未インストール")
+print()
 
 # メッセージを1つずつ送り、レスポンスを待ってから次を送る。
 # subprocess.run で stdin を一括送信すると、GitHub API 呼び出し中に
@@ -262,7 +278,7 @@ async def run_mcp_session():
                 break
             stderr_lines.append(line.decode(errors="replace").rstrip())
 
-    asyncio.ensure_future(read_stderr())
+    stderr_task = asyncio.ensure_future(read_stderr())
 
     print(f"\n  stdout (JSON-RPC レスポンス):")
     try:
@@ -311,10 +327,17 @@ async def run_mcp_session():
             await asyncio.wait_for(proc.wait(), timeout=5)
         except asyncio.TimeoutError:
             proc.kill()
+        # stderr タスクが完了するまで待つ
+        try:
+            await asyncio.wait_for(stderr_task, timeout=3)
+        except asyncio.TimeoutError:
+            stderr_task.cancel()
         print(f"\n  終了コード: {proc.returncode}")
 
     if stderr_lines:
         print(f"\n  stderr:\n    " + "\n    ".join(stderr_lines))
+    else:
+        print("  (stderr なし)")
 
 
 try:
@@ -347,6 +370,25 @@ if fai_json.exists():
             "       Windows では ~ が展開されないことがあります。\n"
             "       → 絶対パス 'C:/Users/Blue-/github-discuss' に変更を検討してください。"
         ))
+    cwd_val = gd_cfg.get("cwd", "")
+    if cwd_val:
+        cwd_path = Path(cwd_val)
+        if cwd_path.exists():
+            checks.append(("OK", f".familiar-ai.json の cwd が設定されています: {cwd_val}"))
+        else:
+            checks.append((
+                "ERROR",
+                f".familiar-ai.json の cwd が存在しません: {cwd_val}\n"
+                f"       → パスを確認してください"
+            ))
+    else:
+        checks.append((
+            "WARN",
+            ".familiar-ai.json の github-discuss に 'cwd' が設定されていません。\n"
+            "       uv はプロジェクトルートを検出できず、github-discuss-mcp が起動しない可能性があります。\n"
+            "       → 'cwd': 'C:/Users/Blue-/github-discuss' を追加してください。"
+        ))
+
     if "env" not in gd_cfg:
         checks.append((
             "INFO",

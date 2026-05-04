@@ -139,12 +139,13 @@ class MCPClientManager:
                     command = cfg.get("command", "")
                     args: list[str] = cfg.get("args", [])
                     env: dict[str, str] | None = cfg.get("env") or None
+                    cwd: str | None = cfg.get("cwd") or None
 
                     if not command:
                         logger.warning("MCP server '%s': missing 'command', skipping", name)
                         continue
 
-                    params = StdioServerParameters(command=command, args=args, env=env)
+                    params = StdioServerParameters(command=command, args=args, env=env, cwd=cwd)
                     read, write = await self._exit_stack.enter_async_context(stdio_client(params))
                     session: Any = await self._exit_stack.enter_async_context(
                         ClientSession(read, write)
