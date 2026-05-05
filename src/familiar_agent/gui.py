@@ -1797,9 +1797,14 @@ class FamiliarWindow(QMainWindow):
         self._set_startup_status(f"{_t('initializing')} agent...")
         self._startup_status_task = self._create_task(self._show_init_status())
         try:
-            from .agent import EmbodiedAgent  # noqa: PLC0415
+            config = self._config
 
-            agent = await asyncio.to_thread(EmbodiedAgent, self._config)
+            def _build_agent():
+                from .agent import EmbodiedAgent  # noqa: PLC0415
+
+                return EmbodiedAgent(config)
+
+            agent = await asyncio.to_thread(_build_agent)
             self._agent = agent
             if not agent.is_embedding_ready:
                 self._set_startup_status(f"{_t('initializing')} memory...")
