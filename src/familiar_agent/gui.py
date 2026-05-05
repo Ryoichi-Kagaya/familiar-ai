@@ -932,6 +932,9 @@ class FamiliarWindow(QMainWindow):
         self._look_preview_disabled = False
         self._realtime_stt: RealtimeSttController | None = create_realtime_stt_controller()
         self._realtime_stt_task: asyncio.Task[None] | None = None
+        self._batch_stt_recording = False
+        self._batch_stt_stop: asyncio.Event = asyncio.Event()
+        self._batch_stt_task: asyncio.Task[None] | None = None
         self._last_lag_tick = time.perf_counter()
         self._lag_timer = QTimer(self)
         self._lag_timer.setInterval(int(_GUI_LOOP_LAG_CHECK_SEC * 1000))
@@ -1174,6 +1177,23 @@ class FamiliarWindow(QMainWindow):
         self._restart_stt_btn.setEnabled(self._realtime_stt is not None)
         self._restart_stt_btn.clicked.connect(self._on_restart_stt_clicked)
         header_layout.addWidget(self._restart_stt_btn)
+
+        self._mic_btn = QPushButton("🎙 Mic")
+        self._mic_btn.setToolTip("Start / stop batch voice recording (STT)")
+        self._mic_btn.setFixedHeight(30)
+        self._mic_btn.setMinimumWidth(90)
+        self._mic_btn.setStyleSheet(
+            f"QPushButton {{ background: {_BG_ELEVATED}; border-radius: 8px;"
+            f" border: 1px solid {_BORDER};"
+            f" padding: 0 12px; font-size: {_px(12)}px; color: {_TEXT_SECONDARY}; }}"
+            f"QPushButton:hover {{ background: {_BG_HOVER}; color: {_TEXT_PRIMARY}; }}"
+            f"QPushButton:checked {{ background: #7c3aed; color: #fff; border-color: #7c3aed; }}"
+            f"QPushButton:disabled {{ background: rgba(127,115,148,0.12); color: {_TEXT_SECONDARY}; }}"
+        )
+        self._mic_btn.setCheckable(True)
+        self._mic_btn.setEnabled(False)  # enabled after agent init if stt is configured
+        self._mic_btn.clicked.connect(self._on_mic_btn_clicked)
+        header_layout.addWidget(self._mic_btn)
         left_layout.addWidget(header)
 
         status_card = QWidget()
@@ -1529,6 +1549,44 @@ class FamiliarWindow(QMainWindow):
         else:
             self._log.append_line("[error] Realtime STT restart unavailable before startup")
 
+    def _on_mic_btn_clicked(self) -> None:
+        if not self._batch_stt_recording:
+            self._batch_stt_recording = True
+            self._batch_stt_stop.clear()
+            self._mic_btn.setText("⏹ Stop")
+            self._batch_stt_task = self._create_task(self._do_batch_stt())
+        else:
+            self._batch_stt_stop.set()
+
+    async def _do_batch_stt(self) -> None:
+        agent = getattr(self, "_agent", None)
+        if agent is None or agent.stt is None:
+            self._log.append_line("[error] Batch STT not configured")
+            self._batch_stt_recording = False
+            self._mic_btn.setText("🎙 Mic")
+            self._mic_btn.setChecked(False)
+            return
+        try:
+            self._stream.set_status("🎙 Recording… (click ⏹ Stop to finish)")
+            record_task = asyncio.create_task(
+                agent.stt.record_and_transcribe(self._batch_stt_stop)
+            )
+            await self._batch_stt_stop.wait()
+            self._stream.set_status("🔄 Transcribing…")
+            text = await record_task
+            if text:
+                self._log.append_line(f"{self._companion_display_name} 🎙 {text}")
+                self._append_log(f"{self._companion_display_name} 🎙 {text}")
+                self._input_queue.put_nowait(text)
+        except Exception as exc:
+            logger.warning("Batch STT error: %s", exc)
+            self._log.append_line(f"[error] STT: {exc}")
+        finally:
+            self._batch_stt_recording = False
+            self._mic_btn.setText("🎙 Mic")
+            self._mic_btn.setChecked(False)
+            self._stream.clear_status()
+
     def _on_cancel_clicked(self) -> None:
         self._cancel_turn(reason="user")
 
@@ -1811,6 +1869,10 @@ class FamiliarWindow(QMainWindow):
             self._agent_ready = True
             self._set_last_error(None)
             self._set_input_enabled(True)
+            if agent.stt is not None:
+                mic_btn = getattr(self, "_mic_btn", None)
+                if mic_btn is not None:
+                    mic_btn.setEnabled(True)
             if self._realtime_stt and self._realtime_stt_task is None:
                 self._realtime_stt_task = self._create_task(self._start_realtime_stt())
         except Exception as exc:
