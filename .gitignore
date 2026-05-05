@@ -22,5 +22,5 @@ build/
 # MCP config
 .familiar-ai.json
 
-# Claude Code worktrees
-.claude/worktrees/
+# Claude
+.claude/

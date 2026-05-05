@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(uv run *)"
+      "Bash(uv run *)",
+      "Read(C:\\Users\\Blue-\\**)",
+      "Edit(C:\\Users\\Blue-\\familiar-ai\\**)",
+      "Write(C:\\Users\\Blue-\\familiar-ai\\**)"
     ]
   }
 }
