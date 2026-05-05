@@ -1001,7 +1001,7 @@ class EmbodiedAgent:
             rtsp_url = (
                 f"rtsp://{cam.username}:{cam.password}@{cam.host}:554/stream1" if cam.host else ""
             )
-            self._stt = STTTool(stt_cfg.elevenlabs_api_key, stt_cfg.language, rtsp_url)
+            self._stt = STTTool(stt_cfg.elevenlabs_api_key, stt_cfg.language, rtsp_url, stt_cfg.input)
 
         # World model: persistent scene entity tracker (Phase 1)
         # Reuses the same SQLite DB as ObservationMemory via a separate connection.

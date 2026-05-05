@@ -135,6 +135,9 @@ class STTConfig:
         default_factory=lambda: os.environ.get("ELEVENLABS_API_KEY", "")
     )
     language: str = field(default_factory=lambda: os.environ.get("STT_LANGUAGE", "ja"))
+    # Audio input source: "local" = PC mic only, "remote" = camera RTSP only,
+    # "auto" = try PC mic first, fall back to camera RTSP.
+    input: str = field(default_factory=lambda: os.environ.get("STT_INPUT", "auto"))
 
 
 @dataclass

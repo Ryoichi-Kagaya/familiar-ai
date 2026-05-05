@@ -80,22 +80,34 @@ def _suppress_alsa_errors():
 class STTTool:
     """Record audio and transcribe via ElevenLabs Scribe."""
 
-    def __init__(self, api_key: str, language: str = "ja", rtsp_url: str = "") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        language: str = "ja",
+        rtsp_url: str = "",
+        input_source: str = "auto",
+    ) -> None:
         self._api_key = api_key
         self._language = language
         self._rtsp_url = rtsp_url
+        self._input_source = input_source  # "local" | "remote" | "auto"
 
     # ── public API ────────────────────────────────────────────────────────
 
     async def record_and_transcribe(self, stop_event: asyncio.Event) -> str:
         """Record until stop_event is set, then transcribe and return text."""
-        # Try PC mic first
-        audio_bytes = await asyncio.to_thread(self._record_mic, stop_event)
-
-        # Fallback to RTSP camera mic
-        if audio_bytes is None and self._rtsp_url:
-            logger.info("STT: no local mic, falling back to RTSP camera mic")
+        if self._input_source == "remote":
+            if not self._rtsp_url:
+                logger.warning("STT: STT_INPUT=remote but no camera RTSP URL configured")
+                return ""
             audio_bytes = await self._record_rtsp(stop_event)
+        elif self._input_source == "local":
+            audio_bytes = await asyncio.to_thread(self._record_mic, stop_event)
+        else:  # auto
+            audio_bytes = await asyncio.to_thread(self._record_mic, stop_event)
+            if audio_bytes is None and self._rtsp_url:
+                logger.info("STT: no local mic, falling back to RTSP camera mic")
+                audio_bytes = await self._record_rtsp(stop_event)
 
         if not audio_bytes:
             return ""
@@ -196,7 +208,7 @@ class STTTool:
                     if not hasattr(frame, "to_ndarray"):
                         continue
                     for resampled in resampler.resample(frame):  # type: ignore[arg-type]
-                        chunks.append(resampled.to_ndarray())
+                        chunks.append(resampled.to_ndarray().flatten())
             except Exception as e:
                 logger.warning("STT: RTSP decode error: %s", e)
                 return b""
@@ -206,10 +218,10 @@ class STTTool:
             if not chunks:
                 return b""
 
-            audio = np.concatenate(chunks, axis=0)
+            audio = np.concatenate(chunks)
             buf = io.BytesIO()
-            sf.write(buf, audio.flatten(), 16000, format="WAV", subtype="PCM_16")
-            duration = len(audio.flatten()) / 16000
+            sf.write(buf, audio, 16000, format="WAV", subtype="PCM_16")
+            duration = len(audio) / 16000
             logger.info("STT: RTSP recording captured %.1fs of audio", duration)
             return buf.getvalue()
 
