@@ -650,7 +650,10 @@ class OpenAICompatibleBackend:
                 input_data = {}
             tool_calls.append(ToolCall(id=tc["id"], name=tc["name"], input=input_data))
 
-        stop = "tool_use" if finish_reason == "tool_calls" else "end_turn"
+        # Some OpenAI-compatible APIs return finish_reason="stop" even when tool
+        # calls are present. Fall back to checking the collected tool_calls list
+        # so the assistant message is never left without a matching tool result.
+        stop = "tool_use" if (finish_reason == "tool_calls" or bool(tool_calls)) else "end_turn"
         raw_assistant: dict[str, Any] = {"role": "assistant", "content": text or ""}
         if tool_calls:
             raw_assistant["tool_calls"] = [
@@ -825,7 +828,10 @@ class KimiBackend:
                 input_data = {}
             tool_calls.append(ToolCall(id=tc["id"], name=tc["name"], input=input_data))
 
-        stop = "tool_use" if finish_reason == "tool_calls" else "end_turn"
+        # Some OpenAI-compatible APIs return finish_reason="stop" even when tool
+        # calls are present. Fall back to checking the collected tool_calls list
+        # so the assistant message is never left without a matching tool result.
+        stop = "tool_use" if (finish_reason == "tool_calls" or bool(tool_calls)) else "end_turn"
 
         # Build raw_assistant — include reasoning_content so Kimi accepts it next turn
         raw_assistant: dict[str, Any] = {"role": "assistant", "content": text or None}
@@ -998,7 +1004,10 @@ class GLMBackend:
                 input_data = {}
             tool_calls.append(ToolCall(id=tc["id"], name=tc["name"], input=input_data))
 
-        stop = "tool_use" if finish_reason == "tool_calls" else "end_turn"
+        # Some OpenAI-compatible APIs return finish_reason="stop" even when tool
+        # calls are present. Fall back to checking the collected tool_calls list
+        # so the assistant message is never left without a matching tool result.
+        stop = "tool_use" if (finish_reason == "tool_calls" or bool(tool_calls)) else "end_turn"
 
         # Build raw_assistant — include reasoning_content so GLM accepts it next turn
         raw_assistant: dict[str, Any] = {"role": "assistant", "content": text or ""}
