@@ -119,6 +119,7 @@ class TTSTool:
         go2rtc_stream: str = "tapo_cam",
         output: str = "local",
         voice_guard: VoiceLoopGuard | None = None,
+        volume: float = 1.0,
     ) -> None:
         self.api_key = api_key
         self.voice_id = voice_id
@@ -126,6 +127,7 @@ class TTSTool:
         self.go2rtc_stream = go2rtc_stream
         # "local" = PC speaker only, "remote" = camera speaker only, "both" = both simultaneously
         self.output = output
+        self.volume = max(0.0, min(1.0, volume))
         self._voice_guard = voice_guard or get_shared_voice_guard()
         # Serialize concurrent say() calls so audio never overlaps
         self._lock = asyncio.Lock()
@@ -144,6 +146,8 @@ class TTSTool:
 
         if output is None:
             output = self.output
+        if self.volume == 0.0:
+            return "TTS muted (TTS_VOLUME=0)"
         if len(text) > 200:
             text = text[:197] + "..."
 
@@ -196,7 +200,7 @@ class TTSTool:
                             return f"TTS remote playback failed: {msg}"
 
                 if output in ("local", "both") or (output == "remote" and not played_via):
-                    local_ok = await _play_local(tmp_path)
+                    local_ok = await _play_local(tmp_path, volume=self.volume)
                     if local_ok:
                         played_via.append("local")
 
@@ -252,7 +256,7 @@ def _pulse_env() -> dict[str, str] | None:
     return env
 
 
-async def _play_via_sounddevice(audio_path: str) -> bool:
+async def _play_via_sounddevice(audio_path: str, volume: float = 1.0) -> bool:
     """Play WAV or MP3 file using sounddevice (pure Python, no system dependency).
 
     WAV: decoded by soundfile directly.
@@ -262,9 +266,9 @@ async def _play_via_sounddevice(audio_path: str) -> bool:
     def _play() -> bool:
         if audio_path.lower().endswith(".mp3"):
             # On Windows prefer MCI (reliable, built-in) over PyAV+sounddevice
-            if sys.platform == "win32" and _play_mp3_mci(audio_path):
+            if sys.platform == "win32" and _play_mp3_mci(audio_path, volume=volume):
                 return True
-            return _play_mp3_via_pyav(audio_path)
+            return _play_mp3_via_pyav(audio_path, volume=volume)
         else:
             try:
                 import sounddevice as sd
@@ -273,7 +277,7 @@ async def _play_via_sounddevice(audio_path: str) -> bool:
                 return False
             try:
                 data, samplerate = sf.read(audio_path)
-                sd.play(data, samplerate)
+                sd.play(data * volume, samplerate)
                 sd.wait()
                 return True
             except Exception as e:
@@ -283,7 +287,7 @@ async def _play_via_sounddevice(audio_path: str) -> bool:
     return await asyncio.to_thread(_play)
 
 
-def _play_mp3_mci(mp3_path: str) -> bool:
+def _play_mp3_mci(mp3_path: str, volume: float = 1.0) -> bool:
     """Play MP3 using Windows MCI (Media Control Interface) via ctypes. Windows only.
 
     MCI is built into Windows — no extra dependencies, supports MP3 natively.
@@ -299,6 +303,7 @@ def _play_mp3_mci(mp3_path: str) -> bool:
         if ret != 0:
             logger.warning("MCI open failed (ret=%d)", ret)
             return False
+        winmm.mciSendStringW(f"setaudio {alias} volume to {int(volume * 1000)}", None, 0, None)
         winmm.mciSendStringW(f"play {alias} wait", None, 0, None)
         winmm.mciSendStringW(f"close {alias}", None, 0, None)
         return True
@@ -307,7 +312,7 @@ def _play_mp3_mci(mp3_path: str) -> bool:
         return False
 
 
-def _play_mp3_via_pyav(mp3_path: str) -> bool:
+def _play_mp3_via_pyav(mp3_path: str, volume: float = 1.0) -> bool:
     """Decode MP3 with PyAV to s16 PCM, play via sounddevice.
 
     Uses s16 interleaved stereo (simpler than fltp planar) for cross-platform reliability.
@@ -346,7 +351,7 @@ def _play_mp3_via_pyav(mp3_path: str) -> bool:
             return False
 
         # Concatenate along samples axis → (1, total_samples) → flatten to (total_samples,)
-        audio = np.concatenate(chunks_nd, axis=1).flatten().astype(np.float32) / 32768.0
+        audio = np.concatenate(chunks_nd, axis=1).flatten().astype(np.float32) / 32768.0 * volume
         sd.play(audio, TARGET_RATE)
         sd.wait()
         return True
@@ -355,7 +360,7 @@ def _play_mp3_via_pyav(mp3_path: str) -> bool:
         return False
 
 
-async def _play_local(tmp_path: str) -> bool:
+async def _play_local(tmp_path: str, volume: float = 1.0) -> bool:
     """Play audio file on the local PC speaker. Returns True on success.
 
     Try order:
@@ -375,6 +380,7 @@ async def _play_local(tmp_path: str) -> bool:
             try:
                 proc = await asyncio.create_subprocess_exec(
                     afplay,
+                    "-v", str(volume),
                     tmp_path,
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.PIPE,
@@ -396,6 +402,7 @@ async def _play_local(tmp_path: str) -> bool:
         try:
             proc = await asyncio.create_subprocess_exec(
                 paplay,
+                f"--volume={int(volume * 65536)}",
                 tmp_path,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
@@ -416,6 +423,7 @@ async def _play_local(tmp_path: str) -> bool:
             proc = await asyncio.create_subprocess_exec(
                 mpv,
                 "--no-terminal",
+                f"--volume={int(volume * 100)}",
                 tmp_path,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
@@ -431,7 +439,7 @@ async def _play_local(tmp_path: str) -> bool:
             logger.warning("Could not launch mpv: %s", e)
 
     # --- sounddevice (pure Python, no system dependency) ---
-    return await _play_via_sounddevice(tmp_path)
+    return await _play_via_sounddevice(tmp_path, volume=volume)
 
 
 def _play_via_go2rtc(file_path: str, go2rtc_url: str, stream_name: str) -> tuple[bool, str]:

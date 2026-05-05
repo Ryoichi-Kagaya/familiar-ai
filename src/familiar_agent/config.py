@@ -112,6 +112,10 @@ class TTSConfig:
     # Audio output routing: "local" = PC speaker only, "remote" = camera speaker only,
     # "both" = camera speaker + PC speaker simultaneously.
     output: str = field(default_factory=lambda: os.environ.get("TTS_OUTPUT", "local"))
+    # Volume level 0.0 (mute) to 1.0 (full). Applied to all local playback methods.
+    volume: float = field(
+        default_factory=lambda: float(os.environ.get("TTS_VOLUME", "1.0"))
+    )
 
 
 @dataclass

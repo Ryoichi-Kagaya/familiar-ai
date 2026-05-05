@@ -986,6 +986,7 @@ class EmbodiedAgent:
                 tts.go2rtc_url,
                 tts.go2rtc_stream,
                 output=tts.output,
+                volume=tts.volume,
             )
 
         cfg_path = _resolve_config_path()
