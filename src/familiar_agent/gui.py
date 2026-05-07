@@ -1225,32 +1225,6 @@ class FamiliarWindow(QMainWindow):
         )
         status_layout.addWidget(self._status_readiness)
 
-        self._status_error_label = QLabel("")
-        self._status_error_label.setWordWrap(True)
-        self._status_error_label.setStyleSheet(
-            f"color: #F92672; font-size: {_px(11)}px; background: transparent;"
-        )
-        status_layout.addWidget(self._status_error_label)
-
-        status_actions = QHBoxLayout()
-        status_actions.setSpacing(8)
-        self._copy_diag_btn = QPushButton("Copy diagnostics")
-        self._copy_diag_btn.clicked.connect(self._copy_diagnostics)
-        status_actions.addWidget(self._copy_diag_btn)
-
-        self._test_api_btn = QPushButton("Test API")
-        self._test_api_btn.clicked.connect(lambda: self._create_task(self._run_backend_test()))
-        status_actions.addWidget(self._test_api_btn)
-
-        self._test_camera_btn = QPushButton("Test camera")
-        self._test_camera_btn.clicked.connect(lambda: self._create_task(self._run_camera_test()))
-        status_actions.addWidget(self._test_camera_btn)
-
-        self._test_stt_btn = QPushButton("Test STT")
-        self._test_stt_btn.clicked.connect(lambda: self._create_task(self._run_stt_test()))
-        status_actions.addWidget(self._test_stt_btn)
-        status_actions.addStretch()
-        status_layout.addLayout(status_actions)
         left_layout.addWidget(status_card)
 
         # Chat log
@@ -1384,7 +1358,6 @@ class FamiliarWindow(QMainWindow):
         headline = getattr(self, "_status_headline", None)
         detail = getattr(self, "_status_detail", None)
         readiness = getattr(self, "_status_readiness", None)
-        error = getattr(self, "_status_error_label", None)
         if headline is not None:
             headline.setText(snapshot.headline)
         if detail is not None:
@@ -1393,8 +1366,6 @@ class FamiliarWindow(QMainWindow):
             readiness.setText(
                 f"{snapshot.readiness}\nqueue={snapshot.queue_backlog} | stt_connected={snapshot.realtime_stt_connected}"
             )
-        if error is not None:
-            error.setText(f"Last error: {snapshot.last_error}" if snapshot.last_error else "")
 
     def _copy_diagnostics(self) -> None:
         snapshot = build_gui_diagnostics(self)
