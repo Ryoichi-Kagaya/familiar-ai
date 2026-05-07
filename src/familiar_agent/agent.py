@@ -2666,7 +2666,13 @@ class EmbodiedAgent:
                     )
                     if status_match:
                         continuation_status = status_match.group(1)
-                        final_text = final_text[: status_match.start(1)].rstrip() or "(no response)"
+                        stripped = final_text[: status_match.start(1)].rstrip()
+                        if not stripped:
+                            logger.warning(
+                                "Status token '%s' stripped entire response — model returned no visible text",
+                                continuation_status,
+                            )
+                        final_text = stripped or "(no response)"
                     self._heartbeat.apply_status(continuation_status)
 
                     # Coherence gate: ask utility backend whether the response contains

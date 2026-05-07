@@ -1771,7 +1771,7 @@ class FamiliarWindow(QMainWindow):
             # post-say text echo (same content with raw audio tags) appearing again.
             if not say_fired:
                 display = committed.strip() or final_text.strip()
-                if display:
+                if display and display != "(no response)":
                     self._log.append_line(f"[{self._agent_display_name}] {display}")
                     self._append_log(f"{self._agent_display_name} ▶ {display}")
         except asyncio.CancelledError:
