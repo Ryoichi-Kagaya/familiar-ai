@@ -1032,8 +1032,8 @@ class EmbodiedAgent:
             defs.extend(self._mcp.get_tool_definitions())
         return defs
 
-    async def _execute_tool(self, name: str, tool_input: dict) -> tuple[str, str | None]:
-        """Route tool call to the right handler. Returns (text, image_b64_or_None)."""
+    async def _execute_tool(self, name: str, tool_input: dict) -> tuple[str, list[str]]:
+        """Route tool call to the right handler. Returns (text, images_b64)."""
         camera_tools = {"see", "look"}
         mobility_tools = {"walk"}
         tts_tools = {"say"}
@@ -1065,7 +1065,7 @@ class EmbodiedAgent:
                 await mcp_task
             return await self._mcp.call(name, tool_input)
         else:
-            return f"Tool '{name}' not available (check configuration).", None
+            return f"Tool '{name}' not available (check configuration).", []
 
     @staticmethod
     def _tool_timeout_seconds(name: str) -> float:
@@ -2732,7 +2732,7 @@ class EmbodiedAgent:
                     return final_text
 
                 if result.stop_reason == "tool_use":
-                    collected: list[tuple[str, str | None]] = []
+                    collected: list[tuple[str, list[str]]] = []
                     for tc in result.tool_calls:
                         if tc.name == "see":
                             camera_used = True
@@ -2758,7 +2758,7 @@ class EmbodiedAgent:
 
                         timeout_s = self._tool_timeout_seconds(tc.name)
                         try:
-                            text, image = await asyncio.wait_for(
+                            text, images = await asyncio.wait_for(
                                 self._execute_tool(tc.name, tc.input),
                                 timeout=timeout_s,
                             )
@@ -2766,15 +2766,15 @@ class EmbodiedAgent:
                             self._tool_failure_streak = 0
                         except asyncio.TimeoutError:
                             logger.warning("Tool %s timed out after %.1fs", tc.name, timeout_s)
-                            text, image = (
+                            text, images = (
                                 f"Tool timeout: {tc.name} exceeded {timeout_s:.1f}s.",
-                                None,
+                                [],
                             )
                             self._last_tool_error = text
                             self._tool_failure_streak += 1
                         except Exception as e:
                             logger.warning("Tool %s failed: %s", tc.name, e)
-                            text, image = f"Tool error: {e}", None
+                            text, images = f"Tool error: {e}", []
                             self._last_tool_error = str(e)
                             self._tool_failure_streak += 1
 
@@ -2794,11 +2794,12 @@ class EmbodiedAgent:
                                 logger.info("TAPE replan: %s", replan[:80])
 
                         logger.info("Tool result: %s", text[:100])
-                        if image and on_image is not None:
-                            on_image(image)
+                        if on_image is not None:
+                            for img in images:
+                                on_image(img)
                         if on_tool_result is not None:
                             on_tool_result(tc.name, tc.input, text)
-                        collected.append((text, image))
+                        collected.append((text, images))
 
                     self.messages.append(self.backend.make_assistant_message(result, raw_content))
                     tool_msgs = self.backend.make_tool_results(result.tool_calls, collected)

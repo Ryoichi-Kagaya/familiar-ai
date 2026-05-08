@@ -2235,7 +2235,7 @@ class MemoryTool:
             },
         ]
 
-    async def call(self, tool_name: str, tool_input: dict) -> tuple[str, str | None]:
+    async def call(self, tool_name: str, tool_input: dict) -> tuple[str, list[str]]:
         if tool_name == "remember":
             content = tool_input["content"]
             emotion = tool_input.get("emotion", "neutral")
@@ -2247,7 +2247,7 @@ class MemoryTool:
                 content, kind="observation", emotion=emotion, image_path=image_path
             )
             if not ok:
-                return "Failed to save memory.", None
+                return "Failed to save memory.", []
 
             # Create associative link if requested
             link_info = ""
@@ -2263,14 +2263,14 @@ class MemoryTool:
             return (
                 f"Remembered{suffix}{id_tag}{link_info}: {content[:80]}\n"
                 f"emotion={emotion} | id={memory_id or '?'}"
-            ), None
+            ), []
 
         if tool_name == "recall":
             query = tool_input["query"]
             n = int(tool_input.get("n", 3))
             memories = await self._store.recall_async(query, n=n)
             if not memories:
-                return "No relevant memories found.", None
+                return "No relevant memories found.", []
 
             lines = []
             for m in memories:
@@ -2298,14 +2298,14 @@ class MemoryTool:
                             f"{lm.get('content', '')[:80]}"
                         )
 
-            return "\n".join(lines), None
+            return "\n".join(lines), []
 
         if tool_name == "recall_divergent":
             query = tool_input["query"]
             n = int(tool_input.get("n", 5))
             memories = await self._store.recall_divergent_async(query, n=n)
             if not memories:
-                return "No divergent memories found.", None
+                return "No divergent memories found.", []
             lines = []
             for memory in memories:
                 episode = f" episode:{memory['episode_id'][:8]}" if memory.get("episode_id") else ""
@@ -2314,17 +2314,17 @@ class MemoryTool:
                     f"conf:{float(memory.get('confidence', 0.0)):.2f} "
                     f"{memory.get('summary', '')[:140]}"
                 )
-            return "\n".join(lines), None
+            return "\n".join(lines), []
 
         if tool_name == "get_working_memory":
             n = int(tool_input.get("n", 5))
             items = await self._store.get_working_memory_async(n=n)
             if not items:
-                return "Working memory is empty.", None
+                return "Working memory is empty.", []
             lines = [
                 f"- salience:{float(item.get('salience', 0.0)):.2f} {item.get('summary', '')[:140]}"
                 for item in items
             ]
-            return "\n".join(lines), None
+            return "\n".join(lines), []
 
-        return f"Unknown memory tool: {tool_name}", None
+        return f"Unknown memory tool: {tool_name}", []

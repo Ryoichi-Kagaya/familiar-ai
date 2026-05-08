@@ -29,6 +29,8 @@ Example config:
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import logging
 import os
@@ -37,6 +39,34 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif"})
+
+
+def _load_image_b64(path: str, max_dim: int = 640) -> tuple[str, str | None]:
+    """画像ファイルをリサイズしてbase64エンコードして返す。失敗時はエラーメッセージのみ。"""
+    p = Path(path)
+    try:
+        data = p.read_bytes()
+    except Exception as e:
+        return f"Error reading {p.name}: {e}", None
+
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(data))
+        w, h = img.size
+        if max(w, h) > max_dim:
+            scale = max_dim / max(w, h)
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, format="JPEG", quality=85)
+        data = buf.getvalue()
+    except Exception:
+        pass
+
+    b64 = base64.b64encode(data).decode()
+    return f"Image: {p.name} ({len(data):,} bytes)", b64
 
 _DEFAULT_CONFIG = Path.home() / ".familiar-ai.json"
 
@@ -192,25 +222,59 @@ class MCPClientManager:
         """Return Anthropic-format tool definitions from all connected servers."""
         return list(self._tool_defs)
 
-    async def call(self, tool_name: str, tool_input: dict[str, Any]) -> tuple[str, str | None]:
+    async def call(self, tool_name: str, tool_input: dict[str, Any]) -> tuple[str, list[str]]:
         """Call a tool on the appropriate MCP server. Never raises — returns error as text."""
+        # Intercept image paths before they reach MCP to prevent binary-as-text token bloat.
+        if tool_name == "read_multiple_files":
+            return await self._call_read_multiple(tool_input)
+        if tool_name == "read_file":
+            path = tool_input.get("path", "")
+            if Path(path).suffix.lower() in _IMAGE_EXTS:
+                desc, b64 = _load_image_b64(path)
+                return desc, [b64] if b64 else []
+
+        return await self._mcp_call(tool_name, tool_input)
+
+    async def _call_read_multiple(self, tool_input: dict[str, Any]) -> tuple[str, list[str]]:
+        """read_multiple_files のうち画像はローカル処理、テキストはMCPへ。"""
+        paths: list[str] = tool_input.get("paths", [])
+        image_paths = [p for p in paths if Path(p).suffix.lower() in _IMAGE_EXTS]
+        text_paths = [p for p in paths if Path(p).suffix.lower() not in _IMAGE_EXTS]
+
+        parts: list[str] = []
+        images: list[str] = []
+
+        for img_path in image_paths:
+            desc, b64 = _load_image_b64(img_path)
+            parts.append(desc)
+            if b64 is not None:
+                images.append(b64)
+
+        if text_paths:
+            new_input = {**tool_input, "paths": text_paths}
+            mcp_text, _ = await self._mcp_call("read_multiple_files", new_input)
+            parts.append(mcp_text)
+
+        return "\n".join(parts) if parts else "(no output)", images
+
+    async def _mcp_call(self, tool_name: str, tool_input: dict[str, Any]) -> tuple[str, list[str]]:
+        """MCPサーバーへの実際の呼び出し。"""
         server_name = self._tool_router.get(tool_name)
         if server_name is None:
-            return f"MCP tool '{tool_name}' not found.", None
+            return f"MCP tool '{tool_name}' not found.", []
 
         session = self._sessions.get(server_name)
         if session is None:
-            return f"MCP server '{server_name}' is not connected.", None
+            return f"MCP server '{server_name}' is not connected.", []
 
         try:
             result = await session.call_tool(tool_name, arguments=tool_input)
         except Exception as e:
             logger.warning("MCP tool '%s' call failed: %s", tool_name, e)
-            return f"MCP tool '{tool_name}' error: {e}", None
+            return f"MCP tool '{tool_name}' error: {e}", []
 
-        # Extract text and optional image from content blocks
         text_parts: list[str] = []
-        image_b64: str | None = None
+        images: list[str] = []
 
         content = result.content if hasattr(result, "content") else []
         for item in content:
@@ -218,8 +282,7 @@ class MCPClientManager:
             if item_type == "text":
                 text_parts.append(item.text)
             elif item_type == "image":
-                # item.data is already base64, item.mimeType e.g. "image/jpeg"
-                image_b64 = item.data
+                images.append(item.data)
 
         text = "\n".join(text_parts) if text_parts else "(no output)"
-        return text, image_b64
+        return text, images

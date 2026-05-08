@@ -13,13 +13,17 @@ Security model:
 from __future__ import annotations
 
 import asyncio
+import base64
 import fnmatch
+import io
 import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from ..config import CodingConfig
+
+_IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif"})
 
 
 class CodingTool:
@@ -183,32 +187,43 @@ class CodingTool:
 
     # ── dispatcher ────────────────────────────────────────────────────────
 
-    async def call(self, name: str, tool_input: dict[str, Any]) -> tuple[str, str | None]:
+    async def call(self, name: str, tool_input: dict[str, Any]) -> tuple[str, list[str]]:
         try:
             if name == "read_file_local":
-                return self._read_file_local(**tool_input), None
+                path_str = tool_input.get("path", "")
+                if Path(path_str).suffix.lower() in _IMAGE_EXTS:
+                    return self._read_image_file(self._resolve(path_str), path_str)
+                return self._read_file_local(**tool_input), []
             if name == "edit_file_local":
-                return self._edit_file_local(**tool_input), None
+                return self._edit_file_local(**tool_input), []
             if name == "glob":
-                return self._glob(**tool_input), None
+                return self._glob(**tool_input), []
             if name == "grep":
-                return self._grep(**tool_input), None
+                return self._grep(**tool_input), []
             if name == "bash":
-                return await self._bash(**tool_input), None
-            return f"Unknown coding tool: {name}", None
+                return await self._bash(**tool_input), []
+            return f"Unknown coding tool: {name}", []
         except Exception as e:
-            return f"Error: {e}", None
+            return f"Error: {e}", []
 
     # ── implementations ───────────────────────────────────────────────────
 
     def _read_file_local(self, path: str, offset: int = 1, limit: int = 0) -> str:
         resolved = self._resolve(path)
         try:
-            text = resolved.read_text(encoding="utf-8", errors="replace")
+            raw = resolved.read_bytes()
         except FileNotFoundError:
             return f"File not found: {path}"
         except IsADirectoryError:
             return f"Path is a directory: {path}"
+
+        if b"\x00" in raw[:8192]:
+            return f"Binary file (not text-readable): {path}"
+
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("utf-8", errors="replace")
 
         lines = text.splitlines(keepends=True)
         total = len(lines)
@@ -232,6 +247,33 @@ class CodingTool:
             result += f"\n(showing lines {start + 1}–{end} of {total}; use offset/limit for more)"
 
         return result
+
+    def _read_image_file(self, resolved: Path, path: str) -> tuple[str, list[str]]:
+        try:
+            data = resolved.read_bytes()
+        except FileNotFoundError:
+            return f"File not found: {path}", []
+        except Exception as e:
+            return f"Error reading image: {e}", []
+
+        # Resize to keep token count reasonable (mirrors camera tool's 640px cap).
+        try:
+            from PIL import Image
+
+            img = Image.open(io.BytesIO(data))
+            w, h = img.size
+            max_dim = 640
+            if max(w, h) > max_dim:
+                scale = max_dim / max(w, h)
+                img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, format="JPEG", quality=85)
+            data = buf.getvalue()
+        except Exception:
+            pass
+
+        b64 = base64.b64encode(data).decode()
+        return f"Image file: {resolved.name} ({len(data):,} bytes)", [b64]
 
     def _edit_file_local(self, path: str, old_string: str, new_string: str) -> str:
         resolved = self._resolve(path)

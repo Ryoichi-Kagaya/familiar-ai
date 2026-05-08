@@ -209,13 +209,13 @@ class AnthropicBackend:
     def make_tool_results(
         self,
         tool_calls: list[ToolCall],
-        results: list[tuple[str, str | None]],
+        results: list[tuple[str, list[str]]],
     ) -> list[dict]:
         """Returns a one-element list containing the Anthropic tool_result user message."""
         content: list[dict[str, Any]] = []
-        for tc, (text, image) in zip(tool_calls, results):
+        for tc, (text, images) in zip(tool_calls, results):
             result_content: list[dict[str, Any]] = [{"type": "text", "text": text}]
-            if image:
+            for image in images:
                 result_content.append(
                     {
                         "type": "image",
@@ -422,23 +422,20 @@ class OpenAICompatibleBackend:
     def _make_native_tool_results(
         self,
         tool_calls: list[ToolCall],
-        results: list[tuple[str, str | None]],
+        results: list[tuple[str, list[str]]],
     ) -> list[dict]:
         # Tool result messages: text only.
-        # Images go in a separate user message — Gemini (and many APIs) reject
-        # image_url inside "role: tool" messages.
-        # All tool result messages must be contiguous — inserting user messages
-        # between them causes "tool_call_id without response" errors on strict APIs.
+        # Images go in separate user messages — many APIs reject image_url inside
+        # "role: tool" messages. All tool result messages must be contiguous first.
         msgs: list[dict[str, Any]] = []
         image_msgs: list[dict[str, Any]] = []
-        for tc, (text, image) in zip(tool_calls, results):
+        for tc, (text, images) in zip(tool_calls, results):
             msgs.append({"role": "tool", "tool_call_id": tc.id, "content": text})
-            if image:
+            for image in images:
                 image_msgs.append(
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": "(camera image attached)"},
                             {
                                 "type": "image_url",
                                 "image_url": {"url": f"data:{_detect_image_media_type(image)};base64,{image}"},
@@ -452,13 +449,13 @@ class OpenAICompatibleBackend:
     def _make_prompt_tool_results(
         self,
         tool_calls: list[ToolCall],
-        results: list[tuple[str, str | None]],
+        results: list[tuple[str, list[str]]],
     ) -> list[dict]:
         """For prompt-based tool calling: inject results as a user message."""
         parts: list[dict] = []
-        for tc, (text, image) in zip(tool_calls, results):
+        for tc, (text, images) in zip(tool_calls, results):
             parts.append({"type": "text", "text": f"[Tool result: {tc.name}]\n{text}"})
-            if image:
+            for image in images:
                 parts.append(
                     {
                         "type": "image_url",
@@ -713,14 +710,14 @@ class KimiBackend:
     def make_tool_results(
         self,
         tool_calls: list[ToolCall],
-        results: list[tuple[str, str | None]],
+        results: list[tuple[str, list[str]]],
     ) -> list[dict]:
         # All tool result messages must be contiguous before any user messages.
         msgs: list[dict] = []
         image_msgs: list[dict] = []
-        for tc, (text, image) in zip(tool_calls, results):
+        for tc, (text, images) in zip(tool_calls, results):
             msgs.append({"role": "tool", "tool_call_id": tc.id, "content": text})
-            if image:
+            for image in images:
                 image_msgs.append(
                     {
                         "role": "user",
@@ -894,14 +891,14 @@ class GLMBackend:
     def make_tool_results(
         self,
         tool_calls: list[ToolCall],
-        results: list[tuple[str, str | None]],
+        results: list[tuple[str, list[str]]],
     ) -> list[dict]:
         # All tool result messages must be contiguous before any user messages.
         msgs: list[dict] = []
         image_msgs: list[dict] = []
-        for tc, (text, image) in zip(tool_calls, results):
+        for tc, (text, images) in zip(tool_calls, results):
             msgs.append({"role": "tool", "tool_call_id": tc.id, "content": text})
-            if image:
+            for image in images:
                 image_msgs.append(
                     {
                         "role": "user",
@@ -1079,12 +1076,12 @@ class GeminiBackend:
     def make_tool_results(
         self,
         tool_calls: list[ToolCall],
-        results: list[tuple[str, str | None]],
+        results: list[tuple[str, list[str]]],
     ) -> list[dict]:
         parts: list[dict[str, Any]] = []
-        for tc, (text, image) in zip(tool_calls, results):
+        for tc, (text, images) in zip(tool_calls, results):
             parts.append({"function_response": {"name": tc.name, "response": {"result": text}}})
-            if image:
+            for image in images:
                 parts.append({"inline_data": {"mime_type": _detect_image_media_type(image), "data": image}})
         return [{"role": "user", "parts": parts}]
 
@@ -1224,7 +1221,7 @@ class CLIBackend:
     def make_tool_results(
         self,
         tool_calls: list[ToolCall],
-        results: list[tuple[str, str | None]],
+        results: list[tuple[str, list[str]]],
     ) -> list[dict]:
         parts = [f"[Tool result: {tc.name}]\n{text}" for tc, (text, _) in zip(tool_calls, results)]
         return [{"role": "user", "content": "\n\n".join(parts)}]

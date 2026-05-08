@@ -325,12 +325,12 @@ class CameraTool:
             },
         ]
 
-    async def call(self, tool_name: str, tool_input: dict) -> tuple[str, str | None]:
+    async def call(self, tool_name: str, tool_input: dict) -> tuple[str, list[str]]:
         if tool_name == "see":
             b64, save_path = await self.capture()
             if b64:
-                return f"You see the current view (saved to {save_path}).", b64
-            return "Camera capture failed.", None
+                return f"You see the current view (saved to {save_path}).", [b64]
+            return "Camera capture failed.", []
         elif tool_name == "look":
-            return await self.move(tool_input["direction"], tool_input.get("degrees", 30)), None
-        return f"Unknown tool: {tool_name}", None
+            return await self.move(tool_input["direction"], tool_input.get("degrees", 30)), []
+        return f"Unknown tool: {tool_name}", []
