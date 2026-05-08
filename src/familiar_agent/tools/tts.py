@@ -235,11 +235,11 @@ class TTSTool:
             },
         ]
 
-    async def call(self, tool_name: str, tool_input: dict) -> tuple[str, None]:
+    async def call(self, tool_name: str, tool_input: dict) -> tuple[str, list[str]]:
         if tool_name == "say":
             result = await self.say(tool_input["text"])
-            return result, None
-        return f"Unknown tool: {tool_name}", None
+            return result, []
+        return f"Unknown tool: {tool_name}", []
 
 
 def _pulse_env() -> dict[str, str] | None:

@@ -55,9 +55,9 @@ class ToMTool:
             }
         ]
 
-    async def call(self, tool_name: str, tool_input: dict) -> tuple[str, None]:
+    async def call(self, tool_name: str, tool_input: dict) -> tuple[str, list[str]]:
         if tool_name != "tom":
-            return f"Unknown tool: {tool_name}", None
+            return f"Unknown tool: {tool_name}", []
 
         situation = tool_input.get("situation", "")
         person = tool_input.get("person", self._default_person)
@@ -89,7 +89,7 @@ class ToMTool:
         else:
             self._last_policy = situation[:80]
 
-        return result, None
+        return result, []
 
     async def _llm_inference(self, situation: str, person: str, memory_context: str) -> str:
         assert self._backend is not None  # caller ensures this

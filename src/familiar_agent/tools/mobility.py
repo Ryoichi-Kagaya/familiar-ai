@@ -87,13 +87,13 @@ class MobilityTool:
             },
         ]
 
-    async def call(self, tool_name: str, tool_input: dict) -> tuple[str, None]:
+    async def call(self, tool_name: str, tool_input: dict) -> tuple[str, list[str]]:
         if tool_name == "walk":
             direction = tool_input["direction"]
             duration = tool_input.get("duration")
             try:
                 result = await self.move(direction, duration)
-                return result, None
+                return result, []
             except Exception as e:
-                return f"Move failed: {e}", None
-        return f"Unknown tool: {tool_name}", None
+                return f"Move failed: {e}", []
+        return f"Unknown tool: {tool_name}", []
