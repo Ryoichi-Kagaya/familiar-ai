@@ -332,7 +332,7 @@ async def test_call_unknown_tool_returns_error(tmp_path: Path) -> None:
     mgr = MCPClientManager(config_path=tmp_path / "missing.json")
     text, image = await mgr.call("nonexistent_tool", {})
     assert "not found" in text.lower() or "nonexistent_tool" in text
-    assert image is None
+    assert image == []
 
 
 @pytest.mark.asyncio
@@ -362,7 +362,7 @@ async def test_call_routes_to_correct_server_and_returns_text(tmp_path: Path) ->
         text, image = await mgr.call("remember", {"text": "hello"})
 
     assert text == "Stored successfully."
-    assert image is None
+    assert image == []
     sess.call_tool.assert_awaited_once_with("remember", arguments={"text": "hello"})
 
 
@@ -393,4 +393,4 @@ async def test_call_extracts_image_from_content(tmp_path: Path) -> None:
         text, image = await mgr.call("capture", {})
 
     assert text == "Image captured."
-    assert image == "base64encodedimagedata=="
+    assert image == ["base64encodedimagedata=="]

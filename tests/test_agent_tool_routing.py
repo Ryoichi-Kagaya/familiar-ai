@@ -197,4 +197,4 @@ async def test_execute_tool_unknown_without_mcp_returns_error():
     agent = _make_agent()
     result, img = await agent._execute_tool("nonexistent_tool", {})
     assert "not available" in result.lower() or "nonexistent_tool" in result
-    assert img is None
+    assert img == []

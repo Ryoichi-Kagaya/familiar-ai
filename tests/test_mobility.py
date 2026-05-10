@@ -149,7 +149,7 @@ async def test_call_walk_routes_to_move():
     result, img = await tool.call("walk", {"direction": "forward"})
 
     assert result == "Moved forward"
-    assert img is None
+    assert img == []
 
 
 @pytest.mark.asyncio
