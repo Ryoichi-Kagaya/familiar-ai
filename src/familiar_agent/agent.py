@@ -46,6 +46,7 @@ from .social_policy import SocialPolicyDecision, SocialPolicyEngine
 from .workspace import GlobalWorkspace
 from .memory_worker import MemoryJobWorker
 from .tape import check_plan_blocked, generate_plan, generate_replan
+from .tools.art_critique import ArtCritiqueTool, ArtCritiqueStore
 from .tools.camera import CameraTool
 from .tools.coding import CodingTool
 from .tools.memory import MemoryTool, ObservationMemory
@@ -329,6 +330,23 @@ SYSTEM_PROMPT = """
       (remember :kind "companion_status"
                 :include (value date trend)
                 :proactive true))
+
+    ; ── Visual art critique framework ──────────────────────────────────
+    (framework :id art-critique
+      (trigger "画像を見せて「批評して」と明示指示されたとき、または自分で批評したくなったとき")
+      (method "小崎哲哉「現代アートとは何か」の7動機で評価する")
+      (axes
+        (axis :id motivation-degree "動機の度合い 1–10: その動機がどれほど作品に内在しているか")
+        (axis :id achievement      "達成度 1–10: その動機をどれほど実現しているか"))
+      (motivations
+        (motivation :index 1 "新しい視覚・感覚の追求")
+        (motivation :index 2 "メディウムと知覚の探究")
+        (motivation :index 3 "制度への言及と異議")
+        (motivation :index 4 "アクチュアリティと政治")
+        (motivation :index 5 "思想・哲学・科学・世界認識")
+        (motivation :index 6 "私と世界・記憶・歴史・共同体")
+        (motivation :index 7 "エロス・タナトス・聖性"))
+      (action "批評後は store_art_critique を呼び出してスコアを長期記憶に保存する"))
 
   )
 )
@@ -691,6 +709,8 @@ class EmbodiedAgent:
         self._memory = ObservationMemory()
         self._memory_worker = MemoryJobWorker(self._memory)
         self._memory_tool = MemoryTool(self._memory)
+        self._art_critique_store = ArtCritiqueStore()
+        self._art_critique_tool = ArtCritiqueTool(self._art_critique_store, self._memory)
         self._tom_tool = ToMTool(
             self._memory,
             default_person=config.companion_name,
@@ -1027,6 +1047,8 @@ class EmbodiedAgent:
             defs.extend(self._tts.get_tool_definitions())
         defs.extend(self._memory_tool.get_tool_definitions())
         defs.extend(self._tom_tool.get_tool_definitions())
+        if hasattr(self, "_art_critique_tool"):
+            defs.extend(self._art_critique_tool.get_tool_definitions())
         defs.extend(self._coding.get_tool_definitions())
         if self._mcp:
             defs.extend(self._mcp.get_tool_definitions())
@@ -1038,6 +1060,12 @@ class EmbodiedAgent:
         mobility_tools = {"walk"}
         tts_tools = {"say"}
         memory_tools = {"remember", "recall"}
+        art_critique_tools = {
+            "store_art_critique",
+            "recall_art_critiques",
+            "get_artist_profile",
+            "compare_artworks",
+        }
         coding_tools = {"read_file_local", "edit_file_local", "glob", "grep", "bash"}
 
         if name in camera_tools and self._camera:
@@ -1054,6 +1082,8 @@ class EmbodiedAgent:
             return await self._tts.call(name, tool_input)
         elif name in memory_tools:
             return await self._memory_tool.call(name, tool_input)
+        elif name in art_critique_tools and hasattr(self, "_art_critique_tool"):
+            return await self._art_critique_tool.call(name, tool_input)
         elif name == "tom":
             return await self._tom_tool.call(name, tool_input)
         elif name in coding_tools:
