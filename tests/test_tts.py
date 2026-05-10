@@ -47,7 +47,7 @@ async def test_call_say_invokes_say_method():
     result, img = await tool.call("say", {"text": "hello"})
 
     assert result == "Said: hello"
-    assert img is None
+    assert img == []
     tool.say.assert_awaited_once_with("hello")
 
 
