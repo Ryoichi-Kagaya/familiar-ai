@@ -24,3 +24,7 @@ build/
 
 # Claude
 .claude/
+
+#bat
+camera.bat
+run-local-camera.bat
