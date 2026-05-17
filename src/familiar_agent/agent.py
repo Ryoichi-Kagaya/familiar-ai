@@ -1066,7 +1066,7 @@ class EmbodiedAgent:
             "get_artist_profile",
             "compare_artworks",
         }
-        coding_tools = {"read_file_local", "edit_file_local", "glob", "grep", "bash"}
+        coding_tools = {"read_file_local", "edit_file_local", "glob", "grep", "bash", "save_image"}
 
         if name in camera_tools and self._camera:
             result = await self._camera.call(name, tool_input)

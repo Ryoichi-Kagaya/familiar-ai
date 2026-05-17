@@ -157,6 +157,30 @@ class CodingTool:
             },
         ]
 
+        defs.append(
+            {
+                "name": "save_image",
+                "description": (
+                    "Save base64-encoded image data to a local file. "
+                    "Use after fetching an image URL to persist it on disk."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Destination file path (absolute or relative to working directory)",
+                        },
+                        "data": {
+                            "type": "string",
+                            "description": "Base64-encoded image bytes",
+                        },
+                    },
+                    "required": ["path", "data"],
+                },
+            }
+        )
+
         if self._config.bash_enabled:
             defs.append(
                 {
@@ -200,6 +224,8 @@ class CodingTool:
                 return self._glob(**tool_input), []
             if name == "grep":
                 return self._grep(**tool_input), []
+            if name == "save_image":
+                return self._save_image(**tool_input), []
             if name == "bash":
                 return await self._bash(**tool_input), []
             return f"Unknown coding tool: {name}", []
@@ -274,6 +300,16 @@ class CodingTool:
 
         b64 = base64.b64encode(data).decode()
         return f"Image file: {resolved.name} ({len(data):,} bytes)", [b64]
+
+    def _save_image(self, path: str, data: str) -> str:
+        resolved = self._resolve(path)
+        try:
+            raw = base64.b64decode(data)
+        except Exception as e:
+            return f"save_image failed: invalid base64 data — {e}"
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        resolved.write_bytes(raw)
+        return f"Saved {len(raw):,} bytes to {resolved}"
 
     def _edit_file_local(self, path: str, old_string: str, new_string: str) -> str:
         resolved = self._resolve(path)
