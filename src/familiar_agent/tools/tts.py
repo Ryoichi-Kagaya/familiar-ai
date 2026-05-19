@@ -237,7 +237,10 @@ class TTSTool:
 
     async def call(self, tool_name: str, tool_input: dict) -> tuple[str, list[str]]:
         if tool_name == "say":
-            result = await self.say(tool_input["text"])
+            text = tool_input.get("text") or tool_input.get("message") or tool_input.get("content")
+            if not text:
+                return "Tool error: 'say' requires a 'text' argument", []
+            result = await self.say(text)
             return result, []
         return f"Unknown tool: {tool_name}", []
 

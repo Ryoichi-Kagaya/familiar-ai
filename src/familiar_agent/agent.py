@@ -2331,6 +2331,44 @@ class EmbodiedAgent:
         except (asyncio.TimeoutError, Exception):
             pass
 
+    async def _stream_with_retry(
+        self,
+        *,
+        system: str | tuple[str, str],
+        messages: list,
+        tools: list[dict],
+        max_tokens: int,
+        on_text: Callable[[str], None] | None,
+        max_retries: int = 2,
+    ) -> tuple[Any, Any]:
+        """Call backend.stream_turn, retrying on rate-limit / engine-overload errors."""
+        backoffs = [10.0, 20.0]
+        for attempt in range(max_retries + 1):
+            try:
+                return await self.backend.stream_turn(
+                    system=system,
+                    messages=messages,
+                    tools=tools,
+                    max_tokens=max_tokens,
+                    on_text=on_text,
+                )
+            except Exception as e:
+                status = getattr(e, "status_code", None)
+                is_rate_limit = (
+                    status == 429
+                    or "RateLimit" in type(e).__name__
+                    or "overloaded" in str(e).lower()
+                )
+                if not is_rate_limit or attempt == max_retries:
+                    raise
+                wait = backoffs[min(attempt, len(backoffs) - 1)]
+                logger.warning(
+                    "Rate limit (attempt %d/%d), retrying in %.0fs: %s",
+                    attempt + 1, max_retries, wait, e,
+                )
+                await asyncio.sleep(wait)
+        raise RuntimeError("unreachable")
+
     async def run(
         self,
         user_input: str,
@@ -2643,7 +2681,7 @@ class EmbodiedAgent:
             for i in range(turn_max_iterations):
                 logger.debug("Agent iteration %d", i + 1)
 
-                result, raw_content = await self.backend.stream_turn(
+                result, raw_content = await self._stream_with_retry(
                     system=self._system_prompt(
                         feelings_ctx,
                         morning_ctx,
@@ -2881,7 +2919,7 @@ class EmbodiedAgent:
                     "Please summarize what you found and provide your final answer now."
                 )
             )
-            result, _ = await self.backend.stream_turn(
+            result, _ = await self._stream_with_retry(
                 system=self._system_prompt(
                     morning_ctx=morning_ctx,
                     plan_ctx=plan_ctx,
