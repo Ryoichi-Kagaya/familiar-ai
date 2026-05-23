@@ -1051,7 +1051,15 @@ class EmbodiedAgent:
             defs.extend(self._art_critique_tool.get_tool_definitions())
         defs.extend(self._coding.get_tool_definitions())
         if self._mcp:
-            defs.extend(self._mcp.get_tool_definitions())
+            existing_names = {t["name"] for t in defs}
+            for tool in self._mcp.get_tool_definitions():
+                if tool["name"] not in existing_names:
+                    defs.append(tool)
+                else:
+                    logger.warning(
+                        "MCP tool '%s' conflicts with a built-in tool; skipping MCP version",
+                        tool["name"],
+                    )
         return defs
 
     async def _execute_tool(self, name: str, tool_input: dict) -> tuple[str, list[str]]:
