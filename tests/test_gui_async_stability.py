@@ -77,6 +77,7 @@ def _make_window_stub() -> FamiliarWindow:
     win._look_preview_disabled = False
     win._realtime_stt = None
     win._realtime_stt_task = None
+    win._log_path = MagicMock()
     win._desires = MagicMock()
     win._log = MagicMock()
     win._stream = MagicMock()

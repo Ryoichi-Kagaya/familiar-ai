@@ -90,6 +90,7 @@ async def test_tts_payload_requests_pcm_format() -> None:
     tool.go2rtc_url = "http://localhost:1984"
     tool.go2rtc_stream = "test"
     tool._lock = __import__("asyncio").Lock()
+    tool.volume = 1.0
 
     captured_payload: dict = {}
     captured_url = ""
@@ -212,5 +213,6 @@ async def test_play_local_prefers_afplay_on_macos(tmp_path) -> None:
 
     assert result is True
     mock_exec.assert_awaited_once()
-    assert mock_exec.await_args.args[:2] == ("/usr/bin/afplay", wav_path)
+    assert mock_exec.await_args.args[0] == "/usr/bin/afplay"
+    assert mock_exec.await_args.args[3] == wav_path
     mock_sd.assert_not_called()

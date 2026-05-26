@@ -58,6 +58,7 @@ async def test_initialize_agent_builds_agent_in_background(monkeypatch) -> None:
         def __init__(self, config) -> None:
             self.config = config
             self.is_embedding_ready = True
+            self.stt = None
 
     monkeypatch.setattr("familiar_agent.agent.EmbodiedAgent", _FakeAgent)
 

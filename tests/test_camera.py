@@ -149,7 +149,7 @@ async def test_call_see_returns_image_on_success():
 
     result, img = await cam.call("see", {})
 
-    assert img == "fakeb64"
+    assert img == ["fakeb64"]
     assert "saved to" in result
 
 
@@ -165,7 +165,7 @@ async def test_call_see_returns_error_when_capture_fails():
 
     result, img = await cam.call("see", {})
 
-    assert img is None
+    assert img == []
     assert "failed" in result.lower()
 
 
@@ -183,7 +183,7 @@ async def test_call_look_delegates_to_move():
 
     assert "left" in result
     assert "45" in result
-    assert img is None
+    assert img == []
 
 
 @pytest.mark.asyncio
