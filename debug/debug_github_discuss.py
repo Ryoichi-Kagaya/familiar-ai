@@ -15,7 +15,6 @@ github-discuss-mcp 接続デバッグスクリプト
 import asyncio
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -79,7 +78,7 @@ for var in ENV_VARS:
 repo_env = os.getenv("GITHUB_DISCUSS_REPO", "")
 if "/" in repo_env:
     owner_from_repo, _, repo_from_repo = repo_env.partition("/")
-    print(f"\n  [INFO] GITHUB_DISCUSS_REPO を owner/repo 形式で解釈:")
+    print("\n  [INFO] GITHUB_DISCUSS_REPO を owner/repo 形式で解釈:")
     print(f"         owner={owner_from_repo}, repo={repo_from_repo}")
     if not os.getenv("GITHUB_DISCUSS_OWNER"):
         os.environ["GITHUB_DISCUSS_OWNER"] = owner_from_repo
@@ -136,7 +135,7 @@ try:
     discussions = asyncio.run(test_get_discussions())
     print(f"  [OK] get_discussions 成功: {len(discussions)} 件取得")
     if discussions:
-        print(f"\n  最初の1件:")
+        print("\n  最初の1件:")
         d = discussions[0]
         print(f"    タイトル : {d.get('title', '?')}")
         print(f"    カテゴリ : {d.get('category', {}).get('name', '?')}")
@@ -171,9 +170,9 @@ try:
     import inspect
     sig = inspect.signature(StdioServerParameters)
     if "cwd" in sig.parameters:
-        print(f"    [OK] cwd パラメータあり → familiar-ai は cwd を渡せます")
+        print("    [OK] cwd パラメータあり → familiar-ai は cwd を渡せます")
     else:
-        print(f"    [WARN] cwd パラメータなし → MCP ライブラリのバージョンが古い可能性")
+        print("    [WARN] cwd パラメータなし → MCP ライブラリのバージョンが古い可能性")
 except ImportError:
     print("    [ERROR] mcp パッケージが未インストール")
 print()
@@ -245,7 +244,7 @@ def _print_response(obj: dict) -> bool:
         label = "引数なし (familiar-ai と同じ呼び出し方)"
         if "エラー" in text or "ERROR" in text or "📭" in text:
             print(f"    [NG] get_discussions {label}:\n      {preview}")
-            print(f"    ↑ .env の GITHUB_DISCUSS_OWNER が未設定のため utenadev が使われている可能性")
+            print("    ↑ .env の GITHUB_DISCUSS_OWNER が未設定のため utenadev が使われている可能性")
         else:
             print(f"    [OK] get_discussions {label}:\n      {preview}")
     elif msg_id == 4:
@@ -280,7 +279,7 @@ async def run_mcp_session():
 
     stderr_task = asyncio.ensure_future(read_stderr())
 
-    print(f"\n  stdout (JSON-RPC レスポンス):")
+    print("\n  stdout (JSON-RPC レスポンス):")
     try:
         for expected_id, msg in MCP_SEQUENCE:
             payload = json.dumps(msg) + "\n"
@@ -335,7 +334,7 @@ async def run_mcp_session():
         print(f"\n  終了コード: {proc.returncode}")
 
     if stderr_lines:
-        print(f"\n  stderr:\n    " + "\n    ".join(stderr_lines))
+        print("\n  stderr:\n    " + "\n    ".join(stderr_lines))
     else:
         print("  (stderr なし)")
 

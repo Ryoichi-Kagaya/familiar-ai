@@ -1,4 +1,6 @@
-import jwt, time, requests
+import jwt
+import time
+import requests
 
 # JWT を作成（有効期限5分）
 with open('C:/Users/Blue-/hal-lifemate-ai.2026-04-25.private-key.pem', 'r') as f:

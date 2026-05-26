@@ -130,7 +130,7 @@ async def run_record_test() -> None:
     )
     print(f"\n  Source : {source_label}")
     print(f"  Duration: {RECORD_SECS}s  (override with STT_DEBUG_SECS=N)")
-    print(f"  Say something now…\n")
+    print("  Say something now…\n")
 
     async def auto_stop() -> None:
         await asyncio.sleep(RECORD_SECS)
