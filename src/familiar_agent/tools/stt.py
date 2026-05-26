@@ -96,6 +96,7 @@ class STTTool:
 
     async def record_and_transcribe(self, stop_event: asyncio.Event) -> str:
         """Record until stop_event is set, then transcribe and return text."""
+        audio_bytes: bytes | None = None
         if self._input_source == "remote":
             if not self._rtsp_url:
                 logger.warning("STT: STT_INPUT=remote but no camera RTSP URL configured")

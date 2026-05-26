@@ -58,7 +58,7 @@ def _load_image_b64(path: str, max_dim: int = 640) -> tuple[str, str | None]:
         w, h = img.size
         if max(w, h) > max_dim:
             scale = max_dim / max(w, h)
-            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+            img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)  # type: ignore[assignment]
         buf = io.BytesIO()
         img.convert("RGB").save(buf, format="JPEG", quality=85)
         data = buf.getvalue()

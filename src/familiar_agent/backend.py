@@ -412,7 +412,7 @@ class OpenAICompatibleBackend:
     def make_tool_results(
         self,
         tool_calls: list[ToolCall],
-        results: list[tuple[str, str | None]],
+        results: list[tuple[str, list[str]]],
     ) -> list[dict]:
         """Returns tool result messages. Format depends on tools_mode."""
         if self.tools_mode == "prompt":
