@@ -11,16 +11,27 @@ Neighbor-like behavior emerges not from response quality alone, but from:
 
 ## Layer Mapping
 
-### Layer A: Event Ingestion → `event_bus.py`
+### Layer A: Event Ingestion → `familiar_runtime.events` + legacy `event_bus.py`
 
-All signals flowing through the system are normalized to a canonical `Event` dataclass:
+Runtime/task execution now uses `familiar_runtime.events.AgentEvent`:
+
+```
+AgentEvent(id, run_id, task_id, turn_id, source, type, payload, timestamp,
+           salience, confidence, parent_id)
+```
+
+This supports JSONL logging, SQLite persistence, subscriptions, and replay for task/runtime
+activity.
+
+Neighbor intelligence still has the legacy canonical `Event` shape available in
+`src/familiar_agent/event_bus.py`:
 
 ```
 Event(source, entity, payload, timestamp, salience, confidence, affect)
 ```
 
 Sources: text, vision, audio, bio, device, system, memory, action.
-JSONL append-only logging with replay support.
+JSONL append-only logging with replay support remains available.
 
 ### Layer B: State Tracker → `self_state.py` + `scene.py` + `prediction.py`
 
@@ -120,6 +131,39 @@ Plan generation before loop + heuristic replanning on blocked observations.
 2. **Heuristic TAPE replanning** — Keyword-based blocked detection replaces 2 LLM calls per tool use
 3. **Optional coherence check** — Disabled by default (FAMILIAR_COHERENCE_CHECK=1 to enable)
 4. **Lazy MCP initialization** — Background async startup, tools become available as servers connect
+
+## Generic Runtime Layer
+
+In parallel with the neighbour stack, the repository now hosts a generic agent runtime
+that the same neighbour code is migrating onto. Documented in detail in
+`docs/task-agent-runtime.md`; in shape:
+
+```
+familiar_runtime/          # provider-neutral substrate
+├── models/                # ModelBackend protocol + provider adapters
+├── tools/                 # ToolProvider/ToolRegistry + LegacyToolProvider
+├── tasks/                 # Task model, SQLiteTaskStore, checkpoints
+├── events/                # AgentEvent, EventBus, EventStore
+├── memory/                # MemoryStore protocol (adapter pending)
+├── react_loop.py          # Generic ReAct loop with hook callbacks
+├── runtime.py             # AgentRuntime + RuntimeHook + RuntimeHookBase
+├── context.py             # ContextBlock + budgeted selection
+└── jobs.py                # BackgroundJobManager
+
+familiar_capabilities/     # ToolProvider adapters around legacy tools
+├── coding.py, mcp.py
+├── camera.py, mobility.py, voice.py, tom.py, memory.py
+
+familiar_neighbor/         # companion profile boundary
+├── app.py (NeighborProfile)
+├── prompts.py
+└── mind/                  # compatibility re-exports of cognition modules
+```
+
+Hooks register with `AgentRuntime` and participate in five lifecycle points:
+`before_turn`, `build_context`, `after_model_result` (may rewrite the model output),
+`after_tool_result` (fires for success / timeout / exception), and `after_turn`. See
+`docs/adr/0003-runtime-hook-protocol.md` for the rationale.
 
 ## Future: Chronos-Neighbor Model
 
