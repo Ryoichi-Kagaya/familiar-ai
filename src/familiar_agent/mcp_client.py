@@ -73,7 +73,7 @@ _DEFAULT_CONFIG = Path.home() / ".familiar-ai.json"
 
 def _resolve_config_path() -> Path:
     env = os.environ.get("MCP_CONFIG", "")
-    return Path(env) if env else _DEFAULT_CONFIG
+    return Path(os.path.expanduser(env)) if env else _DEFAULT_CONFIG
 
 
 def _load_servers(config_path: Path) -> dict[str, dict[str, Any]]:
