@@ -599,7 +599,7 @@ class StreamLabel(QWidget):
 class CameraView(QLabel):
     """Displays the latest camera image (base64-encoded JPEG/PNG)."""
 
-    _PLACEHOLDER_SIZE = QSize(640, 360)
+    _PLACEHOLDER_SIZE = QSize(300, 225)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
