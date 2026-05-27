@@ -113,7 +113,7 @@ _UI_FONT_STACK = (
     "'Noto Sans CJK JP', 'Yu Gothic UI', 'Hiragino Sans', 'Meiryo', 'Segoe UI', sans-serif"
 )
 _MONO_FONT_STACK = "'Cascadia Mono', 'Consolas', 'Courier New', monospace"
-_FONT_SCALE = 1.0
+_FONT_SCALE = 1.9
 
 _DESIRE_COLORS: dict[str, str] = {
     "look_around": "#57b8ff",
@@ -205,7 +205,7 @@ def _apply_global_style(app: QApplication) -> None:
         QDialog {{
             background: {_BG_SURFACE};
             border: 1px solid {_BORDER};
-            border-radius: 12px;
+            border-radius: {_px(12)}px;
         }}
 
         QLabel {{ color: {_TEXT_PRIMARY}; }}
@@ -232,8 +232,8 @@ def _apply_global_style(app: QApplication) -> None:
             background: {_BG_SURFACE};
             color: {_TEXT_PRIMARY};
             border: 1px solid {_BORDER};
-            border-radius: 6px;
-            padding: 5px 10px;
+            border-radius: {_px(6)}px;
+            padding: {_px(5)}px {_px(10)}px;
             selection-background-color: {_ACCENT};
         }}
         QLineEdit:focus {{
@@ -246,8 +246,8 @@ def _apply_global_style(app: QApplication) -> None:
             background: {_BG_ELEVATED};
             color: {_TEXT_PRIMARY};
             border: 1px solid {_BORDER};
-            border-radius: 6px;
-            padding: 5px 12px;
+            border-radius: {_px(6)}px;
+            padding: {_px(5)}px {_px(12)}px;
         }}
         QPushButton:hover {{
             background: {_BG_HOVER};
@@ -268,8 +268,8 @@ def _apply_global_style(app: QApplication) -> None:
             background: {_BG_SURFACE};
             color: {_TEXT_PRIMARY};
             border: 1px solid {_BORDER};
-            border-radius: 6px;
-            padding: 5px 10px;
+            border-radius: {_px(6)}px;
+            padding: {_px(5)}px {_px(10)}px;
         }}
         QComboBox::drop-down {{
             border: none;
@@ -285,15 +285,15 @@ def _apply_global_style(app: QApplication) -> None:
         QTabWidget::pane {{
             border: 1px solid {_BORDER};
             background: {_BG_SURFACE};
-            border-radius: 10px;
+            border-radius: {_px(10)}px;
         }}
 
         QTabBar::tab {{
             background: {_BG_ELEVATED};
             color: {_TEXT_SECONDARY};
-            padding: 5px 12px;
-            border-radius: 7px;
-            margin-right: 4px;
+            padding: {_px(5)}px {_px(12)}px;
+            border-radius: {_px(7)}px;
+            margin-right: {_px(4)}px;
             border: 1px solid {_BORDER};
         }}
 
@@ -470,13 +470,13 @@ class ChatLog(QScrollArea):
         label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         if accent_left:
             label.setStyleSheet(
-                f"background: {bg}; border-radius: 10px; padding: 6px 12px;"
+                f"background: {bg}; border-radius: {_px(10)}px; padding: {_px(6)}px {_px(12)}px;"
                 f" border: 1px solid {_BORDER};"
                 f" border-left: 3px solid {_ACCENT};"
             )
         else:
             label.setStyleSheet(
-                f"background: {bg}; border-radius: 10px; padding: 6px 12px;"
+                f"background: {bg}; border-radius: {_px(10)}px; padding: {_px(6)}px {_px(12)}px;"
                 f" border: 1px solid {_BORDER};"
             )
         label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
@@ -519,7 +519,7 @@ class StreamLabel(QWidget):
         self._label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self._label.setStyleSheet(
             f"background: {_BG_SURFACE}; color: {_TEXT_PRIMARY};"
-            f" padding: 6px 12px; border-radius: 10px;"
+            f" padding: {_px(6)}px {_px(12)}px; border-radius: {_px(10)}px;"
             f" border: 1px solid {_BORDER}; border-left: 3px solid {_ACCENT};"
             f" font-family: {_UI_FONT_STACK}; font-size: {_px(13)}px;"
         )
@@ -599,14 +599,14 @@ class StreamLabel(QWidget):
 class CameraView(QLabel):
     """Displays the latest camera image (base64-encoded JPEG/PNG)."""
 
-    _PLACEHOLDER_SIZE = QSize(240, 180)
+    _PLACEHOLDER_SIZE = QSize(640, 360)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(self._PLACEHOLDER_SIZE)
         self.setStyleSheet(
-            f"background: {_BG_CARD}; border-radius: 18px;"
+            f"background: {_BG_CARD}; border-radius: {_px(18)}px;"
             f" border: 1px solid {_BORDER}; color: {_TEXT_SECONDARY};"
         )
         self.setText("No camera image yet")
@@ -672,7 +672,7 @@ class DesireBar(QWidget):
         self._bar.setRange(0, 100)
         self._bar.setValue(0)
         self._bar.setTextVisible(False)
-        self._bar.setFixedHeight(4)
+        self._bar.setFixedHeight(_px(4))
         self._bar.setStyleSheet(
             f"QProgressBar {{ background: rgba(127,115,148,0.16); border-radius: 3px; border: none; }}"
             f"QProgressBar::chunk {{"
@@ -947,7 +947,7 @@ class FamiliarWindow(QMainWindow):
         self._log_path = self._open_log_file()
 
         self.setWindowTitle("familiar-ai")
-        self.resize(1020, 720)
+        self.resize(1280, 860)
         self.setStyleSheet(f"background: {_BG_BASE};")
         self._build_ui()
         self._set_input_enabled(False)
@@ -1136,7 +1136,7 @@ class FamiliarWindow(QMainWindow):
         # Header bar
         header = QWidget()
         header.setStyleSheet(
-            f"background: {_BG_SURFACE}; border-radius: 16px; border: 1px solid {_BORDER};"
+            f"background: {_BG_SURFACE}; border-radius: {_px(16)}px; border: 1px solid {_BORDER};"
         )
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(12, 6, 8, 6)
@@ -1152,12 +1152,12 @@ class FamiliarWindow(QMainWindow):
 
         settings_btn = QPushButton(_t("settings_button"))
         settings_btn.setToolTip(_t("settings_button_tooltip"))
-        settings_btn.setFixedHeight(30)
-        settings_btn.setMinimumWidth(110)
+        settings_btn.setFixedHeight(_px(30))
+        settings_btn.setMinimumWidth(_px(110))
         settings_btn.setStyleSheet(
-            f"QPushButton {{ background: {_BG_SURFACE}; border-radius: 8px;"
+            f"QPushButton {{ background: {_BG_SURFACE}; border-radius: {_px(8)}px;"
             f" border: 1px solid {_BORDER};"
-            f" padding: 0 12px; font-size: {_px(12)}px; color: {_TEXT_SECONDARY}; }}"
+            f" padding: 0 {_px(12)}px; font-size: {_px(12)}px; color: {_TEXT_SECONDARY}; }}"
             f"QPushButton:hover {{ background: {_BG_ELEVATED}; color: {_TEXT_PRIMARY}; }}"
         )
         settings_btn.clicked.connect(self._open_settings)
@@ -1165,12 +1165,12 @@ class FamiliarWindow(QMainWindow):
 
         self._restart_stt_btn = QPushButton("↻ STT")
         self._restart_stt_btn.setToolTip("Restart realtime STT")
-        self._restart_stt_btn.setFixedHeight(30)
-        self._restart_stt_btn.setMinimumWidth(90)
+        self._restart_stt_btn.setFixedHeight(_px(30))
+        self._restart_stt_btn.setMinimumWidth(_px(90))
         self._restart_stt_btn.setStyleSheet(
-            f"QPushButton {{ background: {_BG_ELEVATED}; border-radius: 8px;"
+            f"QPushButton {{ background: {_BG_ELEVATED}; border-radius: {_px(8)}px;"
             f" border: 1px solid {_BORDER};"
-            f" padding: 0 12px; font-size: {_px(12)}px; color: {_TEXT_SECONDARY}; }}"
+            f" padding: 0 {_px(12)}px; font-size: {_px(12)}px; color: {_TEXT_SECONDARY}; }}"
             f"QPushButton:hover {{ background: {_BG_HOVER}; color: {_TEXT_PRIMARY}; }}"
             f"QPushButton:disabled {{ background: rgba(127,115,148,0.12); color: {_TEXT_SECONDARY}; }}"
         )
@@ -1180,12 +1180,12 @@ class FamiliarWindow(QMainWindow):
 
         self._mic_btn = QPushButton("🎙 Mic")
         self._mic_btn.setToolTip("Start / stop batch voice recording (STT)")
-        self._mic_btn.setFixedHeight(30)
-        self._mic_btn.setMinimumWidth(90)
+        self._mic_btn.setFixedHeight(_px(30))
+        self._mic_btn.setMinimumWidth(_px(90))
         self._mic_btn.setStyleSheet(
-            f"QPushButton {{ background: {_BG_ELEVATED}; border-radius: 8px;"
+            f"QPushButton {{ background: {_BG_ELEVATED}; border-radius: {_px(8)}px;"
             f" border: 1px solid {_BORDER};"
-            f" padding: 0 12px; font-size: {_px(12)}px; color: {_TEXT_SECONDARY}; }}"
+            f" padding: 0 {_px(12)}px; font-size: {_px(12)}px; color: {_TEXT_SECONDARY}; }}"
             f"QPushButton:hover {{ background: {_BG_HOVER}; color: {_TEXT_PRIMARY}; }}"
             f"QPushButton:checked {{ background: #7c3aed; color: #fff; border-color: #7c3aed; }}"
             f"QPushButton:disabled {{ background: rgba(127,115,148,0.12); color: {_TEXT_SECONDARY}; }}"
@@ -1198,7 +1198,7 @@ class FamiliarWindow(QMainWindow):
 
         status_card = QWidget()
         status_card.setStyleSheet(
-            f"background: {_BG_SURFACE}; border-radius: 16px; border: 1px solid {_BORDER};"
+            f"background: {_BG_SURFACE}; border-radius: {_px(16)}px; border: 1px solid {_BORDER};"
         )
         status_layout = QVBoxLayout(status_card)
         status_layout.setContentsMargins(12, 8, 12, 8)
@@ -1236,7 +1236,7 @@ class FamiliarWindow(QMainWindow):
 
         # Stream label
         self._stream = StreamLabel()
-        self._stream.setMinimumHeight(70)
+        self._stream.setMinimumHeight(_px(70))
         left_layout.addWidget(self._stream, stretch=1)
 
         # Input row — pill QLineEdit + circular send button
@@ -1248,7 +1248,7 @@ class FamiliarWindow(QMainWindow):
         self._input.setObjectName("msgInput")
         self._input.setStyleSheet(
             f"QLineEdit#msgInput {{"
-            f" border-radius: 999px; padding: 6px 14px;"
+            f" border-radius: 999px; padding: {_px(6)}px {_px(14)}px;"
             f" background: {_BG_SURFACE}; border: 1px solid {_BORDER};"
             f" color: {_TEXT_PRIMARY}; font-size: {_px(13)}px;"
             f" font-family: {_UI_FONT_STACK};"
@@ -1261,13 +1261,13 @@ class FamiliarWindow(QMainWindow):
         input_row.addWidget(self._input)
 
         self._send_btn = QPushButton("⬆")
-        self._send_btn.setFixedSize(40, 40)
+        self._send_btn.setFixedSize(_px(40), _px(40))
         self._send_btn.setObjectName("sendBtn")
         self._send_btn.setStyleSheet(
             f"QPushButton#sendBtn {{"
             f" background: qlineargradient(x1:0,y1:0,x2:1,y2:1,"
             f" stop:0 {_ACCENT_DEEP}, stop:1 {_ACCENT});"
-            f" border-radius: 20px; border: none;"
+            f" border-radius: {_px(20)}px; border: none;"
             f" font-size: {_px(14)}px; color: white;"
             f"}}"
             f"QPushButton#sendBtn:hover {{"
@@ -1282,13 +1282,13 @@ class FamiliarWindow(QMainWindow):
         input_row.addWidget(self._send_btn)
 
         self._stop_btn = QPushButton("■")
-        self._stop_btn.setFixedSize(40, 40)
+        self._stop_btn.setFixedSize(_px(40), _px(40))
         self._stop_btn.setObjectName("stopBtn")
         self._stop_btn.setToolTip(_t("gui_cancel_turn_tooltip"))
         self._stop_btn.setStyleSheet(
             f"QPushButton#stopBtn {{"
             f" background: rgba(255,107,115,0.20);"
-            f" border-radius: 20px; border: 1px solid rgba(255,107,115,0.52);"
+            f" border-radius: {_px(20)}px; border: 1px solid rgba(255,107,115,0.52);"
             f" font-size: {_px(12)}px; color: #e34f5d;"
             f"}}"
             f"QPushButton#stopBtn:hover {{"
@@ -1306,7 +1306,7 @@ class FamiliarWindow(QMainWindow):
 
         # ── Right panel ─────────────────────────────────────────
         right = QWidget()
-        right.setFixedWidth(260)
+        right.setFixedWidth(320)
         right.setStyleSheet(f"background: {_BG_BASE};")
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -1317,7 +1317,7 @@ class FamiliarWindow(QMainWindow):
 
         desire_card = QWidget()
         desire_card.setStyleSheet(
-            f"background: {_BG_ELEVATED}; border-radius: 18px; border: 1px solid {_BORDER};"
+            f"background: {_BG_ELEVATED}; border-radius: {_px(18)}px; border: 1px solid {_BORDER};"
         )
         desire_card_vbox = QVBoxLayout(desire_card)
         desire_card_vbox.setContentsMargins(0, 0, 0, 0)
