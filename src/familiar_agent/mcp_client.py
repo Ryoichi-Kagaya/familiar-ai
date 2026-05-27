@@ -208,7 +208,13 @@ class MCPClientManager:
                 logger.info("Connected to MCP server '%s' (%d tools)", name, count)
 
             except Exception as e:
-                logger.warning("Failed to connect to MCP server '%s': %s", name, e)
+                logger.warning(
+                    "Failed to connect to MCP server '%s': %s (%s)",
+                    name,
+                    e or type(e).__name__,
+                    type(e).__name__,
+                    exc_info=True,
+                )
 
     async def stop(self) -> None:
         """Close all MCP connections."""
