@@ -113,7 +113,7 @@ _UI_FONT_STACK = (
     "'Noto Sans CJK JP', 'Yu Gothic UI', 'Hiragino Sans', 'Meiryo', 'Segoe UI', sans-serif"
 )
 _MONO_FONT_STACK = "'Cascadia Mono', 'Consolas', 'Courier New', monospace"
-_FONT_SCALE = 1.9
+_FONT_SCALE = 1.5
 
 _DESIRE_COLORS: dict[str, str] = {
     "look_around": "#57b8ff",
@@ -599,7 +599,7 @@ class StreamLabel(QWidget):
 class CameraView(QLabel):
     """Displays the latest camera image (base64-encoded JPEG/PNG)."""
 
-    _PLACEHOLDER_SIZE = QSize(300, 225)
+    _PLACEHOLDER_SIZE = QSize(640, 360)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1077,10 +1077,7 @@ class FamiliarWindow(QMainWindow):
                     ret, frame = cap.read()
                     if not ret:
                         break
-                    h, w = frame.shape[:2]
-                    new_w = 640
-                    new_h = int(h * new_w / w) if w > 0 else h
-                    frame = cv2.resize(frame, (new_w, new_h))
+                    frame = cv2.resize(frame, (640, 360))
                     _, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
                     try:
                         loop.call_soon_threadsafe(frame_queue.put_nowait, jpg.tobytes())
@@ -1306,7 +1303,7 @@ class FamiliarWindow(QMainWindow):
 
         # ── Right panel ─────────────────────────────────────────
         right = QWidget()
-        right.setFixedWidth(320)
+        right.setFixedWidth(640)
         right.setStyleSheet(f"background: {_BG_BASE};")
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
