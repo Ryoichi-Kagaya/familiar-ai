@@ -166,10 +166,11 @@ class MCPClientManager:
 
             try:
                 if server_type == "stdio":
-                    command = cfg.get("command", "")
-                    args: list[str] = cfg.get("args", [])
+                    command = os.path.expanduser(cfg.get("command", ""))
+                    args: list[str] = [os.path.expanduser(a) for a in cfg.get("args", [])]
                     env: dict[str, str] | None = cfg.get("env") or None
-                    cwd: str | None = cfg.get("cwd") or None
+                    raw_cwd: str | None = cfg.get("cwd") or None
+                    cwd: str | None = os.path.expanduser(raw_cwd) if raw_cwd else None
 
                     if not command:
                         logger.warning("MCP server '%s': missing 'command', skipping", name)
