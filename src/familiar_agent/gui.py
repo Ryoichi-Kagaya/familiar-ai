@@ -1952,6 +1952,13 @@ def run_gui(config: "AgentConfig", desires: "DesireSystem") -> None:
             qt_app.setWindowIcon(icon)
 
     loop = qasync.QEventLoop(qt_app)
+    # uvloop.install() (called in main()) replaces the global event loop policy with
+    # uvloop's, which doesn't implement get_child_watcher(). qasync uses a standard
+    # asyncio loop, not a uvloop loop, so subprocess spawning (e.g. MCP stdio servers)
+    # falls through to the Unix _make_subprocess_transport path that needs a child
+    # watcher. Reset to the default policy so that watcher is available.
+    if sys.platform != "win32":
+        asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
     asyncio.set_event_loop(loop)
 
     window = FamiliarWindow(config, desires)
