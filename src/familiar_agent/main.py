@@ -390,6 +390,12 @@ def main() -> None:
         import uvloop
 
         uvloop.install()
+        # uvloop's EventLoopPolicy raises NotImplementedError for get_child_watcher(),
+        # which breaks subprocess spawning in non-uvloop loops (e.g. qasync.QEventLoop).
+        # Patch in a ThreadedChildWatcher so MCP stdio servers can start in all modes.
+        if sys.platform != "win32":
+            _watcher = asyncio.ThreadedChildWatcher()  # type: ignore[attr-defined]
+            asyncio.get_event_loop_policy().get_child_watcher = lambda: _watcher  # type: ignore[method-assign]
     except ImportError:
         pass
 
