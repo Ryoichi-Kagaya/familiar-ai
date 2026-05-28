@@ -1602,6 +1602,7 @@ class FamiliarWindow(QMainWindow):
     async def _process_queue(self) -> None:
         """Dequeue user messages and run the agent; fire desires when idle."""
         last_interaction = time.time()
+        consecutive_idle_turns = 0
         while True:
             try:
                 text = await asyncio.wait_for(self._input_queue.get(), timeout=IDLE_CHECK_INTERVAL)
@@ -1621,6 +1622,7 @@ class FamiliarWindow(QMainWindow):
                     last_interaction=last_interaction,
                     now=now,
                     cooldown=DESIRE_COOLDOWN,
+                    consecutive_idle_turns=consecutive_idle_turns,
                 ):
                     continue
 
@@ -1639,6 +1641,7 @@ class FamiliarWindow(QMainWindow):
                     self._desires.satisfy(desire_name)
                     self._desires.curiosity_target = None
                     last_interaction = time.time()
+                    consecutive_idle_turns += 1
                 continue
 
             if text is None:
@@ -1653,6 +1656,7 @@ class FamiliarWindow(QMainWindow):
             if not getattr(self, "_agent_ready", True) and getattr(self, "_agent", None) is None:
                 break
             last_interaction = time.time()
+            consecutive_idle_turns = 0
             logger.debug(
                 "GUI dequeued input (remaining queue=%d, running=%s)",
                 self._input_queue.qsize(),

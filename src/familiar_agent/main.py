@@ -87,6 +87,7 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
     # so user input is captured even while the agent is busy.
     input_queue: asyncio.Queue[str | None] = asyncio.Queue()
     last_interaction_time: float = time.time()
+    consecutive_idle_turns: int = 0
 
     async def _stdin_reader() -> None:
         """Read stdin continuously into the queue."""
@@ -133,6 +134,7 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
 
             if pending:
                 # Process all buffered user messages before doing anything autonomous
+                consecutive_idle_turns = 0
                 for user_input in pending:
                     last_interaction_time = time.time()
                     await _handle_user(
@@ -161,8 +163,9 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                     last_interaction=last_interaction_time,
                     now=time.time(),
                     cooldown=DESIRE_COOLDOWN,
+                    consecutive_idle_turns=consecutive_idle_turns,
                 ):
-                    continue  # Still in post-conversation cooldown
+                    continue  # Still in post-conversation cooldown or consecutive cap reached
 
                 # Peek at any pending input before firing desire
                 pending_items: list[str] = []
@@ -192,6 +195,8 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                     )
                     desires.satisfy(desire_name)
                     desires.curiosity_target = None
+                    last_interaction_time = time.time()
+                    consecutive_idle_turns += 1
                 elif pending_items:
                     # Had pending input but no desire — process it as user message
                     for msg in pending_items:

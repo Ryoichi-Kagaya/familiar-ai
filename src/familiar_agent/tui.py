@@ -178,6 +178,7 @@ class FamiliarApp(App):
         self._companion_name = agent.config.companion_name
         self._input_queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._last_interaction = time.time()
+        self._consecutive_idle_turns = 0
         self._agent_running = False
         self._current_text_buf = ""  # buffer for streaming text
         self._log_path = self._open_log_file()
@@ -334,6 +335,7 @@ class FamiliarApp(App):
 
         self._log_user(text)
         self._last_interaction = time.time()
+        self._consecutive_idle_turns = 0
         await self._input_queue.put(text)
 
     # ── agent loop ─────────────────────────────────────────────────
@@ -521,6 +523,7 @@ class FamiliarApp(App):
             last_interaction=self._last_interaction,
             now=now,
             cooldown=DESIRE_COOLDOWN,
+            consecutive_idle_turns=self._consecutive_idle_turns,
         ):
             return
 
@@ -533,6 +536,7 @@ class FamiliarApp(App):
             last_interaction=self._last_interaction,
             now=time.time(),
             cooldown=DESIRE_COOLDOWN,
+            consecutive_idle_turns=self._consecutive_idle_turns,
         ):
             return
 
@@ -548,6 +552,7 @@ class FamiliarApp(App):
         await self._run_agent("", inner_voice=prompt)
         self.desires.satisfy(desire_name)
         self.desires.curiosity_target = None
+        self._consecutive_idle_turns += 1
 
     # ── Realtime STT (hands-free, always-on) ────────────────────
 
