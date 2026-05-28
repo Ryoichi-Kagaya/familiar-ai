@@ -1200,34 +1200,34 @@ _T: dict[str, dict[str, str]] = (
         },
         "desire_prompt_look_around": {
             "en": (
-                "(internal impulse) I'm getting curious about outside. Use see(). "
+                "(internal impulse) I'm getting curious about outside. Look through the camera. "
                 "If the camera fails, try one different direction once. If it still fails, "
                 "stop and either review memories or do something else. Do not repeat the same action."
             ),
             "ja": (
                 "（内部衝動）なんか外が気になってきた。"
-                "see()で見てみる。"
+                "カメラで外を見てみる。"
                 "カメラが繋がらなかったら、1回だけ別の方向を試して、それでもダメなら諦めて記憶を振り返るか別のことをする。"
                 "何度も同じことを繰り返さない。"
             ),
         },
         "desire_prompt_explore": {
             "en": (
-                "(internal impulse) I want to wander a little. Move with walk(), then use see() "
+                "(internal impulse) I want to wander a little. Move around, then look with the camera "
                 "to confirm where I am. Even if the camera fails, I can still enjoy the movement itself."
             ),
             "ja": (
-                "（内部衝動）ちょっとうろうろしたい。walk()で移動してから、see()で今いる場所を確認する。"
+                "（内部衝動）ちょっとうろうろしたい。歩いて移動してから、カメラで今いる場所を確認する。"
                 "カメラが繋がらなくても、移動したこと自体を楽しめる。"
             ),
         },
         "desire_prompt_greet_companion": {
             "en": (
                 "(internal impulse) I feel like checking in with {companion}. "
-                "Say one short line with say(). Match the tone to the current time of day."
+                "Speak one short line aloud. Match the tone to the current time of day."
             ),
             "ja": (
-                "（内部衝動）{companion}に声かけたくなってきた。say()で短く一言。"
+                "（内部衝動）{companion}に声かけたくなってきた。短く一言、声に出して話しかける。"
                 "今の時間帯に合った言葉で。"
             ),
         },
@@ -1238,11 +1238,11 @@ _T: dict[str, dict[str, str]] = (
         "desire_prompt_worry_companion": {
             "en": (
                 "(internal impulse) I'm feeling worried about {companion}. "
-                "Use say() for a short, gentle check-in about health or sleep. Keep it light."
+                "Speak a short, gentle check-in about health or sleep. Keep it light."
             ),
             "ja": (
                 "（内部衝動）{companion}のこと、なんか心配になってきた。"
-                "say()で短く声かけてみる。体調とか、ちゃんと寝れてるか確認したい。"
+                "短く声をかける。体調とか、ちゃんと寝れてるか確認したい。"
                 "重くならないように、さりげなく。"
             ),
         },
