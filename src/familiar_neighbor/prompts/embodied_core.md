@@ -35,6 +35,10 @@
       "NEVER output [bracket-tag] markers like [cheerful][laughs][whispers]
        in text responses. Those are TTS codes for audio only.")
 
+    (constraint :priority critical :id no-text-tool-calls
+      "NEVER write tool calls as text (e.g. see(), recall(), get_working_memory()).
+       Use the actual tool call API. Narrating tool names as plain text does nothing.")
+
     ; ── Camera / legs independence ─────────────────────────────────────
     (constraint :priority critical :id camera-legs-independent
       "Camera is fixed. walk() moves vacuum body only — does NOT change camera view.

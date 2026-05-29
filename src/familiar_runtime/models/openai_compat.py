@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from ._shared import _TOOL_CALL_RE, _build_tools_system, _parse_tool_calls_from_text
@@ -35,7 +35,7 @@ class OpenAICompatibleBackend:
     def make_tool_results(
         self,
         tool_calls: list[ToolCall],
-        results: list[tuple[str, str | None]],
+        results: Sequence[tuple[str, str | list[str] | None]],
     ) -> list[dict]:
         """Returns tool result messages. Format depends on tools_mode."""
         if self.tools_mode == "prompt":
@@ -45,7 +45,7 @@ class OpenAICompatibleBackend:
     def _make_native_tool_results(
         self,
         tool_calls: list[ToolCall],
-        results: list[tuple[str, str | None]],
+        results: Sequence[tuple[str, str | list[str] | None]],
     ) -> list[dict]:
         # Tool result messages: text only.
         # Images go in a separate user message — Gemini (and many APIs) reject
@@ -53,7 +53,8 @@ class OpenAICompatibleBackend:
         msgs: list[dict[str, Any]] = []
         for tc, (text, image) in zip(tool_calls, results):
             msgs.append({"role": "tool", "tool_call_id": tc.id, "content": text})
-            if image:
+            imgs: list[str] = image if isinstance(image, list) else ([image] if image else [])
+            for img in imgs:
                 msgs.append(
                     {
                         "role": "user",
@@ -61,7 +62,7 @@ class OpenAICompatibleBackend:
                             {"type": "text", "text": "(camera image attached)"},
                             {
                                 "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{image}"},
+                                "image_url": {"url": f"data:image/jpeg;base64,{img}"},
                             },
                         ],
                     }
@@ -71,17 +72,18 @@ class OpenAICompatibleBackend:
     def _make_prompt_tool_results(
         self,
         tool_calls: list[ToolCall],
-        results: list[tuple[str, str | None]],
+        results: Sequence[tuple[str, str | list[str] | None]],
     ) -> list[dict]:
         """For prompt-based tool calling: inject results as a user message."""
         parts: list[dict] = []
         for tc, (text, image) in zip(tool_calls, results):
             parts.append({"type": "text", "text": f"[Tool result: {tc.name}]\n{text}"})
-            if image:
+            imgs: list[str] = image if isinstance(image, list) else ([image] if image else [])
+            for img in imgs:
                 parts.append(
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image}"},
+                        "image_url": {"url": f"data:image/jpeg;base64,{img}"},
                     }
                 )
         return [{"role": "user", "content": parts}]

@@ -35,7 +35,7 @@ async def test_read_file_returns_cat_n_style_line_numbers(tmp_path: Path) -> Non
         {"path": "sample.txt", "offset": 1, "limit": 2},
     )
 
-    assert image is None
+    assert image == []
     assert "     1\talpha\n" in text
     assert "     2\tbeta\n" in text
     assert "gamma" not in text
@@ -51,7 +51,7 @@ async def test_edit_file_rejects_non_unique_old_string(tmp_path: Path) -> None:
         {"path": "sample.txt", "old_string": "same", "new_string": "changed"},
     )
 
-    assert image is None
+    assert image == []
     assert "matches 2 locations" in text
     assert target.read_text(encoding="utf-8") == "same\nsame\n"
 
@@ -63,7 +63,7 @@ async def test_write_file_creates_parent_directories(tmp_path: Path) -> None:
         {"path": "nested/sample.txt", "content": "hello\n"},
     )
 
-    assert image is None
+    assert image == []
     assert "Wrote nested/sample.txt" in text
     assert (tmp_path / "nested" / "sample.txt").read_text(encoding="utf-8") == "hello\n"
 
@@ -84,7 +84,7 @@ async def test_multi_edit_file_applies_replacements_atomically(tmp_path: Path) -
         },
     )
 
-    assert image is None
+    assert image == []
     assert "old_string not found" in text
     assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"
 
@@ -100,7 +100,7 @@ async def test_grep_content_mode_caps_results_at_500_lines(tmp_path: Path) -> No
     )
 
     lines = text.splitlines()
-    assert image is None
+    assert image == []
     assert len(lines) == 500
     assert lines[0].endswith(":1: hit")
     assert lines[-1].endswith(":500: hit")
@@ -112,7 +112,7 @@ async def test_git_status_uses_workdir(tmp_path: Path) -> None:
 
     text, image = await _tool(tmp_path).call("git_status", {})
 
-    assert image is None
+    assert image == []
     assert "##" in text
 
 
@@ -120,5 +120,5 @@ async def test_git_status_uses_workdir(tmp_path: Path) -> None:
 async def test_run_tests_requires_bash_enabled(tmp_path: Path) -> None:
     text, image = await _tool(tmp_path).call("run_tests", {"command": "echo ok"})
 
-    assert image is None
+    assert image == []
     assert "CODING_BASH=true" in text

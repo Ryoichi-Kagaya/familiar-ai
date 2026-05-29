@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from .base import ModelTurnResult, ToolCall
@@ -45,19 +45,20 @@ class KimiBackend:
     def make_tool_results(
         self,
         tool_calls: list[ToolCall],
-        results: list[tuple[str, str | None]],
+        results: Sequence[tuple[str, str | list[str] | None]],
     ) -> list[dict]:
         msgs: list[dict] = []
         for tc, (text, image) in zip(tool_calls, results):
             msgs.append({"role": "tool", "tool_call_id": tc.id, "content": text})
-            if image:
+            imgs: list[str] = image if isinstance(image, list) else ([image] if image else [])
+            for img in imgs:
                 msgs.append(
                     {
                         "role": "user",
                         "content": [
                             {
                                 "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{image}"},
+                                "image_url": {"url": f"data:image/jpeg;base64,{img}"},
                             }
                         ],
                     }

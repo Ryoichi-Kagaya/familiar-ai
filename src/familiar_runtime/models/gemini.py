@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from .base import ModelTurnResult, ToolCall
@@ -54,13 +54,14 @@ class GeminiBackend:
     def make_tool_results(
         self,
         tool_calls: list[ToolCall],
-        results: list[tuple[str, str | None]],
+        results: Sequence[tuple[str, str | list[str] | None]],
     ) -> list[dict]:
         parts: list[dict[str, Any]] = []
         for tc, (text, image) in zip(tool_calls, results):
             parts.append({"function_response": {"name": tc.name, "response": {"result": text}}})
-            if image:
-                parts.append({"inline_data": {"mime_type": "image/jpeg", "data": image}})
+            imgs: list[str] = image if isinstance(image, list) else ([image] if image else [])
+            for img in imgs:
+                parts.append({"inline_data": {"mime_type": "image/jpeg", "data": img}})
         return [{"role": "user", "parts": parts}]
 
     # ── API calls ─────────────────────────────────────────────────

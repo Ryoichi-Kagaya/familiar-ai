@@ -44,7 +44,7 @@ class ModelBackend(Protocol):
     def make_tool_results(
         self,
         tool_calls: Sequence[ToolCall],
-        results: Sequence[tuple[str, str | None]],
+        results: Sequence[tuple[str, str | list[str] | None]],  # list[str] from multi-image tools
     ) -> list[dict[str, Any]]:
         """Serialize tool results for this provider."""
 

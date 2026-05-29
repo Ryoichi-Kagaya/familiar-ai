@@ -111,6 +111,9 @@ async def test_execute_tool_routes_tom():
 @pytest.mark.parametrize(
     "tool_name",
     [
+        "read_file_local",
+        "edit_file_local",
+        "save_image",
         "read_file",
         "write_file",
         "edit_file",
@@ -141,7 +144,7 @@ async def test_execute_tool_routes_see_to_camera():
     agent = _make_agent(with_camera=True)
     result, img = await agent._execute_tool("see", {})
     assert result == "I see a room"
-    assert img == "base64img"
+    assert img == ["base64img"]
     agent._camera.call.assert_awaited_once_with("see", {})
 
 
@@ -212,4 +215,4 @@ async def test_execute_tool_unknown_without_mcp_returns_error():
     agent = _make_agent()
     result, img = await agent._execute_tool("nonexistent_tool", {})
     assert "not available" in result.lower() or "nonexistent_tool" in result
-    assert img is None or img == []
+    assert img == []

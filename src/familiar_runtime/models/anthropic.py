@@ -3,13 +3,29 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 from ._shared import _supports_adaptive_thinking
 from .base import ModelTurnResult, ToolCall
 
 logger = logging.getLogger(__name__)
+
+
+def _detect_image_media_type(b64_data: str) -> str:
+    """Detect image MIME type from base64-encoded bytes via magic bytes."""
+    import base64
+
+    try:
+        padding = (4 - len(b64_data[:16]) % 4) % 4
+        header = base64.b64decode(b64_data[:16] + "=" * padding)[:12]
+    except Exception:
+        return "image/jpeg"
+    if header[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if header[:2] == b"\xff\xd8":
+        return "image/jpeg"
+    return "image/jpeg"
 
 
 class AnthropicBackend:
@@ -74,17 +90,22 @@ class AnthropicBackend:
     def make_tool_results(
         self,
         tool_calls: list[ToolCall],
-        results: list[tuple[str, str | None]],
+        results: Sequence[tuple[str, str | list[str] | None]],
     ) -> list[dict]:
         """Returns a one-element list containing the Anthropic tool_result user message."""
         content: list[dict[str, Any]] = []
         for tc, (text, image) in zip(tool_calls, results):
             result_content: list[dict[str, Any]] = [{"type": "text", "text": text}]
-            if image:
+            imgs: list[str] = image if isinstance(image, list) else ([image] if image else [])
+            for img in imgs:
                 result_content.append(
                     {
                         "type": "image",
-                        "source": {"type": "base64", "media_type": "image/jpeg", "data": image},
+                        "source": {
+                            "type": "base64",
+                            "media_type": _detect_image_media_type(img),
+                            "data": img,
+                        },
                     }
                 )
             content.append({"type": "tool_result", "tool_use_id": tc.id, "content": result_content})

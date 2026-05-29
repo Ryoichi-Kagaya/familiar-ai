@@ -112,6 +112,9 @@ _TOOL_TIMEOUTS: dict[str, float] = {
     "remember": 20.0,
     "recall": 20.0,
     "tom": 20.0,
+    "read_file_local": 30.0,
+    "edit_file_local": 30.0,
+    "save_image": 10.0,
     "read_file": 30.0,
     "write_file": 30.0,
     "edit_file": 30.0,
@@ -871,8 +874,8 @@ class EmbodiedAgent:
             registry.register_fallback(provider)
         return registry
 
-    async def _execute_tool(self, name: str, tool_input: dict) -> tuple[str, str | None]:
-        """Route tool call to the right handler. Returns (text, image_b64_or_None)."""
+    async def _execute_tool(self, name: str, tool_input: dict) -> tuple[str, list[str]]:
+        """Route tool call to the right handler. Returns (text, images_b64)."""
         registry = self._build_tool_registry()
         if self._mcp and not registry.has_tool(name):
             mcp_task = getattr(self, "_mcp_start_task", None)
@@ -881,7 +884,9 @@ class EmbodiedAgent:
                 registry = self._build_tool_registry()
 
         result = await registry.call(name, tool_input)
-        return result.text, result.image_b64
+        raw = result.image_b64
+        images: list[str] = raw if isinstance(raw, list) else ([raw] if raw else [])
+        return result.text, images
 
     @staticmethod
     def _tool_timeout_seconds(name: str) -> float:
@@ -2586,7 +2591,7 @@ class EmbodiedAgent:
                     return final_text
 
                 if result.stop_reason == "tool_use":
-                    collected: list[tuple[str, str | None]] = []
+                    collected: list[tuple[str, list[str]]] = []
                     for tc in result.tool_calls:
                         if tc.name == "see":
                             camera_used = True
@@ -2622,13 +2627,13 @@ class EmbodiedAgent:
                             logger.warning("Tool %s timed out after %.1fs", tc.name, timeout_s)
                             text, images = (
                                 f"Tool timeout: {tc.name} exceeded {timeout_s:.1f}s.",
-                                None,
+                                [],
                             )
                             self._last_tool_error = text
                             self._tool_failure_streak += 1
                         except Exception as e:
                             logger.warning("Tool %s failed: %s", tc.name, e)
-                            text, images = f"Tool error: {e}", None
+                            text, images = f"Tool error: {e}", []
                             self._last_tool_error = str(e)
                             self._tool_failure_streak += 1
 
@@ -2648,8 +2653,9 @@ class EmbodiedAgent:
                                 logger.info("TAPE replan: %s", replan[:80])
 
                         logger.info("Tool result: %s", text[:100])
-                        if on_image is not None and images is not None:
-                            on_image(images)
+                        if on_image is not None:
+                            for img in images:
+                                on_image(img)
                         if on_tool_result is not None:
                             on_tool_result(tc.name, tc.input, text)
                         collected.append((text, images))

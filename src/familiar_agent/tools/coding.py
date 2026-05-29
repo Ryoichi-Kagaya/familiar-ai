@@ -13,7 +13,9 @@ Security model:
 from __future__ import annotations
 
 import asyncio
+import base64
 import fnmatch
+import io
 import re
 import subprocess
 from pathlib import Path
@@ -70,6 +72,32 @@ class CodingTool:
                         },
                     },
                     "required": ["path"],
+                },
+            },
+            {
+                "name": "edit_file_local",
+                "description": (
+                    "Edit a file by replacing old_string with new_string. "
+                    "old_string must appear exactly once in the file. "
+                    "ALWAYS call read_file_local before edit_file_local to confirm the exact text."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "File path to edit",
+                        },
+                        "old_string": {
+                            "type": "string",
+                            "description": "Exact text to find and replace (must be unique in file)",
+                        },
+                        "new_string": {
+                            "type": "string",
+                            "description": "Replacement text",
+                        },
+                    },
+                    "required": ["path", "old_string", "new_string"],
                 },
             },
             {
@@ -300,33 +328,42 @@ class CodingTool:
 
     # ── dispatcher ────────────────────────────────────────────────────────
 
-    async def call(self, name: str, tool_input: dict[str, Any]) -> tuple[str, str | None]:
+    async def call(self, name: str, tool_input: dict[str, Any]) -> tuple[str, list[str]]:
         try:
+            if name == "read_file_local":
+                path_str = tool_input.get("path", "")
+                if Path(path_str).suffix.lower() in _IMAGE_EXTS:
+                    return self._read_image_file(self._resolve(path_str), path_str)
+                return self._read_file_local(**tool_input), []
             if name == "read_file":
-                return self._read_file_local(**tool_input), None
+                return self._read_file_local(**tool_input), []
+            if name == "edit_file_local":
+                return self._edit_file(**tool_input), []
             if name == "write_file":
-                return self._write_file(**tool_input), None
+                return self._write_file(**tool_input), []
             if name == "edit_file":
-                return self._edit_file(**tool_input), None
+                return self._edit_file(**tool_input), []
             if name == "multi_edit_file":
-                return self._multi_edit_file(**tool_input), None
+                return self._multi_edit_file(**tool_input), []
+            if name == "save_image":
+                return self._save_image(**tool_input), []
             if name == "glob":
-                return self._glob(**tool_input), None
+                return self._glob(**tool_input), []
             if name == "grep":
-                return self._grep(**tool_input), None
+                return self._grep(**tool_input), []
             if name == "git_status":
-                return await self._git_status(), None
+                return await self._git_status(), []
             if name == "git_diff":
-                return await self._git_diff(**tool_input), None
+                return await self._git_diff(**tool_input), []
             if name == "git_apply_patch":
-                return await self._git_apply_patch(**tool_input), None
+                return await self._git_apply_patch(**tool_input), []
             if name == "run_tests":
-                return await self._run_tests(**tool_input), None
+                return await self._run_tests(**tool_input), []
             if name == "bash":
-                return await self._bash(**tool_input), None
-            return f"Unknown coding tool: {name}", None
+                return await self._bash(**tool_input), []
+            return f"Unknown coding tool: {name}", []
         except Exception as e:
-            return f"Error: {e}", None
+            return f"Error: {e}", []
 
     # ── implementations ───────────────────────────────────────────────────
 
@@ -369,6 +406,42 @@ class CodingTool:
             result += f"\n(showing lines {start + 1}–{end} of {total}; use offset/limit for more)"
 
         return result
+
+    def _read_image_file(self, resolved: Path, path: str) -> tuple[str, list[str]]:
+        try:
+            data = resolved.read_bytes()
+        except FileNotFoundError:
+            return f"File not found: {path}", []
+        except Exception as e:
+            return f"Error reading image: {e}", []
+
+        try:
+            from PIL import Image
+
+            img = Image.open(io.BytesIO(data))
+            w, h = img.size
+            max_dim = 640
+            if max(w, h) > max_dim:
+                scale = max_dim / max(w, h)
+                img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)  # type: ignore[assignment]
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, format="JPEG", quality=85)
+            data = buf.getvalue()
+        except Exception:
+            pass
+
+        b64 = base64.b64encode(data).decode()
+        return f"Image file: {resolved.name} ({len(data):,} bytes)", [b64]
+
+    def _save_image(self, path: str, data: str) -> str:
+        resolved = self._resolve(path)
+        try:
+            raw = base64.b64decode(data)
+        except Exception as e:
+            return f"save_image failed: invalid base64 data — {e}"
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        resolved.write_bytes(raw)
+        return f"Saved {len(raw):,} bytes to {resolved}"
 
     def _write_file(self, path: str, content: str) -> str:
         resolved = self._resolve(path)

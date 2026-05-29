@@ -6,6 +6,9 @@ from familiar_agent.tools.coding import CodingTool
 from familiar_runtime.tools.legacy import LegacyToolProvider
 
 CODING_TOOL_NAMES = {
+    "read_file_local",
+    "edit_file_local",
+    "save_image",
     "read_file",
     "write_file",
     "edit_file",

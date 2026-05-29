@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from ._shared import _TOOL_CALL_RE, _build_tools_system, _parse_tool_calls_from_text
@@ -54,7 +54,7 @@ class CLIBackend:
     def make_tool_results(
         self,
         tool_calls: list[ToolCall],
-        results: list[tuple[str, str | None]],
+        results: Sequence[tuple[str, str | list[str] | None]],
     ) -> list[dict]:
         parts = [f"[Tool result: {tc.name}]\n{text}" for tc, (text, _) in zip(tool_calls, results)]
         return [{"role": "user", "content": "\n\n".join(parts)}]
