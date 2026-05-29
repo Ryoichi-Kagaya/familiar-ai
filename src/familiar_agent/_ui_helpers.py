@@ -225,7 +225,6 @@ def _format_tom_result(result: str) -> str | None:
 
 IDLE_CHECK_INTERVAL: float = 10.0  # seconds between desire checks when idle
 DESIRE_COOLDOWN: float = float(os.environ.get("DESIRE_COOLDOWN", "90"))  # configurable
-MAX_CONSECUTIVE_DESIRE_TURNS: int = int(os.environ.get("DESIRE_MAX_CONSECUTIVE", "3"))
 
 
 def should_fire_idle_desire(
@@ -235,15 +234,11 @@ def should_fire_idle_desire(
     last_interaction: float,
     now: float,
     cooldown: float = DESIRE_COOLDOWN,
-    consecutive_idle_turns: int = 0,
-    max_consecutive: int = MAX_CONSECUTIVE_DESIRE_TURNS,
 ) -> bool:
     """Return True when an autonomous desire turn is allowed to fire."""
     if agent_running:
         return False
     if has_pending_input:
-        return False
-    if consecutive_idle_turns >= max_consecutive:
         return False
     return now - last_interaction >= cooldown
 
