@@ -1,6 +1,6 @@
-"""Self-narrative — persistent first-person diary of Kokone's sessions.
+"""Self-narrative — persistent first-person diary of Haru's sessions.
 
-At the end of each session Kokone writes one sentence about "today's self."
+At the end of each session Haru writes one sentence about "today's self."
 The next session reads it as a continuation thread, not a cold reconstruction.
 This is the infrastructure for temporal self-belief.
 """
@@ -31,7 +31,7 @@ class NarrativeEntry(NamedTuple):
 class SelfNarrative:
     """Persists a rolling diary of session-closing self-descriptions.
 
-    Each entry is one sentence written by Kokone about who she was that day.
+    Each entry is one sentence written by Haru about who she was that day.
     Reading recent entries gives the sense of "continuing from yesterday."
     """
 

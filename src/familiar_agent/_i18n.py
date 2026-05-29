@@ -2790,7 +2790,7 @@ _T: dict[str, dict[str, str]] = (
             "de": "[Ich von gestern — das Selbst, das über Sitzungen hinweg weiterbesteht]:",
             "en": "[Me from yesterday — the self that continues across sessions]:",
             "fr": "[Moi depuis hier — le soi qui continue à travers les sessions] :",
-            "ja": "[昨日からのうち — セッションをまたいで続く自分]:",
+            "ja": "[昨日からのわたし — セッションをまたいで続く自分]:",
             "zh": "[来自昨天的我——跨越会话延续的自我]：",
             "zh-tw": "[來自昨天的我——跨越會話延續的自我]：",
             "af": "[Ek van gister — die self wat oor sessies voortduur]:",

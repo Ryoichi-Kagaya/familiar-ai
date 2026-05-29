@@ -52,7 +52,7 @@
   "curiosity_none": "なし",
   "default_companion_name": "人間",
   "morning_no_history": "[これは最初のセッション。過去の記憶はまだない。比較や昨日よりという表現は使わないこと。]",
-  "morning_header": "[昨日からのうち — セッションをまたいで続く自分]:",
+  "morning_header": "[昨日からのわたし — セッションをまたいで続く自分]:",
   "action_recall": "💭 思い出している...",
   "initializing": "初期化中",
   "initializing_done": "準備完了",

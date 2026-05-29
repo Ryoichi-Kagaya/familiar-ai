@@ -2051,7 +2051,7 @@ class EmbodiedAgent:
     async def _write_today_narrative(self) -> None:
         """Write a one-sentence self-description for today's session.
 
-        This is Kokone's diary entry — "who I was today." Read back next session
+        This is Haru's diary entry — "who I was today." Read back next session
         as the felt thread of temporal continuity: わたしはここにいた、今もいる.
         """
         if self._turn_count == 0:

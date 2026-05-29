@@ -1124,7 +1124,7 @@ class ObservationMemory:
     def format_self_model_for_context(self, self_model: list[dict]) -> str:
         if not self_model:
             return ""
-        lines = ["[うちという存在 — 経験から積み上げてきた自己像]:"]
+        lines = ["[わたしという存在 — 経験から積み上げてきた自己像]:"]
         for m in self_model:
             lines.append(f"- {m['summary'][:120]}")
         return "\n".join(lines)
