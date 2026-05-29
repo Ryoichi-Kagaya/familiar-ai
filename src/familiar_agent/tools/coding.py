@@ -16,6 +16,7 @@ import asyncio
 import base64
 import fnmatch
 import io
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -36,14 +37,14 @@ class CodingTool:
 
     def _resolve(self, path: str) -> Path:
         """Resolve a path relative to CODING_WORKDIR (or cwd if unset)."""
-        p = Path(path)
+        p = Path(os.path.expanduser(path))
         if p.is_absolute():
             return p
-        base = Path(self._config.workdir) if self._config.workdir else Path.cwd()
+        base = Path(os.path.expanduser(self._config.workdir)) if self._config.workdir else Path.cwd()
         return base / p
 
     def _workdir(self) -> Path:
-        return Path(self._config.workdir) if self._config.workdir else Path.cwd()
+        return Path(os.path.expanduser(self._config.workdir)) if self._config.workdir else Path.cwd()
 
     # ── tool definitions ──────────────────────────────────────────────────
 
