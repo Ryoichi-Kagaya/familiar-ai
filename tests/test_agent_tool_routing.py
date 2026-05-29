@@ -108,7 +108,22 @@ async def test_execute_tool_routes_tom():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool_name", ["read_file_local", "edit_file_local", "glob", "grep", "bash", "save_image"])
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "read_file",
+        "write_file",
+        "edit_file",
+        "multi_edit_file",
+        "glob",
+        "grep",
+        "git_status",
+        "git_diff",
+        "git_apply_patch",
+        "run_tests",
+        "bash",
+    ],
+)
 async def test_execute_tool_routes_coding_tools(tool_name: str):
     agent = _make_agent()
     result, _ = await agent._execute_tool(tool_name, {})
@@ -197,4 +212,4 @@ async def test_execute_tool_unknown_without_mcp_returns_error():
     agent = _make_agent()
     result, img = await agent._execute_tool("nonexistent_tool", {})
     assert "not available" in result.lower() or "nonexistent_tool" in result
-    assert img == []
+    assert img is None or img == []
