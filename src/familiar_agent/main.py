@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import signal
@@ -516,7 +517,14 @@ def main() -> None:
         return
 
     use_gui = "--gui" in sys.argv
+    use_serve = "--serve" in sys.argv
     use_tui = "--no-tui" not in sys.argv and not use_gui
+
+    serve_port = 8080
+    if "--port" in sys.argv:
+        port_idx = sys.argv.index("--port")
+        with contextlib.suppress(IndexError, ValueError):
+            serve_port = int(sys.argv[port_idx + 1])
     bootstrap = load_app_bootstrap()
 
     if bootstrap.migrated:
@@ -554,8 +562,12 @@ def main() -> None:
         desires = DesireSystem(companion_name=config.companion_name)
         from .tui import FamiliarApp
 
-        app = FamiliarApp(agent, desires)
-        app.run(mouse=False)
+        app = FamiliarApp(agent, desires, serve_mode=use_serve)
+        if use_serve:
+            print(f"TUI serve mode: http://0.0.0.0:{serve_port}")
+            app.serve(host="0.0.0.0", port=serve_port)
+        else:
+            app.run(mouse=False)
     else:
         agent = EmbodiedAgent(config)
         desires = DesireSystem(companion_name=config.companion_name)

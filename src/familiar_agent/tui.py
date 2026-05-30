@@ -170,8 +170,9 @@ class FamiliarApp(App):
         Binding("space", "start_ptt", "🎙 PTT", show=False),
     ]
 
-    def __init__(self, agent: "EmbodiedAgent", desires: "DesireSystem") -> None:
+    def __init__(self, agent: "EmbodiedAgent", desires: "DesireSystem", *, serve_mode: bool = False) -> None:
         super().__init__()
+        self._serve_mode = serve_mode
         self.agent = agent
         self.desires = desires
         self._agent_name = agent.config.agent_name
@@ -220,26 +221,27 @@ class FamiliarApp(App):
     def on_mount(self) -> None:
         import signal as _signal
 
-        # Re-enable ISIG so Ctrl+C generates SIGINT, independent of Textual's event loop.
-        # Textual disables ISIG in raw mode, making Ctrl+C send 0x03 through Textual's key
-        # dispatch. If the event loop or key dispatch is stuck, Ctrl+C is silently dropped.
-        # Re-enabling ISIG ensures Ctrl+C → SIGINT → os._exit(0) unconditionally.
-        try:
-            import termios
+        if not self._serve_mode:
+            # Re-enable ISIG so Ctrl+C generates SIGINT, independent of Textual's event loop.
+            # Textual disables ISIG in raw mode, making Ctrl+C send 0x03 through Textual's key
+            # dispatch. If the event loop or key dispatch is stuck, Ctrl+C is silently dropped.
+            # Re-enabling ISIG ensures Ctrl+C → SIGINT → os._exit(0) unconditionally.
+            try:
+                import termios
 
-            fd = sys.stdin.fileno()
-            attrs = termios.tcgetattr(fd)
-            attrs[3] |= termios.ISIG  # re-enable signal generation (VINTR/VQUIT/VSUSP)
-            termios.tcsetattr(fd, termios.TCSANOW, attrs)
-        except Exception:
-            pass
+                fd = sys.stdin.fileno()
+                attrs = termios.tcgetattr(fd)
+                attrs[3] |= termios.ISIG  # re-enable signal generation (VINTR/VQUIT/VSUSP)
+                termios.tcsetattr(fd, termios.TCSANOW, attrs)
+            except Exception:
+                pass
 
-        try:
-            _signal.signal(_signal.SIGINT, lambda *_: os._exit(0))
-            _signal.signal(_signal.SIGQUIT, lambda *_: os._exit(0))  # Ctrl+\
-            _signal.signal(_signal.SIGTSTP, _signal.SIG_IGN)  # Ctrl+Z (ignore suspend)
-        except (OSError, ValueError, AttributeError):
-            pass  # Not in main thread or signal not available on this OS (e.g. Windows)
+            try:
+                _signal.signal(_signal.SIGINT, lambda *_: os._exit(0))
+                _signal.signal(_signal.SIGQUIT, lambda *_: os._exit(0))  # Ctrl+\
+                _signal.signal(_signal.SIGTSTP, _signal.SIG_IGN)  # Ctrl+Z (ignore suspend)
+            except (OSError, ValueError, AttributeError):
+                pass  # Not in main thread or signal not available on this OS (e.g. Windows)
 
         self.query_one("#input-bar", Input).focus()
         # Show startup banner
@@ -712,4 +714,7 @@ class FamiliarApp(App):
         except BaseException:
             pass
         finally:
-            os._exit(0)
+            # In serve mode, os._exit() would kill the server process for all clients.
+            # Let Textual's self.exit() handle the session teardown instead.
+            if not self._serve_mode:
+                os._exit(0)
