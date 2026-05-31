@@ -160,10 +160,13 @@ class KimiBackend:
 
         stop = "tool_use" if finish_reason == "tool_calls" else "end_turn"
 
-        # Build raw_assistant — include reasoning_content so Kimi accepts it next turn
+        # Build raw_assistant — include reasoning_content so Kimi accepts it next turn.
+        # reasoning_content must always be present when tool_calls exist (even as empty
+        # string); omitting it when thinking is enabled triggers a 400 error.
         raw_assistant: dict[str, Any] = {"role": "assistant", "content": text or None}
-        if reasoning_chunks:
-            raw_assistant["reasoning_content"] = "".join(reasoning_chunks)
+        reasoning_str = "".join(reasoning_chunks)
+        if reasoning_str or tool_calls:
+            raw_assistant["reasoning_content"] = reasoning_str
         if tool_calls:
             raw_assistant["tool_calls"] = [
                 {
