@@ -2316,9 +2316,11 @@ class EmbodiedAgent:
                     self._memory.format_feelings_for_context(feelings) if feelings else ""
                 )
         else:
-            # Desire turn: no user context needed; feelings injected via interoception
+            # Desire turn: no user context needed; feelings injected via interoception.
+            # inner_voice is injected into the system prompt with proper framing, so the user
+            # message only needs a neutral placeholder to satisfy the API's non-empty requirement.
             feelings_ctx = ""
-            user_input_with_ctx = _t("desire_turn_marker")
+            user_input_with_ctx = "…"
 
         if self._tool_failure_streak >= 2 and desires is not None:
             desires.boost("self_protect", min(0.5, 0.15 * self._tool_failure_streak))
