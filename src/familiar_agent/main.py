@@ -558,16 +558,17 @@ def main() -> None:
         desires = DesireSystem(companion_name=config.companion_name)
         run_gui(config, desires)
     elif use_tui:
-        agent = EmbodiedAgent(config)
-        desires = DesireSystem(companion_name=config.companion_name)
-        from .tui import FamiliarApp
-
-        app = FamiliarApp(agent, desires, serve_mode=use_serve)
         if use_serve:
+            from .serve import serve as _serve_tui
+
             print(f"TUI serve mode: http://0.0.0.0:{serve_port}")
-            app.serve(host="0.0.0.0", port=serve_port)
+            _serve_tui(host="0.0.0.0", port=serve_port)
         else:
-            app.run(mouse=False)
+            agent = EmbodiedAgent(config)
+            desires = DesireSystem(companion_name=config.companion_name)
+            from .tui import FamiliarApp
+
+            FamiliarApp(agent, desires).run(mouse=False)
     else:
         agent = EmbodiedAgent(config)
         desires = DesireSystem(companion_name=config.companion_name)
