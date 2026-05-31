@@ -2735,3 +2735,34 @@ class EmbodiedAgent:
     def clear_history(self) -> None:
         """Clear conversation history (start fresh)."""
         self.messages = []
+
+    async def execute_desire_silent_action(self, desire_name: str) -> None:
+        """Execute a SILENT_ACTION drive directly without generating an LLM turn.
+
+        Called by DriveActionExecutor for look_around / explore / consolidate / reflect.
+        Kept here so agent internals (camera, memory, worker) stay encapsulated.
+        """
+        match desire_name:
+            case "look_around" | "explore":
+                if self._camera is None:
+                    return
+                base64_jpeg, saved_path = await self._camera.capture()
+                if base64_jpeg is None:
+                    return
+                note = f"[{desire_name}] camera capture"
+                if saved_path:
+                    note += f": {saved_path}"
+                await self._memory.save_async(note, kind="observation", emotion="curious")
+
+            case "consolidate":
+                await self._memory_worker.run_once()
+
+            case "reflect":
+                prompt = (
+                    "In one sentence, describe what you noticed or felt most recently. "
+                    "Write in first person, past tense. Be specific and honest."
+                )
+                text = await self._utility_backend.complete(prompt, max_tokens=80)
+                if text and text.strip().lower() != "nothing":
+                    self._self_narrative.write(text.strip(), trigger="reflect_drive")
+                    await self._memory.save_async(text.strip(), kind="feeling", emotion="neutral")

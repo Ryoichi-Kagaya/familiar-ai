@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum, auto
 import json
 import logging
 import os
@@ -118,6 +119,23 @@ TRIGGER_THRESHOLD = 0.6
 DECAY_ON_SATISFY = 0.5  # drop hard so it can rebuild and fire again
 
 
+class DriveEffect(Enum):
+    """Classifies what happens when a drive fires.
+
+    SILENT_ACTION     — tool executed directly, no LLM turn generated
+    EXPRESSIVE_SOLO   — short monologue generated (not added to conversation history)
+    SOCIAL_INITIATION — LLM turn generated only when companion is present
+    ABSENT_CARE       — when absent: record emotion + full satisfy + long cooldown
+    GATE              — suppresses other drives, generates no turn of its own
+    """
+
+    SILENT_ACTION = auto()
+    EXPRESSIVE_SOLO = auto()
+    SOCIAL_INITIATION = auto()
+    ABSENT_CARE = auto()
+    GATE = auto()
+
+
 @dataclass(slots=True)
 class DriveSpec:
     name: str
@@ -125,6 +143,7 @@ class DriveSpec:
     prompt_text: str
     tags: tuple[str, ...] = ()
     min_interval_seconds: int = 0
+    effect_type: DriveEffect = DriveEffect.SOCIAL_INITIATION
 
 
 class DesireSystem:
@@ -168,6 +187,7 @@ class DesireSystem:
                 _t("desire_prompt_look_around"),
                 ("legacy", "explore"),
                 20,
+                DriveEffect.SILENT_ACTION,
             ),
             "explore": DriveSpec(
                 "explore",
@@ -175,6 +195,7 @@ class DesireSystem:
                 _t("desire_prompt_explore"),
                 ("legacy", "explore"),
                 20,
+                DriveEffect.SILENT_ACTION,
             ),
             "greet_companion": DriveSpec(
                 "greet_companion",
@@ -182,16 +203,23 @@ class DesireSystem:
                 _t("desire_prompt_greet_companion", companion=self._companion_name),
                 ("legacy", "social"),
                 60,
+                DriveEffect.SOCIAL_INITIATION,
             ),
             "rest": DriveSpec(
-                "rest", GROWTH_RATES["rest"], _t("desire_prompt_rest"), ("legacy", "rest"), 60
+                "rest",
+                GROWTH_RATES["rest"],
+                _t("desire_prompt_rest"),
+                ("legacy", "rest"),
+                60,
+                DriveEffect.GATE,
             ),
             "worry_companion": DriveSpec(
                 "worry_companion",
                 0.0,
                 _t("desire_prompt_worry_companion", companion=self._companion_name),
                 ("legacy", "care"),
-                60,
+                14400,  # 4h cooldown (ABSENT_CARE: full reset + long interval)
+                DriveEffect.ABSENT_CARE,
             ),
             "share_memory": DriveSpec(
                 "share_memory",
@@ -199,6 +227,7 @@ class DesireSystem:
                 _t("desire_prompt_share_memory", companion=self._companion_name),
                 ("legacy", "reflect"),
                 90,
+                DriveEffect.EXPRESSIVE_SOLO,
             ),
             "curiosity": DriveSpec(
                 "curiosity",
@@ -206,6 +235,7 @@ class DesireSystem:
                 "Internal impulse: investigate what feels unclear or newly interesting.",
                 ("curiosity",),
                 45,
+                DriveEffect.SILENT_ACTION,
             ),
             "attachment": DriveSpec(
                 "attachment",
@@ -213,13 +243,15 @@ class DesireSystem:
                 f"Internal impulse: stay connected to {self._companion_name} without becoming clingy.",
                 ("social",),
                 60,
+                DriveEffect.SOCIAL_INITIATION,
             ),
             "care": DriveSpec(
                 "care",
                 GROWTH_RATES["care"],
                 f"Internal impulse: offer grounded care to {self._companion_name} if it fits the moment.",
                 ("social", "care"),
-                60,
+                7200,  # 2h cooldown (ABSENT_CARE: full reset + long interval)
+                DriveEffect.ABSENT_CARE,
             ),
             "reflect": DriveSpec(
                 "reflect",
@@ -227,6 +259,7 @@ class DesireSystem:
                 "Internal impulse: pause and integrate what just happened before rushing onward.",
                 ("reflect",),
                 90,
+                DriveEffect.SILENT_ACTION,
             ),
             "consolidate": DriveSpec(
                 "consolidate",
@@ -234,6 +267,7 @@ class DesireSystem:
                 "Internal impulse: consolidate related memories and unfinished threads.",
                 ("memory",),
                 120,
+                DriveEffect.SILENT_ACTION,
             ),
             "repair": DriveSpec(
                 "repair",
@@ -241,6 +275,7 @@ class DesireSystem:
                 "Internal impulse: repair relational strain before trying to solve anything else.",
                 ("social", "repair"),
                 45,
+                DriveEffect.SOCIAL_INITIATION,
             ),
             "play": DriveSpec(
                 "play",
@@ -248,6 +283,7 @@ class DesireSystem:
                 "Internal impulse: keep some lightness and play where it is welcome.",
                 ("play",),
                 45,
+                DriveEffect.EXPRESSIVE_SOLO,
             ),
             "self_protect": DriveSpec(
                 "self_protect",
@@ -255,6 +291,7 @@ class DesireSystem:
                 "Internal impulse: reduce exposure when repeated failure or overload keeps building.",
                 ("protect",),
                 30,
+                DriveEffect.GATE,
             ),
         }
 

@@ -14,6 +14,7 @@ from familiar_agent.desires import (
     DesireSystem,
     detect_worry_signal,
 )
+from familiar_neighbor.mind.desires import DriveEffect
 
 
 # ── detect_worry_signal ────────────────────────────────────────────────────────
@@ -179,6 +180,48 @@ def test_worry_prompt_uses_configured_companion_name(tmp_path: Path) -> None:
     assert prompt is not None
     assert "Mika" in prompt
     assert "コウタ" not in prompt
+
+
+# ── DriveEffect classification ────────────────────────────────────────────────
+
+
+def test_all_drive_specs_have_effect_type(desires: DesireSystem) -> None:
+    for name, spec in desires._drive_specs.items():
+        assert isinstance(spec.effect_type, DriveEffect), f"{name} missing effect_type"
+
+
+def test_silent_action_drives(desires: DesireSystem) -> None:
+    expected = {"look_around", "explore", "consolidate", "reflect", "curiosity"}
+    for name in expected:
+        assert desires._drive_specs[name].effect_type == DriveEffect.SILENT_ACTION, name
+
+
+def test_expressive_solo_drives(desires: DesireSystem) -> None:
+    for name in ("share_memory", "play"):
+        assert desires._drive_specs[name].effect_type == DriveEffect.EXPRESSIVE_SOLO, name
+
+
+def test_social_initiation_drives(desires: DesireSystem) -> None:
+    for name in ("attachment", "greet_companion", "repair"):
+        assert desires._drive_specs[name].effect_type == DriveEffect.SOCIAL_INITIATION, name
+
+
+def test_absent_care_drives(desires: DesireSystem) -> None:
+    for name in ("worry_companion", "care"):
+        assert desires._drive_specs[name].effect_type == DriveEffect.ABSENT_CARE, name
+
+
+def test_gate_drives(desires: DesireSystem) -> None:
+    for name in ("rest", "self_protect"):
+        assert desires._drive_specs[name].effect_type == DriveEffect.GATE, name
+
+
+def test_worry_companion_cooldown_is_4h(desires: DesireSystem) -> None:
+    assert desires._drive_specs["worry_companion"].min_interval_seconds == 14400
+
+
+def test_care_cooldown_is_2h(desires: DesireSystem) -> None:
+    assert desires._drive_specs["care"].min_interval_seconds == 7200
 
 
 def test_rest_prompt_is_localized_for_ja_and_en(
