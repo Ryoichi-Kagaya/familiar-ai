@@ -51,7 +51,7 @@ ws.onmessage = e => term.write(
 );
 ws.onclose = () => term.write('\\r\\n[connection closed — reload to reconnect]\\r\\n');
 
-term.onData(d => ws.readyState === 1 && ws.send(d));
+term.onData(d => ws.readyState === 1 && ws.send(new TextEncoder().encode(d)));
 
 function sendResize() {
   ws.readyState === 1 &&
@@ -166,4 +166,7 @@ async def _run(host: str, port: int, argv: list[str]) -> None:
 def serve(host: str = "0.0.0.0", port: int = 8080) -> None:
     """Serve the familiar TUI over HTTP/WebSocket with an xterm.js frontend."""
     argv = _child_argv()
-    asyncio.run(_run(host, port, argv))
+    try:
+        asyncio.run(_run(host, port, argv))
+    except KeyboardInterrupt:
+        pass
