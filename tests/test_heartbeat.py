@@ -23,7 +23,7 @@ def test_continuation_chain_carries_over_and_stops_at_max_depth(tmp_path: Path) 
     db_path = tmp_path / "observations.db"
     with patch.object(_EmbeddingModel, "pre_warm"):
         memory = ObservationMemory(db_path=str(db_path))
-        runtime = HeartbeatRuntime(memory=memory, quiet_rule=QuietHoursRule(), max_chain_depth=3)
+        runtime = HeartbeatRuntime(memory=memory, quiet_rules=[QuietHoursRule()], max_chain_depth=3)
 
         assert runtime.apply_status("CONTINUE:step-1").status == "CONTINUE:step-1"
         assert runtime.apply_status("CONTINUE:step-2").status == "CONTINUE:step-2"
@@ -41,14 +41,14 @@ def test_continuation_chain_carries_over_and_stops_at_max_depth(tmp_path: Path) 
 def test_heartbeat_persists_continuation_state_across_restarts(tmp_path: Path) -> None:
     state_path = tmp_path / "heartbeat.json"
     runtime = HeartbeatRuntime(
-        quiet_rule=QuietHoursRule(),
+        quiet_rules=[QuietHoursRule()],
         state_path=state_path,
         max_chain_depth=3,
     )
     runtime.apply_status("CONTINUE:follow-up tomorrow")
 
     restored = HeartbeatRuntime(
-        quiet_rule=QuietHoursRule(),
+        quiet_rules=[QuietHoursRule()],
         state_path=state_path,
         max_chain_depth=3,
     )

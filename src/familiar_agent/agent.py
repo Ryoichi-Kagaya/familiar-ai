@@ -542,10 +542,10 @@ class EmbodiedAgent:
         self._appraisal = AppraisalEngine()
         self._social_policy = SocialPolicyEngine()
         self._mental_state_bus = MentalStateBus()
-        self._schedule_rule = parse_schedule_config(Path.home() / ".familiar_ai" / "schedule.conf")
+        self._schedule_rules = parse_schedule_config(Path.home() / ".familiar_ai" / "schedule.conf")
         self._heartbeat = HeartbeatRuntime(
             memory=self._memory,
-            quiet_rule=self._schedule_rule,
+            quiet_rules=self._schedule_rules,
         )
         self._last_tool_error: str | None = None
         self._tool_failure_streak: int = 0
@@ -1170,14 +1170,14 @@ class EmbodiedAgent:
                     started_at=self._started_at,
                     turn_count=self._turn_count,
                     pending_tasks=len(getattr(self, "_background_tasks", set())),
-                    quiet_hours=(self._schedule_rule.start_hour, self._schedule_rule.end_hour),
+                    quiet_hours=[(r.start_hour, r.end_hour) for r in self._schedule_rules],
                 ).collect()
         else:
             signal = RuntimeInteroceptionProvider(
                 started_at=self._started_at,
                 turn_count=self._turn_count,
                 pending_tasks=len(getattr(self, "_background_tasks", set())),
-                quiet_hours=(self._schedule_rule.start_hour, self._schedule_rule.end_hour),
+                quiet_hours=[(r.start_hour, r.end_hour) for r in self._schedule_rules],
             ).collect()
         return signal, semantic_pressure(signal)
 
@@ -2176,8 +2176,8 @@ class EmbodiedAgent:
 
         inner_voice: agent's own desire/impulse (injected into system prompt, NOT a user message).
         """
-        if not hasattr(self, "_schedule_rule"):
-            self._schedule_rule = parse_schedule_config(
+        if not hasattr(self, "_schedule_rules"):
+            self._schedule_rules = parse_schedule_config(
                 Path.home() / ".familiar_ai" / "schedule.conf"
             )
         if not hasattr(self, "_mental_state_bus"):
@@ -2189,7 +2189,7 @@ class EmbodiedAgent:
         if not hasattr(self, "_heartbeat"):
             self._heartbeat = HeartbeatRuntime(
                 memory=getattr(self, "_memory", None),
-                quiet_rule=self._schedule_rule,
+                quiet_rules=self._schedule_rules,
             )
         if not hasattr(self, "_last_tool_error"):
             self._last_tool_error = None

@@ -48,17 +48,21 @@ class RuntimeInteroceptionProvider:
         started_at: float | None = None,
         turn_count: int = 0,
         pending_tasks: int = 0,
-        quiet_hours: tuple[int, int] = (23, 7),
+        quiet_hours: list[tuple[int, int]] | tuple[int, int] = (23, 7),
     ) -> None:
         self._started_at = started_at or time.time()
         self._turn_count = turn_count
         self._pending_tasks = pending_tasks
-        self._quiet_hours = quiet_hours
+        self._quiet_hours: list[tuple[int, int]] = (
+            [quiet_hours]  # type: ignore[list-item]
+            if isinstance(quiet_hours, tuple) and isinstance(quiet_hours[0], int)
+            else list(quiet_hours)
+        )
 
     def collect(self) -> InteroceptiveSignal:
         now = datetime.now()
         hour = now.hour
-        quiet = hour >= self._quiet_hours[0] or hour < self._quiet_hours[1]
+        quiet = any(hour >= qh[0] or hour < qh[1] for qh in self._quiet_hours)
         uptime_minutes = max(0.0, (time.time() - self._started_at) / 60.0)
         cognitive_load = _clamp01((self._pending_tasks * 0.15) + min(uptime_minutes / 240.0, 0.35))
         energy = 0.68

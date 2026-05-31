@@ -40,13 +40,13 @@ class HeartbeatRuntime:
         self,
         *,
         memory: ObservationMemory | None = None,
-        quiet_rule: QuietHoursRule | None = None,
+        quiet_rules: list[QuietHoursRule] | None = None,
         base_dir: Path | None = None,
         state_path: Path | None = None,
         max_chain_depth: int = 3,
     ) -> None:
         self._memory = memory
-        self._quiet_rule = quiet_rule or QuietHoursRule()
+        self._quiet_rules = quiet_rules or [QuietHoursRule()]
         self._base_dir = base_dir or Path.cwd()
         self._state_path = state_path or HEARTBEAT_STATE_PATH
         self._max_chain_depth = max_chain_depth
@@ -87,7 +87,7 @@ class HeartbeatRuntime:
             return
 
     def routine_state(self, now: datetime | None = None) -> RoutineDecision:
-        return evaluate_routine_state(self._quiet_rule, now)
+        return evaluate_routine_state(self._quiet_rules, now)
 
     def morning_reconstruction_notes(self) -> str:
         notes = load_optional_notes(self._base_dir)
