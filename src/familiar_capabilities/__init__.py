@@ -6,6 +6,7 @@ state setup remains the caller's responsibility — capabilities only adapt
 the calling convention.
 """
 
+from .art_critique import ArtCritiqueCapability
 from .camera import CameraCapability
 from .coding import CodingCapability
 from .mcp import MCPCapability
@@ -15,6 +16,7 @@ from .tom import ToMCapability
 from .voice import VoiceCapability
 
 __all__ = [
+    "ArtCritiqueCapability",
     "CameraCapability",
     "CodingCapability",
     "MCPCapability",

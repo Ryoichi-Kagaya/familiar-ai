@@ -104,6 +104,11 @@ def _make_agent(*, with_tts: bool = False, with_camera: bool = False, with_mcp: 
     coding.call = AsyncMock(return_value=("code result", None))
     agent._coding = coding
 
+    art_critique = MagicMock()
+    art_critique.get_tool_definitions = MagicMock(return_value=[])
+    art_critique.call = AsyncMock(return_value=("art result", None))
+    agent._art_critique_tool = art_critique
+
     agent._camera = None
     agent._mobility = None
     agent._mcp = None

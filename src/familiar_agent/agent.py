@@ -57,6 +57,7 @@ from .tools.tts import TTSTool
 from ._i18n import _t
 from .mcp_client import MCPClientManager, _resolve_config_path
 from familiar_capabilities import (
+    ArtCritiqueCapability,
     CameraCapability,
     CodingCapability,
     MCPCapability,
@@ -868,6 +869,7 @@ class EmbodiedAgent:
         registry.register(MemoryCapability(self._memory_tool, names={"remember", "recall"}))
         registry.register(ToMCapability(self._tom_tool))
         registry.register(CodingCapability(self._coding))
+        registry.register(ArtCritiqueCapability(self._art_critique_tool))
         if self._mcp:
             provider = MCPCapability(self._mcp)
             registry.register(provider)
