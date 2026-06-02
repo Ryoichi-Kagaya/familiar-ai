@@ -2152,8 +2152,12 @@ class EmbodiedAgent:
                     or "RateLimit" in type(e).__name__
                     or "overloaded" in str(e).lower()
                 )
-                if not is_rate_limit or attempt == max_retries:
+                if not is_rate_limit:
                     raise
+                if attempt == max_retries:
+                    raise RuntimeError(
+                        "Engine temporarily overloaded — please try again in a moment."
+                    ) from e
                 wait = backoffs[min(attempt, len(backoffs) - 1)]
                 logger.warning(
                     "Rate limit (attempt %d/%d), retrying in %.0fs: %s",
