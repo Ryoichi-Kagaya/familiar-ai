@@ -2344,6 +2344,7 @@ class EmbodiedAgent:
                 unfinished_business_count=len(unfinished_business),
             )
         )
+        self._last_affect = affect
 
         previous_response_hurt = any(
             token in user_input.lower() for token in ("hurt", "傷つ", "前の返事", "嫌だった")

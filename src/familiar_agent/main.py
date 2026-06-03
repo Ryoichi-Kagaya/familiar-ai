@@ -518,7 +518,8 @@ def main() -> None:
 
     use_gui = "--gui" in sys.argv
     use_serve = "--serve" in sys.argv
-    use_tui = "--no-tui" not in sys.argv and not use_gui
+    use_voice_server = "--voice-server" in sys.argv
+    use_tui = "--no-tui" not in sys.argv and not use_gui and not use_voice_server
 
     serve_port = 8080
     if "--port" in sys.argv:
@@ -552,7 +553,12 @@ def main() -> None:
 
     config = AgentConfig()
 
-    if use_gui:
+    if use_voice_server:
+        from .voice_server import run_voice_server
+
+        voice_port = serve_port if "--port" in sys.argv else 8090
+        asyncio.run(run_voice_server(host="0.0.0.0", port=voice_port))
+    elif use_gui:
         from .gui import run_gui
 
         desires = DesireSystem(companion_name=config.companion_name)
