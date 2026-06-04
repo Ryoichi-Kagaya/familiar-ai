@@ -30,23 +30,26 @@ logger = logging.getLogger(__name__)
 def _affect_to_emotion(affect: AffectiveState | None) -> str:
     """Map familiar-ai appraisal state to a xiaozhi emotion string.
 
-    Emotion mapping (valence × arousal quadrants):
-      high valence + high arousal → happy
-      high valence + low  arousal → neutral
-      low  valence + high arousal → angry
-      low  valence + low  arousal → sad
+    Valence drives the positive/negative split; arousal separates angry from sad.
+    Arousal from joy alone peaks around 0.14 per pattern match, so the old 0.5
+    threshold made "happy" unreachable in practice.
+
+      valence > 0.1              → happy
+      valence < -0.1, arousal >= 0.35 → angry
+      valence < -0.1, arousal  < 0.35 → sad
+      otherwise                  → neutral
     """
     if affect is None:
         return "neutral"
     v: float = affect.valence
     a: float = affect.arousal
-    if v >= 0 and a >= 0.5:
+    if v > 0.1:
         return "happy"
-    if v >= 0 and a < 0.5:
-        return "neutral"
-    if v < 0 and a >= 0.5:
+    if v < -0.1 and a >= 0.35:
         return "angry"
-    return "sad"
+    if v < -0.1:
+        return "sad"
+    return "neutral"
 
 
 class VoiceServer:
@@ -121,7 +124,7 @@ async def run_voice_server(host: str = "0.0.0.0", port: int = 8090) -> None:
     def _signal_handler() -> None:
         stop_event.set()
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, _signal_handler)
@@ -129,5 +132,7 @@ async def run_voice_server(host: str = "0.0.0.0", port: int = 8090) -> None:
             pass  # Windows
 
     await stop_event.wait()
-    await runner.cleanup()
-    await agent.close()
+    try:
+        await runner.cleanup()
+    finally:
+        await agent.close()
