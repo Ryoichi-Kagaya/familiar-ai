@@ -180,6 +180,9 @@ async def run_voice_server(host: str = "0.0.0.0", port: int = 8090) -> None:
             raise RuntimeError(
                 f"port {port} is still in use after trying to free it; cannot start voice server"
             ) from exc
+        # The failed site.start() already registered the old site with the runner.
+        # Create a fresh TCPSite so _reg_site() doesn't raise "already registered".
+        site = web.TCPSite(runner, host, port)
         await site.start()
 
     logger.info("VoiceServer listening on http://%s:%d/voice_turn", host, port)
