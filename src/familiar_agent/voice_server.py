@@ -178,6 +178,12 @@ async def run_voice_server(host: str = "0.0.0.0", port: int = 8090) -> None:
     agent = EmbodiedAgent(config)
     desires = DesireSystem(companion_name=config.companion_name)
 
+    # The device (StackChan) handles TTS.  Mute any local ElevenLabs playback
+    # so audio comes only from the device; the say() tool stays registered so
+    # the model produces proper spoken output via on_action capture.
+    if agent._tts is not None:
+        agent._tts.volume = 0.0
+
     server = VoiceServer(agent, desires)
     app = server.build_app()
 

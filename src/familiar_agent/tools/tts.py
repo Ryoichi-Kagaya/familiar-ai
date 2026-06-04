@@ -147,7 +147,8 @@ class TTSTool:
         if output is None:
             output = self.output
         if self.volume == 0.0:
-            return "TTS muted (TTS_VOLUME=0)"
+            snippet = text[:50] + ("..." if len(text) > 50 else "")
+            return f"Said: {snippet} (audio handled by device)"
         if len(text) > 200:
             text = text[:197] + "..."
 

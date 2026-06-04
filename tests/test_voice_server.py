@@ -36,13 +36,14 @@ def test_emotion_mapping(valence: float, arousal: float, expected: str):
 
 # ── VoiceServer.handle_voice_turn ─────────────────────────────────────────────
 
-def _make_server(valence: float = 0.3) -> VoiceServer:
+def _make_server(valence: float = 0.3, use_say_tool: bool = False) -> VoiceServer:
     agent = MagicMock()
     agent._last_affect = AffectiveState(valence=valence)
 
-    async def _fake_run(text, on_text=None, desires=None, **_kw):
-        if on_text:
-            on_text("hello")
+    async def _fake_run(text, on_action=None, desires=None, **_kw):
+        if on_action and use_say_tool:
+            # Simulate model calling say() tool
+            on_action("say", {"text": "hello"})
         return "hello"
 
     agent.run = AsyncMock(side_effect=_fake_run)
@@ -59,6 +60,18 @@ async def test_valid_request_returns_text_and_emotion():
         data = await resp.json()
         assert data["text"] == "hello"
         assert data["emotion"] == "happy"
+
+
+@pytest.mark.asyncio
+async def test_say_tool_takes_priority_over_final_text():
+    """say() chunks from on_action take priority over the agent's final text."""
+    vs = _make_server(valence=0.3, use_say_tool=True)
+    async with TestClient(TestServer(vs.build_app())) as client:
+        resp = await client.post("/voice_turn", json={"text": "こんにちは"})
+        assert resp.status == 200
+        data = await resp.json()
+        # say() tool chunk ("hello") is returned, not raw final_text
+        assert data["text"] == "hello"
 
 
 @pytest.mark.asyncio
