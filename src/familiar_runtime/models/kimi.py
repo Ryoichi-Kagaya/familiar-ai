@@ -28,6 +28,11 @@ class KimiBackend:
 
     _BASE_URL = "https://api.moonshot.ai/v1"
 
+    # Kimi K2.5 emits reasoning_content (thinking tokens) before actual content.
+    # agent.py uses this flag to give brief-reply turns enough tokens to finish
+    # both the reasoning pass and the actual response.
+    emits_reasoning: bool = True
+
     def __init__(self, api_key: str, model: str) -> None:
         from openai import AsyncOpenAI
 

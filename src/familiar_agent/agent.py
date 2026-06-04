@@ -130,6 +130,9 @@ _TOOL_TIMEOUTS: dict[str, float] = {
 }
 _BRIEF_REPLY_MAX_ITERATIONS = 2
 _BRIEF_REPLY_MAX_TOKENS = 120
+# Thinking/reasoning models consume tokens on internal reasoning before emitting
+# any visible content.  Give them enough room to finish both phases.
+_BRIEF_REPLY_MAX_TOKENS_THINKING = 800
 _BRIEF_REPLY_TOOL_NAMES = frozenset({"say"})
 _BRIEF_GREETING_PATTERNS = (
     r"^おはよ",
@@ -2469,8 +2472,13 @@ class EmbodiedAgent:
         pending_view_action_name: str | None = None
         pending_view_action_input: dict | None = None
         turn_tools = self._tool_defs_for_turn(brief_reply_mode=brief_reply_turn)
+        _brief_token_cap = (
+            _BRIEF_REPLY_MAX_TOKENS_THINKING
+            if getattr(self.backend, "emits_reasoning", False)
+            else _BRIEF_REPLY_MAX_TOKENS
+        )
         turn_max_tokens = (
-            min(self.config.max_tokens, _BRIEF_REPLY_MAX_TOKENS)
+            min(self.config.max_tokens, _brief_token_cap)
             if brief_reply_turn
             else self.config.max_tokens
         )

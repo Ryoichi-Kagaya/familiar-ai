@@ -130,22 +130,36 @@ class VoiceServer:
         # Serialize concurrent requests so the agent state machine
         # doesn't interleave two turns.
         async with self._lock:
-            collected: list[str] = []
+            say_chunks: list[str] = []
 
-            def _on_text(chunk: str) -> None:
-                collected.append(chunk)
+            def _on_action(name: str, args: dict) -> None:
+                if name == "say":
+                    t = args.get("text", "")
+                    if isinstance(t, str) and t:
+                        say_chunks.append(t)
 
             try:
-                await self._agent.run(
-                    text,
-                    on_text=_on_text,
-                    desires=self._desires,
-                )
+                final_text = (
+                    await self._agent.run(
+                        text,
+                        on_action=_on_action,
+                        desires=self._desires,
+                    )
+                    or ""
+                ).strip()
             except Exception as exc:
                 logger.error("voice_turn: agent.run failed: %s", exc, exc_info=True)
                 return web.json_response({"error": str(exc)}, status=500)
 
-            reply = "".join(collected).strip()
+            # Prefer say() calls (the model's spoken output); fall back to the
+            # final text response for models that write replies without say().
+            if say_chunks:
+                reply = " ".join(say_chunks).strip()
+            elif final_text and final_text != "(no response)":
+                reply = final_text
+            else:
+                reply = ""
+
             affect: AffectiveState | None = getattr(self._agent, "_last_affect", None)
             emotion = _affect_to_emotion(affect)
 
