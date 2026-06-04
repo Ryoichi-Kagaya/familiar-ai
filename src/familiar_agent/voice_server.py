@@ -14,7 +14,9 @@ POST /voice_turn
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
+import os
 import signal
 
 from aiohttp import web
@@ -25,6 +27,60 @@ from .desires import DesireSystem
 from .mental_state import AffectiveState
 
 logger = logging.getLogger(__name__)
+
+
+def _find_pid_using_port(port: int) -> int | None:
+    """Return the PID listening on *port* by parsing /proc/net/tcp, or None."""
+    hex_port = f"{port:04X}"
+    try:
+        with open("/proc/net/tcp") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 10 or parts[3] != "0A":  # 0A = LISTEN
+                    continue
+                _, lport = parts[1].split(":")
+                if lport.upper() != hex_port:
+                    continue
+                inode = int(parts[9])
+                for pid_str in os.listdir("/proc"):
+                    if not pid_str.isdigit():
+                        continue
+                    fd_dir = f"/proc/{pid_str}/fd"
+                    try:
+                        for fd in os.listdir(fd_dir):
+                            try:
+                                if f"socket:[{inode}]" in os.readlink(f"{fd_dir}/{fd}"):
+                                    return int(pid_str)
+                            except OSError:
+                                pass
+                    except OSError:
+                        pass
+    except OSError:
+        pass
+    return None
+
+
+async def _release_port(port: int) -> bool:
+    """Kill the process holding *port*. Returns True once the port is free."""
+    pid = _find_pid_using_port(port)
+    if pid is None:
+        return True
+    logger.warning("port %d held by PID %d — sending SIGTERM", port, pid)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True
+    for _ in range(15):
+        await asyncio.sleep(0.2)
+        if _find_pid_using_port(port) is None:
+            return True
+    logger.warning("PID %d did not exit cleanly — sending SIGKILL", pid)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    await asyncio.sleep(0.5)
+    return _find_pid_using_port(port) is None
 
 
 def _affect_to_emotion(affect: AffectiveState | None) -> str:
@@ -114,7 +170,17 @@ async def run_voice_server(host: str = "0.0.0.0", port: int = 8090) -> None:
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host, port)
-    await site.start()
+    try:
+        await site.start()
+    except OSError as exc:
+        if exc.errno != errno.EADDRINUSE:
+            raise
+        logger.warning("port %d already in use — attempting to replace existing instance", port)
+        if not await _release_port(port):
+            raise RuntimeError(
+                f"port {port} is still in use after trying to free it; cannot start voice server"
+            ) from exc
+        await site.start()
 
     logger.info("VoiceServer listening on http://%s:%d/voice_turn", host, port)
     print(f"familiar voice server: http://{host}:{port}/voice_turn")
