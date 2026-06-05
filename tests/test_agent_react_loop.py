@@ -247,6 +247,50 @@ async def test_brief_greeting_turn_uses_only_say_and_skips_heavy_prep():
 
 
 @pytest.mark.asyncio
+async def test_brief_reply_uses_thinking_token_cap_for_reasoning_backend():
+    """When backend.emits_reasoning is True, brief turns use the larger 800-token cap."""
+    agent = _make_agent(with_tts=True)
+    agent.backend.emits_reasoning = True
+    agent.backend.stream_turn = AsyncMock(
+        return_value=(_turn("end_turn", text="おはよう。"), "おはよう。")
+    )
+
+    ps = [patch(t, n) for t, n in _HEAVY_PATCHES.items()]
+    for p in ps:
+        p.start()
+    try:
+        await agent.run("おはよう")
+    finally:
+        for p in ps:
+            p.stop()
+
+    stream_kwargs = agent.backend.stream_turn.await_args.kwargs
+    assert stream_kwargs["max_tokens"] == 800
+
+
+@pytest.mark.asyncio
+async def test_brief_reply_uses_normal_token_cap_for_non_reasoning_backend():
+    """When backend.emits_reasoning is False (or absent), brief turns use 120-token cap."""
+    agent = _make_agent(with_tts=True)
+    agent.backend.emits_reasoning = False
+    agent.backend.stream_turn = AsyncMock(
+        return_value=(_turn("end_turn", text="おはよう。"), "おはよう。")
+    )
+
+    ps = [patch(t, n) for t, n in _HEAVY_PATCHES.items()]
+    for p in ps:
+        p.start()
+    try:
+        await agent.run("おはよう")
+    finally:
+        for p in ps:
+            p.stop()
+
+    stream_kwargs = agent.backend.stream_turn.await_args.kwargs
+    assert stream_kwargs["max_tokens"] == 120
+
+
+@pytest.mark.asyncio
 async def test_run_increments_turn_count():
     """run() increments _turn_count on each invocation."""
     agent = _make_agent()

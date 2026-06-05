@@ -245,3 +245,29 @@ async def test_say_serializes_concurrent_calls():
 
     # Both should succeed (no exception)
     assert len(results) == 2
+
+
+# ---------------------------------------------------------------------------
+# Tests: say() — volume == 0 (audio delegated to device)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_say_volume_zero_returns_said_snippet():
+    """When volume is 0 say() returns 'Said: <text> (audio handled by device)'."""
+    tool = _make_tts()
+    tool.volume = 0.0
+
+    result = await tool.say("hello world")
+    assert result == "Said: hello world (audio handled by device)"
+
+
+@pytest.mark.asyncio
+async def test_say_volume_zero_truncates_long_text():
+    """Long text is truncated to 50 chars + '...' in the volume-0 message."""
+    tool = _make_tts()
+    tool.volume = 0.0
+    long_text = "a" * 60
+
+    result = await tool.say(long_text)
+    assert result == f"Said: {'a' * 50}... (audio handled by device)"

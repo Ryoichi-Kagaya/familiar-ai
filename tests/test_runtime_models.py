@@ -123,6 +123,14 @@ def test_openai_compat_backend_native_and_prompt_tool_results() -> None:
     assert any(p.get("type") == "image_url" for p in parts)
 
 
+def test_kimi_backend_emits_reasoning_is_true() -> None:
+    pytest.importorskip("openai")
+    from familiar_runtime.models import KimiBackend
+
+    backend = KimiBackend(api_key="k", model="kimi-k2.5")
+    assert backend.emits_reasoning is True
+
+
 def test_kimi_backend_make_tool_results_includes_image_block() -> None:
     pytest.importorskip("openai")
     from familiar_runtime.models import KimiBackend, ToolCall
