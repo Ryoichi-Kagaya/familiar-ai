@@ -125,6 +125,8 @@ class TestInferCompanionMood:
         agent._memory_tool = MagicMock(spec=MemoryTool)
         agent._tom_tool = MagicMock(spec=ToMTool)
         agent._coding = MagicMock(spec=CodingTool)
+        agent._art_critique_tool = MagicMock()
+        agent._art_critique_tool.get_tool_definitions = MagicMock(return_value=[])
 
         from familiar_agent.exploration import ExplorationTracker
         from familiar_agent.self_narrative import SelfNarrative
@@ -301,6 +303,8 @@ class TestFrustratedBoostsDesire:
         agent._tom_tool.get_tool_definitions = MagicMock(return_value=[])
         agent._coding = MagicMock(spec=CodingTool)
         agent._coding.get_tool_definitions = MagicMock(return_value=[])
+        agent._art_critique_tool = MagicMock()
+        agent._art_critique_tool.get_tool_definitions = MagicMock(return_value=[])
 
         from familiar_agent.exploration import ExplorationTracker
         from familiar_agent.self_narrative import SelfNarrative

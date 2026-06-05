@@ -54,6 +54,7 @@ def _make_agent(*, with_tts: bool = False, with_camera: bool = False, with_mcp: 
 
     # Backend: make_tool_results must accept (tool_calls, results) and return a list
     backend = MagicMock()
+    backend.emits_reasoning = False
     backend.complete = AsyncMock(return_value="")
     backend.make_user_message = lambda t: {"role": "user", "content": t}
     backend.make_assistant_message = lambda result, raw: {
