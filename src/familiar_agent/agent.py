@@ -946,11 +946,13 @@ class EmbodiedAgent:
             "silence_or_low_presence",
         }
 
-    def _tool_defs_for_turn(self, *, brief_reply_mode: bool) -> list[dict]:
+    def _tool_defs_for_turn(self, *, brief_reply_mode: bool, excluded_tools: frozenset[str] | None = None) -> list[dict]:
         tool_defs = self._all_tool_defs
-        if not brief_reply_mode:
-            return tool_defs
-        return [tool for tool in tool_defs if tool.get("name") in _BRIEF_REPLY_TOOL_NAMES]
+        if brief_reply_mode:
+            tool_defs = [tool for tool in tool_defs if tool.get("name") in _BRIEF_REPLY_TOOL_NAMES]
+        if excluded_tools:
+            tool_defs = [tool for tool in tool_defs if tool.get("name") not in excluded_tools]
+        return tool_defs
 
     @staticmethod
     def _brief_reply_prompt() -> str:
@@ -2180,6 +2182,7 @@ class EmbodiedAgent:
         desires=None,
         inner_voice: str = "",
         interrupt_queue=None,
+        excluded_tools: frozenset[str] | None = None,
     ) -> str:
         """Run one conversation turn with the agent loop.
 
@@ -2471,7 +2474,7 @@ class EmbodiedAgent:
         observation_action_input: dict | None = None
         pending_view_action_name: str | None = None
         pending_view_action_input: dict | None = None
-        turn_tools = self._tool_defs_for_turn(brief_reply_mode=brief_reply_turn)
+        turn_tools = self._tool_defs_for_turn(brief_reply_mode=brief_reply_turn, excluded_tools=excluded_tools)
         _brief_token_cap = (
             _BRIEF_REPLY_MAX_TOKENS_THINKING
             if getattr(self.backend, "emits_reasoning", False)
