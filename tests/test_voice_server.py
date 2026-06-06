@@ -113,3 +113,14 @@ async def test_no_last_affect_falls_back_to_neutral():
         assert resp.status == 200
         data = await resp.json()
         assert data["emotion"] == "neutral"
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_returns_ok_without_agent_call():
+    vs = _make_server()
+    async with TestClient(TestServer(vs.build_app())) as client:
+        resp = await client.get("/health")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data == {"status": "ok"}
+    vs._agent.run.assert_not_called()

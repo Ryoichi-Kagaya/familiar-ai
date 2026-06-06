@@ -167,8 +167,13 @@ class VoiceServer:
         logger.info("voice_turn: text=%r reply=%r emotion=%s", text[:60], reply[:60], emotion)
         return web.json_response({"text": reply, "emotion": emotion})
 
+    async def handle_health(self, request: web.Request) -> web.Response:
+        """Handle ``GET /health`` — lightweight liveness probe, no agent call."""
+        return web.json_response({"status": "ok"})
+
     def build_app(self) -> web.Application:
         app = web.Application()
+        app.router.add_get("/health", self.handle_health)
         app.router.add_post("/voice_turn", self.handle_voice_turn)
         return app
 
