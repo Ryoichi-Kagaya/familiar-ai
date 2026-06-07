@@ -24,7 +24,7 @@ _HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 <title>familiar</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
@@ -62,6 +62,11 @@ function sendResize() {
 
 const ro = new ResizeObserver(() => { fit.fit(); sendResize(); });
 ro.observe(document.getElementById('t'));
+
+// iOS Safari does not always fire ResizeObserver reliably on orientation change.
+window.addEventListener('orientationchange', () => {
+  setTimeout(() => { fit.fit(); sendResize(); }, 200);
+});
 </script>
 </body>
 </html>"""
@@ -173,8 +178,13 @@ async def _run_dual(host: str, port: int, argv: list[str]) -> None:
                     with contextlib.suppress(Exception):
                         d = json.loads(msg.data)
                         if d.get("type") == "resize":
-                            # Local terminal controls PTY size in dual mode
-                            pass
+                            new_cols = max(1, int(d["cols"]))
+                            new_rows = max(1, int(d["rows"]))
+                            _set_size(master_fd, new_cols, new_rows)
+                            # TIOCSWINSZ on PTY master delivers SIGWINCH to child
+                            # automatically on Linux; send explicitly as a safety net.
+                            with contextlib.suppress(ProcessLookupError, OSError):
+                                proc.send_signal(signal.SIGWINCH)
                 elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     break
         finally:

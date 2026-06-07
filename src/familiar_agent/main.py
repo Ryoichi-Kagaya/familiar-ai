@@ -580,7 +580,12 @@ def main() -> None:
             from .tui import FamiliarApp
 
             in_serve_child = os.environ.get("FAMILIAR_IN_SERVE") == "1"
-            FamiliarApp(agent, desires, serve_mode=in_serve_child).run(mouse=True)
+            import termios as _termios
+            try:
+                _saved_term = _termios.tcgetattr(sys.stdin.fileno())
+            except Exception:
+                _saved_term = None
+            FamiliarApp(agent, desires, serve_mode=in_serve_child, term_attrs=_saved_term).run(mouse=True)
     else:
         agent = EmbodiedAgent(config)
         desires = DesireSystem(companion_name=config.companion_name)
