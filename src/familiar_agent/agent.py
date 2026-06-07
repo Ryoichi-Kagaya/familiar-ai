@@ -2332,7 +2332,7 @@ class EmbodiedAgent:
             # inner_voice is injected into the system prompt with proper framing, so the user
             # message only needs a neutral placeholder to satisfy the API's non-empty requirement.
             feelings_ctx = ""
-            user_input_with_ctx = "…"
+            user_input_with_ctx = "好きにして"
 
         if self._tool_failure_streak >= 2 and desires is not None:
             desires.boost("self_protect", min(0.5, 0.15 * self._tool_failure_streak))
@@ -2397,6 +2397,13 @@ class EmbodiedAgent:
             social_policy=social_policy,
             is_desire_turn=is_desire_turn,
         )
+        # Desire turns are self-generated; fork the history so "…" and the model's response
+        # never pollute the main conversation thread.  All appends during the loop go to the
+        # fork; the finally block restores self.messages to the snapshot taken here.
+        _main_messages: list | None = None
+        if is_desire_turn:
+            _main_messages = self.messages
+            self.messages = list(self.messages)
         self.messages.append(self.backend.make_user_message(user_input_with_ctx))
 
         # Use cached plan & workspace context from previous turn's post-response pipeline.
@@ -2746,6 +2753,8 @@ class EmbodiedAgent:
             return result.text or "(max iterations reached)"
         finally:
             self._restore_backend_after_turn(backend_turn_snapshot)
+            if _main_messages is not None:
+                self.messages = _main_messages
 
     @property
     def stt(self) -> STTTool | None:
