@@ -156,9 +156,14 @@ async def _run_dual(host: str, port: int, argv: list[str]) -> None:
                 break
 
     async def _ws_handler(req: web.Request) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse()
+        # heartbeat keeps iOS Safari from treating an idle connection as dead
+        ws = web.WebSocketResponse(heartbeat=20.0)
         await ws.prepare(req)
         clients.add(ws)
+        # Trigger a TUI repaint so the browser sees the current screen immediately.
+        # Without this, iOS Safari receives no data and closes the "idle" connection.
+        with contextlib.suppress(ProcessLookupError, OSError):
+            proc.send_signal(signal.SIGWINCH)
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.BINARY:
