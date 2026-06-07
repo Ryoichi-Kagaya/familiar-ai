@@ -9,10 +9,12 @@ import json
 import logging
 import os
 import pty
+import shutil
 import signal
 import struct
 import sys
 import termios
+import tty as _tty
 
 from aiohttp import WSMsgType, web
 
@@ -65,8 +67,12 @@ ro.observe(document.getElementById('t'));
 </html>"""
 
 
+def _set_size(fd: int, cols: int, rows: int) -> None:
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+
 def _child_argv() -> list[str]:
-    """Build the argv for the TUI child process, stripping --serve / --port flags."""
+    """Build argv for the TUI child process, stripping server-only flags."""
     args = list(sys.argv)
     while "--serve" in args:
         args.remove("--serve")
@@ -81,16 +87,12 @@ def _child_argv() -> list[str]:
     return args
 
 
-async def _ws_session(request: web.Request, argv: list[str]) -> web.WebSocketResponse:
-    ws = web.WebSocketResponse()
-    await ws.prepare(request)
 
+async def _run_dual(host: str, port: int, argv: list[str]) -> None:
+    """Run TUI in the local terminal AND mirror it to browsers via WebSocket."""
     master_fd, slave_fd = pty.openpty()
-
-    def _set_size(cols: int, rows: int) -> None:
-        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-
-    _set_size(220, 50)
+    cols, rows = shutil.get_terminal_size((220, 50))
+    _set_size(master_fd, cols, rows)
 
     env = os.environ.copy()
     env.update({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
@@ -105,68 +107,110 @@ async def _ws_session(request: web.Request, argv: list[str]) -> web.WebSocketRes
     )
     os.close(slave_fd)
 
+    clients: set[web.WebSocketResponse] = set()
     loop = asyncio.get_running_loop()
+    done = asyncio.Event()
 
-    async def _pump() -> None:
+    def _on_sigwinch() -> None:
+        c, r = shutil.get_terminal_size((cols, rows))
+        with contextlib.suppress(OSError):
+            _set_size(master_fd, c, r)
+
+    with contextlib.suppress(OSError, ValueError):
+        loop.add_signal_handler(signal.SIGWINCH, _on_sigwinch)
+
+    async def _pty_to_all() -> None:
         while True:
             try:
                 chunk = await loop.run_in_executor(None, os.read, master_fd, 4096)
                 if not chunk:
                     break
-                await ws.send_bytes(chunk)
+                sys.stdout.buffer.write(chunk)
+                sys.stdout.buffer.flush()
+                for ws in list(clients):
+                    with contextlib.suppress(Exception):
+                        await ws.send_bytes(chunk)
             except OSError:
                 break
-        with contextlib.suppress(Exception):
-            await ws.close()
+        done.set()
 
-    pump = asyncio.create_task(_pump())
+    stdin_fd = sys.stdin.fileno()
+    stdin_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
-    async for msg in ws:
-        if msg.type == WSMsgType.TEXT:
-            with contextlib.suppress(Exception):
-                d = json.loads(msg.data)
-                if d.get("type") == "resize":
-                    _set_size(int(d["cols"]), int(d["rows"]))
-        elif msg.type == WSMsgType.BINARY:
-            with contextlib.suppress(OSError):
-                os.write(master_fd, msg.data)
-        elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
-            break
+    def _stdin_readable() -> None:
+        with contextlib.suppress(OSError):
+            data = os.read(stdin_fd, 256)
+            if data:
+                stdin_queue.put_nowait(data)
 
-    pump.cancel()
-    with contextlib.suppress(ProcessLookupError, OSError):
-        proc.send_signal(signal.SIGTERM)
-    with contextlib.suppress(OSError):
-        os.close(master_fd)
-    await asyncio.gather(pump, return_exceptions=True)
-    return ws
+    loop.add_reader(stdin_fd, _stdin_readable)
 
+    async def _stdin_to_pty() -> None:
+        while not done.is_set():
+            try:
+                chunk = await asyncio.wait_for(stdin_queue.get(), timeout=0.1)
+                os.write(master_fd, chunk)
+            except asyncio.TimeoutError:
+                continue
+            except OSError:
+                break
 
-async def _run(host: str, port: int, argv: list[str]) -> None:
-    async def index(req: web.Request) -> web.Response:
+    async def _ws_handler(req: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(req)
+        clients.add(ws)
+        try:
+            async for msg in ws:
+                if msg.type == WSMsgType.BINARY:
+                    with contextlib.suppress(OSError):
+                        os.write(master_fd, msg.data)
+                elif msg.type == WSMsgType.TEXT:
+                    with contextlib.suppress(Exception):
+                        d = json.loads(msg.data)
+                        if d.get("type") == "resize":
+                            # Local terminal controls PTY size in dual mode
+                            pass
+                elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
+                    break
+        finally:
+            clients.discard(ws)
+        return ws
+
+    async def _index(req: web.Request) -> web.Response:
         return web.Response(text=_HTML, content_type="text/html")
 
-    async def ws_handler(req: web.Request) -> web.WebSocketResponse:
-        return await _ws_session(req, argv)
-
     app = web.Application()
-    app.router.add_get("/", index)
-    app.router.add_get("/ws", ws_handler)
-
+    app.router.add_get("/", _index)
+    app.router.add_get("/ws", _ws_handler)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, host, port).start()
 
+    # Print URL before raw mode so the message is briefly visible
+    sys.stderr.write(f"\r\n[familiar-ai] Web mirror → http://localhost:{port}\r\n\r\n")
+    sys.stderr.flush()
+
+    stdin_attrs = termios.tcgetattr(stdin_fd)
+    _tty.setraw(stdin_fd)
     try:
-        await asyncio.Event().wait()
+        await asyncio.gather(_pty_to_all(), _stdin_to_pty(), return_exceptions=True)
     finally:
+        loop.remove_reader(stdin_fd)
+        with contextlib.suppress(Exception):
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, stdin_attrs)
+        with contextlib.suppress(OSError, ValueError):
+            loop.remove_signal_handler(signal.SIGWINCH)
         await runner.cleanup()
+        with contextlib.suppress(ProcessLookupError, OSError):
+            proc.terminate()
+        with contextlib.suppress(OSError):
+            os.close(master_fd)
 
 
-def serve(host: str = "0.0.0.0", port: int = 8080) -> None:
-    """Serve the familiar TUI over HTTP/WebSocket with an xterm.js frontend."""
+def serve_dual(host: str = "localhost", port: int = 8080) -> None:
+    """Run TUI locally and simultaneously mirror it to a browser at http://localhost:PORT."""
     argv = _child_argv()
     try:
-        asyncio.run(_run(host, port, argv))
+        asyncio.run(_run_dual(host, port, argv))
     except KeyboardInterrupt:
         pass

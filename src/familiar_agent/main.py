@@ -565,10 +565,9 @@ def main() -> None:
         run_gui(config, desires)
     elif use_tui:
         if use_serve:
-            from .serve import serve as _serve_tui
+            from .serve import serve_dual as _serve_tui
 
-            print(f"TUI serve mode: http://0.0.0.0:{serve_port}")
-            _serve_tui(host="0.0.0.0", port=serve_port)
+            _serve_tui(host="localhost", port=serve_port)
         else:
             agent = EmbodiedAgent(config)
             desires = DesireSystem(companion_name=config.companion_name)
