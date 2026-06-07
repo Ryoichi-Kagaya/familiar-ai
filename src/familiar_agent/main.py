@@ -579,7 +579,8 @@ def main() -> None:
             desires = DesireSystem(companion_name=config.companion_name)
             from .tui import FamiliarApp
 
-            FamiliarApp(agent, desires).run(mouse=False)
+            in_serve_child = os.environ.get("FAMILIAR_IN_SERVE") == "1"
+            FamiliarApp(agent, desires, serve_mode=in_serve_child).run(mouse=False)
     else:
         agent = EmbodiedAgent(config)
         desires = DesireSystem(companion_name=config.companion_name)

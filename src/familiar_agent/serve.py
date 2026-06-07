@@ -95,7 +95,7 @@ async def _run_dual(host: str, port: int, argv: list[str]) -> None:
     _set_size(master_fd, cols, rows)
 
     env = os.environ.copy()
-    env.update({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
+    env.update({"TERM": "xterm-256color", "COLORTERM": "truecolor", "FAMILIAR_IN_SERVE": "1"})
 
     proc = await asyncio.create_subprocess_exec(
         *argv,
