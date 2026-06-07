@@ -178,13 +178,11 @@ async def _run_dual(host: str, port: int, argv: list[str]) -> None:
                     with contextlib.suppress(Exception):
                         d = json.loads(msg.data)
                         if d.get("type") == "resize":
-                            new_cols = max(1, int(d["cols"]))
-                            new_rows = max(1, int(d["rows"]))
-                            _set_size(master_fd, new_cols, new_rows)
-                            # TIOCSWINSZ on PTY master delivers SIGWINCH to child
-                            # automatically on Linux; send explicitly as a safety net.
-                            with contextlib.suppress(ProcessLookupError, OSError):
-                                proc.send_signal(signal.SIGWINCH)
+                            # PTY size is managed by the local SIGWINCH handler;
+                            # ignore resize requests from remote browsers so a
+                            # phone connecting with a small viewport does not
+                            # corrupt the local display.
+                            pass
                 elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     break
         finally:
