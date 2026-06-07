@@ -78,7 +78,7 @@ def _child_argv() -> list[str]:
         args.remove("--serve")
     i = 0
     while i < len(args):
-        if args[i] == "--port":
+        if args[i] in ("--port", "--host"):
             args.pop(i)
             if i < len(args):
                 args.pop(i)
@@ -187,7 +187,20 @@ async def _run_dual(host: str, port: int, argv: list[str]) -> None:
     await web.TCPSite(runner, host, port).start()
 
     # Print URL before raw mode so the message is briefly visible
-    sys.stderr.write(f"\r\n[familiar-ai] Web mirror → http://localhost:{port}\r\n\r\n")
+    import socket as _socket
+    if host in ("0.0.0.0", ""):
+        try:
+            with _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM) as _s:
+                _s.connect(("8.8.8.8", 80))
+                _lan_ip = _s.getsockname()[0]
+        except OSError:
+            _lan_ip = "localhost"
+        sys.stderr.write(
+            f"\r\n[familiar-ai] Web mirror → http://localhost:{port}"
+            f"  (LAN: http://{_lan_ip}:{port})\r\n\r\n"
+        )
+    else:
+        sys.stderr.write(f"\r\n[familiar-ai] Web mirror → http://{host}:{port}\r\n\r\n")
     sys.stderr.flush()
 
     stdin_attrs = termios.tcgetattr(stdin_fd)

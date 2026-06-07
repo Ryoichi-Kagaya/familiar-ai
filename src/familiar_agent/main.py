@@ -526,6 +526,12 @@ def main() -> None:
         port_idx = sys.argv.index("--port")
         with contextlib.suppress(IndexError, ValueError):
             serve_port = int(sys.argv[port_idx + 1])
+
+    serve_host = "0.0.0.0"
+    if "--host" in sys.argv:
+        host_idx = sys.argv.index("--host")
+        with contextlib.suppress(IndexError):
+            serve_host = sys.argv[host_idx + 1]
     bootstrap = load_app_bootstrap()
 
     if bootstrap.migrated:
@@ -567,7 +573,7 @@ def main() -> None:
         if use_serve:
             from .serve import serve_dual as _serve_tui
 
-            _serve_tui(host="localhost", port=serve_port)
+            _serve_tui(host=serve_host, port=serve_port)
         else:
             agent = EmbodiedAgent(config)
             desires = DesireSystem(companion_name=config.companion_name)
