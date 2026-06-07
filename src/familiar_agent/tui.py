@@ -168,6 +168,8 @@ class FamiliarApp(App):
         Binding("ctrl+r", "restart_realtime_stt", "↻ STT", show=True),
         Binding("escape", "cancel_turn", "🛑 Cancel", show=False),
         Binding("space", "start_ptt", "🎙 PTT", show=False),
+        Binding("pageup", "scroll_log_up", "↑ Scroll", show=False, priority=True),
+        Binding("pagedown", "scroll_log_down", "↓ Scroll", show=False, priority=True),
     ]
 
     def __init__(self, agent: "EmbodiedAgent", desires: "DesireSystem", *, serve_mode: bool = False) -> None:
@@ -687,6 +689,14 @@ class FamiliarApp(App):
             return
         self._ptt_active = False
         self._stop_recording.set()
+
+    def action_scroll_log_up(self) -> None:
+        with contextlib.suppress(Exception):
+            self.query_one("#log", RichLog).scroll_page_up(animate=False)
+
+    def action_scroll_log_down(self) -> None:
+        with contextlib.suppress(Exception):
+            self.query_one("#log", RichLog).scroll_page_down(animate=False)
 
     async def action_quit(self) -> None:
         self._closing = True
