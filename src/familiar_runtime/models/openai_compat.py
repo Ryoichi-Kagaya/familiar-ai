@@ -270,7 +270,9 @@ class OpenAICompatibleBackend:
 
         stop = "tool_use" if finish_reason == "tool_calls" else "end_turn"
         raw_assistant: dict[str, Any] = {"role": "assistant", "content": text or ""}
-        if tool_calls:
+        # Only include tool_calls when finish_reason is "tool_calls" to avoid
+        # sending orphaned tool_calls without matching tool-result messages.
+        if stop == "tool_use" and tool_calls:
             raw_assistant["tool_calls"] = [
                 {
                     "id": tc.id,

@@ -170,9 +170,14 @@ class KimiBackend:
         # string); omitting it when thinking is enabled triggers a 400 error.
         raw_assistant: dict[str, Any] = {"role": "assistant", "content": text or None}
         reasoning_str = "".join(reasoning_chunks)
-        if reasoning_str or tool_calls:
+        if reasoning_str or (stop == "tool_use" and tool_calls):
             raw_assistant["reasoning_content"] = reasoning_str
-        if tool_calls:
+        # Only include tool_calls when finish_reason is "tool_calls".
+        # Kimi sometimes emits delta.tool_calls for internal image processing
+        # (e.g. read_media_file) with finish_reason="stop".  Including those
+        # tool_calls without corresponding tool-result messages causes a 400
+        # on the next turn.
+        if stop == "tool_use" and tool_calls:
             raw_assistant["tool_calls"] = [
                 {
                     "id": tc.id,

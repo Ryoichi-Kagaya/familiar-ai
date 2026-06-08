@@ -2027,12 +2027,31 @@ class EmbodiedAgent:
         if len(self.messages) <= keep_last:
             return
 
-        to_summarise = self.messages[:-keep_last]
-        recent = self.messages[-keep_last:]
+        # Find a safe cut boundary: a user-message dict at or after the nominal
+        # cut point.  Cutting before a user message guarantees that no
+        # tool_calls/tool-results pair is split across to_summarise / recent,
+        # because a complete ReAct turn always ends with a final assistant
+        # message (no tool_calls) immediately before the next user message.
+        nominal_cut = len(self.messages) - keep_last
+        cut = nominal_cut
+        while cut < len(self.messages):
+            msg = self.messages[cut]
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                break
+            cut += 1
+        else:
+            return  # No safe boundary found; skip compaction this turn
 
-        # Build a plain-text transcript for the summary LLM call
+        to_summarise = self.messages[:cut]
+        recent = self.messages[cut:]
+
+        # Build a plain-text transcript for the summary LLM call.
+        # self.messages stores both plain dicts and lists (tool-result batches);
+        # skip list items rather than crashing on missing .get().
         lines = []
         for msg in to_summarise:
+            if isinstance(msg, list):
+                continue  # tool-result batches: not useful for summary text
             role = msg.get("role", "?")
             content = msg.get("content", "")
             if isinstance(content, list):
