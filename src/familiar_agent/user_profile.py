@@ -83,5 +83,5 @@ class UserRegistry:
         if name_file.exists():
             name = name_file.read_text(encoding="utf-8").strip()
         else:
-            name = user_dir.name
+            name = "ユーザー"
         return UserProfile(id=user_dir.name, name=name, dir=user_dir)

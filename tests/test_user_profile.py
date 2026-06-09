@@ -20,7 +20,7 @@ def test_registry_get_creates_directory(tmp_path):
     reg = UserRegistry(users_dir=tmp_path)
     user = reg.get("alice")
     assert user.id == "alice"
-    assert user.name == "alice"
+    assert user.name == "ユーザー"
     assert (tmp_path / "alice").is_dir()
 
 
