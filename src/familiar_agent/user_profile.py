@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 _FAI_DIR = Path.home() / ".familiar_ai"
 _USERS_DIR = _FAI_DIR / "users"
-_ACTIVE_FILE = _USERS_DIR / "active.txt"
+_USERS_JSON = _USERS_DIR / "users.json"
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
@@ -34,34 +35,77 @@ class UserProfile:
 
 
 class UserRegistry:
-    """Manages user profiles stored under ~/.familiar_ai/users/."""
+    """Manages user profiles via ~/.familiar_ai/users/users.json."""
 
     def __init__(self, users_dir: Path | None = None) -> None:
         self._users_dir = users_dir or _USERS_DIR
         self._users_dir.mkdir(parents=True, exist_ok=True)
+        self._json_path = self._users_dir / "users.json"
+
+    # ── internal helpers ──────────────────────────────────────────────
+
+    def _read(self) -> list[dict]:
+        if not self._json_path.exists():
+            return []
+        try:
+            data = json.loads(self._json_path.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    def _write(self, entries: list[dict]) -> None:
+        self._json_path.write_text(
+            json.dumps(entries, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _ensure_dir(self, user_id: str) -> Path:
+        d = self._users_dir / user_id
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _to_profile(self, entry: dict) -> UserProfile:
+        uid = entry["id"]
+        return UserProfile(
+            id=uid,
+            name=entry.get("name") or "ユーザー",
+            dir=self._ensure_dir(uid),
+        )
+
+    # ── public API ────────────────────────────────────────────────────
 
     def list_users(self) -> list[UserProfile]:
-        profiles = []
-        for d in sorted(self._users_dir.iterdir()):
-            if d.is_dir() and _SLUG_RE.match(d.name):
-                profiles.append(self._load_profile(d))
-        return profiles
+        return [self._to_profile(e) for e in self._read()]
 
     def get(self, user_id: str) -> UserProfile:
-        """Return profile for user_id, creating it if it doesn't exist."""
+        """Return profile for user_id, adding it to users.json if absent."""
         user_id = user_id.strip()
         if not _SLUG_RE.match(user_id):
             user_id = _slugify(user_id)
-        user_dir = self._users_dir / user_id
-        user_dir.mkdir(parents=True, exist_ok=True)
-        return self._load_profile(user_dir)
+        entries = self._read()
+        for e in entries:
+            if e["id"] == user_id:
+                return self._to_profile(e)
+        # Not found — register with default name
+        entry: dict = {"id": user_id, "name": "ユーザー"}
+        entries.append(entry)
+        self._write(entries)
+        return self._to_profile(entry)
 
     def create(self, user_id: str, name: str) -> UserProfile:
-        """Explicitly create a user profile with a display name."""
-        profile = self.get(user_id)
-        name_file = profile.dir / "name.txt"
-        name_file.write_text(name.strip(), encoding="utf-8")
-        return UserProfile(id=profile.id, name=name.strip(), dir=profile.dir)
+        """Add or update a user entry with an explicit display name."""
+        user_id = user_id.strip()
+        name = name.strip()
+        entries = self._read()
+        for e in entries:
+            if e["id"] == user_id:
+                e["name"] = name
+                self._write(entries)
+                return self._to_profile(e)
+        entry: dict = {"id": user_id, "name": name}
+        entries.append(entry)
+        self._write(entries)
+        return self._to_profile(entry)
 
     def active_id(self) -> str:
         active_file = self._users_dir / "active.txt"
@@ -72,16 +116,7 @@ class UserRegistry:
         return "default"
 
     def set_active(self, user_id: str) -> None:
-        active_file = self._users_dir / "active.txt"
-        active_file.write_text(user_id, encoding="utf-8")
+        (self._users_dir / "active.txt").write_text(user_id, encoding="utf-8")
 
     def get_active(self) -> UserProfile:
         return self.get(self.active_id())
-
-    def _load_profile(self, user_dir: Path) -> UserProfile:
-        name_file = user_dir / "name.txt"
-        if name_file.exists():
-            name = name_file.read_text(encoding="utf-8").strip()
-        else:
-            name = "ユーザー"
-        return UserProfile(id=user_dir.name, name=name, dir=user_dir)

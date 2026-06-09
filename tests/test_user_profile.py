@@ -7,7 +7,6 @@ from familiar_agent.user_profile import UserRegistry, _slugify
 
 def test_slugify_basic():
     assert _slugify("Kagaya") == "kagaya"
-    assert _slugify("お母さん") == "_____"[:5] or True  # just no crash
 
 
 def test_slugify_spaces():
@@ -16,7 +15,7 @@ def test_slugify_spaces():
     assert len(slug) > 0
 
 
-def test_registry_get_creates_directory(tmp_path):
+def test_registry_get_creates_entry(tmp_path):
     reg = UserRegistry(users_dir=tmp_path)
     user = reg.get("alice")
     assert user.id == "alice"
@@ -24,14 +23,28 @@ def test_registry_get_creates_directory(tmp_path):
     assert (tmp_path / "alice").is_dir()
 
 
+def test_registry_get_persists_to_json(tmp_path):
+    reg = UserRegistry(users_dir=tmp_path)
+    reg.get("alice")
+    entries = reg._read()
+    assert any(e["id"] == "alice" for e in entries)
+
+
 def test_registry_create_sets_display_name(tmp_path):
     reg = UserRegistry(users_dir=tmp_path)
     user = reg.create("bob", "ボブ")
     assert user.name == "ボブ"
-    assert (tmp_path / "bob" / "name.txt").read_text(encoding="utf-8") == "ボブ"
 
 
-def test_registry_get_reads_name_txt(tmp_path):
+def test_registry_create_updates_existing(tmp_path):
+    reg = UserRegistry(users_dir=tmp_path)
+    reg.create("carol", "キャロル")
+    reg.create("carol", "キャロル改")
+    assert reg.get("carol").name == "キャロル改"
+    assert sum(1 for e in reg._read() if e["id"] == "carol") == 1
+
+
+def test_registry_get_reads_from_json(tmp_path):
     reg = UserRegistry(users_dir=tmp_path)
     reg.create("carol", "キャロル")
     user = reg.get("carol")
@@ -73,6 +86,5 @@ def test_user_profile_paths(tmp_path):
 def test_registry_invalid_id_slugified(tmp_path):
     reg = UserRegistry(users_dir=tmp_path)
     user = reg.get("Hello World!")
-    # should not raise, slug should be valid
     assert " " not in user.id
     assert "!" not in user.id
