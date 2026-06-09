@@ -13,7 +13,7 @@ from .setup import migrate_legacy_env_file
 _FAI_DIR = Path.home() / ".familiar_ai"
 
 
-def _migrate_legacy_user_files() -> None:
+def _migrate_legacy_user_files(companion_name: str = "") -> None:
     """Move top-level mental_state/self_narrative logs to users/default/ on first run."""
     default_dir = _FAI_DIR / "users" / "default"
     default_dir.mkdir(parents=True, exist_ok=True)
@@ -25,6 +25,9 @@ def _migrate_legacy_user_files() -> None:
     active_txt = _FAI_DIR / "users" / "active.txt"
     if not active_txt.exists():
         active_txt.write_text("default", encoding="utf-8")
+    name_txt = default_dir / "name.txt"
+    if not name_txt.exists() and companion_name:
+        name_txt.write_text(companion_name, encoding="utf-8")
 
 
 def resolve_env_path() -> Path:
@@ -57,13 +60,14 @@ def load_app_bootstrap(env_path: Path | None = None) -> AppBootstrap:  # noqa: C
     migrated = False
     messages: list[str] = []
 
-    _migrate_legacy_user_files()
-
     if path.exists():
         raw = path.read_text(encoding="utf-8")
         legacy_detected = "ANTHROPIC_API_KEY=" in raw or "ANTHROPIC_MODEL=" in raw
         migrated, messages = migrate_legacy_env_file(path)
         load_dotenv(path, override=True)
+
+    companion_name = (os.environ.get("COMPANION_NAME") or "").strip()
+    _migrate_legacy_user_files(companion_name)
 
     api_key = (os.environ.get("API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or "").strip()
     configured = bool(api_key)
