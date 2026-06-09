@@ -280,6 +280,9 @@ class MentalStateBus:
     def __init__(self, path: Path = MENTAL_STATE_PATH):
         self._path = path
 
+    def set_log_path(self, path: Path) -> None:
+        self._path = path
+
     def append(self, snapshot: MentalStateSnapshot) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(snapshot.to_json_dict(), ensure_ascii=False, separators=(",", ":"))

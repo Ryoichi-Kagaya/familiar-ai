@@ -10,6 +10,22 @@ from dotenv import load_dotenv
 
 from .setup import migrate_legacy_env_file
 
+_FAI_DIR = Path.home() / ".familiar_ai"
+
+
+def _migrate_legacy_user_files() -> None:
+    """Move top-level mental_state/self_narrative logs to users/default/ on first run."""
+    default_dir = _FAI_DIR / "users" / "default"
+    default_dir.mkdir(parents=True, exist_ok=True)
+    for fname in ("mental_state.jsonl", "self_narrative.jsonl"):
+        src = _FAI_DIR / fname
+        dst = default_dir / fname
+        if src.exists() and not dst.exists():
+            src.rename(dst)
+    active_txt = _FAI_DIR / "users" / "active.txt"
+    if not active_txt.exists():
+        active_txt.write_text("default", encoding="utf-8")
+
 
 def resolve_env_path() -> Path:
     """Resolve the app `.env` path.
@@ -33,13 +49,15 @@ class AppBootstrap:
     messages: list[str] = field(default_factory=list)
 
 
-def load_app_bootstrap(env_path: Path | None = None) -> AppBootstrap:
+def load_app_bootstrap(env_path: Path | None = None) -> AppBootstrap:  # noqa: C901
     """Load `.env`, migrate legacy Anthropic keys, and report startup status."""
     path = env_path or resolve_env_path()
 
     legacy_detected = False
     migrated = False
     messages: list[str] = []
+
+    _migrate_legacy_user_files()
 
     if path.exists():
         raw = path.read_text(encoding="utf-8")

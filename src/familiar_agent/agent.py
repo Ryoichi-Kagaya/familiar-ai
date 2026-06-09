@@ -32,6 +32,7 @@ from .mental_state import (
     WorkingMemoryItem,
 )
 from .relationship import RelationshipTracker
+from .user_profile import UserRegistry
 from .routines import parse_schedule_config
 from .concern_engine import ConcernEngine
 from .self_state import SelfState
@@ -533,9 +534,16 @@ class EmbodiedAgent:
         self._scene: SceneTracker | None = None  # initialized after DB ready in _init_tools
 
         self._mcp: MCPClientManager | None = None
-        self._relationship = RelationshipTracker()
+        self._user_registry = UserRegistry()
+        # If COMPANION_NAME matches an existing user slug, use it; else use active user.
+        initial_user = self._user_registry.get_active()
+        self._current_user = initial_user
+        # Keep companion_name in sync so system prompt / ToM see the right name.
+        if not config.companion_name or config.companion_name == self._current_user.id:
+            config.companion_name = self._current_user.name
+        self._relationship = RelationshipTracker(user_id=self._current_user.id)
         self._self_state = SelfState()
-        self._self_narrative = SelfNarrative()
+        self._self_narrative = SelfNarrative(path=self._current_user.self_narrative_path)
         self._concerns = ConcernEngine()
         self._workspace = GlobalWorkspace()
         self._workspace.register_broadcast_listener(self._self_state.on_broadcast)
@@ -545,7 +553,7 @@ class EmbodiedAgent:
         self._meta_monitor = MetaMonitor()
         self._appraisal = AppraisalEngine()
         self._social_policy = SocialPolicyEngine()
-        self._mental_state_bus = MentalStateBus()
+        self._mental_state_bus = MentalStateBus(path=self._current_user.mental_state_path)
         self._schedule_rules = parse_schedule_config(Path.home() / ".familiar_ai" / "schedule.conf")
         self._heartbeat = HeartbeatRuntime(
             memory=self._memory,
@@ -566,6 +574,27 @@ class EmbodiedAgent:
         self._cached_companion_mood: str = "engaged"
 
         self._init_tools()
+
+    async def switch_user(self, user_id: str) -> str:
+        """Switch the active user in-session. Returns the new user's display name."""
+        user_id = user_id.strip()
+        if user_id == self._current_user.id:
+            return self._current_user.name
+
+        # Persist and close current user's relationship state before switching.
+        self._relationship.close()
+
+        new_user = self._user_registry.get(user_id)
+        self._current_user = new_user
+        self.config.companion_name = new_user.name
+
+        self._relationship = RelationshipTracker(user_id=new_user.id)
+        self._self_narrative = SelfNarrative(path=new_user.self_narrative_path)
+        self._mental_state_bus.set_log_path(new_user.mental_state_path)
+        self._tom_tool.default_person = new_user.name
+        self._user_registry.set_active(new_user.id)
+
+        return new_user.name
 
     def _tape_backend(self):
         """Return the backend used for extra planning/replanning checks.
@@ -2212,7 +2241,11 @@ class EmbodiedAgent:
                 Path.home() / ".familiar_ai" / "schedule.conf"
             )
         if not hasattr(self, "_mental_state_bus"):
-            self._mental_state_bus = MentalStateBus()
+            user = getattr(self, "_current_user", None)
+            path = user.mental_state_path if user is not None else None
+            self._mental_state_bus = MentalStateBus(
+                **({} if path is None else {"path": path})
+            )
         if not hasattr(self, "_appraisal"):
             self._appraisal = AppraisalEngine()
         if not hasattr(self, "_social_policy"):

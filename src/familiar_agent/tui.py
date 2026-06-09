@@ -104,6 +104,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/transcribe", "🎙  Start / stop voice input (STT)"),
     ("/cost", "💰  Show token usage and cost for this session"),
     ("/clear", "🗑   Clear conversation history"),
+    ("/switch", "👤  Switch user (e.g. /switch kagaya)"),
     ("/quit", "✕   Quit"),
 ]
 
@@ -347,6 +348,16 @@ class FamiliarApp(App):
             answer = await handle_btw_command(question, self.agent.backend)
             name_tag = f"[bold magenta]{self._agent_name} ▶[/bold magenta]"
             self._write_log(f"{name_tag} {answer}")
+            return
+        if text.startswith("/switch"):
+            user_id = text[len("/switch"):].strip()
+            if not user_id:
+                users = self.agent._user_registry.list_users()
+                lines = "\n".join(f"  /switch {u.id}  ({u.name})" for u in users)
+                self._log_system(f"登録ユーザー:\n{lines}")
+                return
+            name = await self.agent.switch_user(user_id)
+            self._log_system(f"── {name} に切り替わりました ──")
             return
 
         self._log_user(text)

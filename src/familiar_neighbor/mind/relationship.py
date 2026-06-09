@@ -48,7 +48,13 @@ def _fresh_state() -> dict:
 class RelationshipTracker:
     """Tracks longitudinal relationship metadata with the companion."""
 
-    def __init__(self, state_path: Path | None = None, db_path: str | Path | None = None):
+    def __init__(
+        self,
+        state_path: Path | None = None,
+        db_path: str | Path | None = None,
+        user_id: str = "default",
+    ):
+        self._user_id = user_id
         self._state_path = state_path or Path.home() / ".familiar_ai" / "relationship.json"
         if db_path is None:
             self._db_path = (
@@ -86,7 +92,8 @@ class RelationshipTracker:
         try:
             db = self._ensure_db()
             row = db.execute(
-                "SELECT value_json FROM relationship_state WHERE state_key = 'default'"
+                "SELECT value_json FROM relationship_state WHERE state_key = ?",
+                (self._user_id,)
             ).fetchone()
         except Exception as e:
             logger.warning("Could not load relationship state from SQLite: %s", e)
@@ -133,12 +140,12 @@ class RelationshipTracker:
             db.execute(
                 """
                 INSERT INTO relationship_state (state_key, value_json, updated_at)
-                VALUES ('default', ?, ?)
+                VALUES (?, ?, ?)
                 ON CONFLICT(state_key) DO UPDATE SET
                     value_json = excluded.value_json,
                     updated_at = excluded.updated_at
                 """,
-                (json.dumps(self._state, ensure_ascii=False), now),
+                (self._user_id, json.dumps(self._state, ensure_ascii=False), now),
             )
             db.commit()
         except Exception as e:

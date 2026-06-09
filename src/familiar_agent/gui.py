@@ -64,6 +64,7 @@ from ._ui_helpers import (
     should_fire_idle_desire,
 )
 from .bootstrap import resolve_env_path
+from .user_profile import UserRegistry
 from .diagnostics import (
     build_gui_diagnostics,
     format_gui_diagnostics,
@@ -428,6 +429,9 @@ class ChatLog(QScrollArea):
                 small=True,
                 monospace=True,
             )
+
+    def set_companion_label(self, label: str) -> None:
+        self._companion_label = label.strip() or "You"
 
     def append_action(self, name: str, tool_input: dict) -> None:
         """Format a tool call and append it as a bubble."""
@@ -911,7 +915,10 @@ class FamiliarWindow(QMainWindow):
         self._agent: EmbodiedAgent | None = None
         self._desires = desires
         self._agent_display_name = (config.agent_name or "Agent").strip() or "Agent"
-        self._companion_display_name = (config.companion_name or "You").strip() or "You"
+        self._user_registry = UserRegistry()
+        active_user = self._user_registry.get_active()
+        self._companion_display_name = active_user.name or (config.companion_name or "You").strip() or "You"
+        self._current_user_id = active_user.id
         self._input_queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._agent_running = False
         self._agent_ready = False
@@ -1147,6 +1154,24 @@ class FamiliarWindow(QMainWindow):
         header_layout.addWidget(title_lbl)
         header_layout.addStretch()
 
+        # User switcher combo
+        self._user_combo = QComboBox()
+        self._user_combo.setFixedHeight(_px(30))
+        self._user_combo.setMinimumWidth(_px(120))
+        self._user_combo.setStyleSheet(
+            f"QComboBox {{ background: {_BG_ELEVATED}; border-radius: {_px(8)}px;"
+            f" border: 1px solid {_BORDER};"
+            f" padding: 0 {_px(8)}px; font-size: {_px(12)}px; color: {_TEXT_SECONDARY}; }}"
+            f"QComboBox:hover {{ background: {_BG_HOVER}; color: {_TEXT_PRIMARY}; }}"
+            f"QComboBox::drop-down {{ border: none; }}"
+            f"QComboBox QAbstractItemView {{ background: {_BG_ELEVATED}; color: {_TEXT_PRIMARY};"
+            f" selection-background-color: {_BG_HOVER}; }}"
+        )
+        self._user_combo.setEnabled(False)  # enabled once agent is ready
+        self._refresh_user_combo()
+        self._user_combo.currentIndexChanged.connect(self._on_user_combo_changed)
+        header_layout.addWidget(self._user_combo)
+
         settings_btn = QPushButton(_t("settings_button"))
         settings_btn.setToolTip(_t("settings_button_tooltip"))
         settings_btn.setFixedHeight(_px(30))
@@ -1338,6 +1363,36 @@ class FamiliarWindow(QMainWindow):
     def _set_input_enabled(self, enabled: bool) -> None:
         self._input.setEnabled(enabled)
         self._send_btn.setEnabled(enabled)
+        if hasattr(self, "_user_combo"):
+            self._user_combo.setEnabled(enabled)
+
+    def _refresh_user_combo(self) -> None:
+        self._user_combo.blockSignals(True)
+        self._user_combo.clear()
+        for user in self._user_registry.list_users():
+            self._user_combo.addItem(f"👤 {user.name}", userData=user.id)
+        active_id = self._current_user_id
+        idx = next(
+            (i for i in range(self._user_combo.count())
+             if self._user_combo.itemData(i) == active_id),
+            0,
+        )
+        self._user_combo.setCurrentIndex(idx)
+        self._user_combo.blockSignals(False)
+
+    def _on_user_combo_changed(self, index: int) -> None:
+        user_id = self._user_combo.itemData(index)
+        if user_id and user_id != self._current_user_id:
+            self._create_task(self._switch_user_async(user_id))
+
+    async def _switch_user_async(self, user_id: str) -> None:
+        if self._agent is None:
+            return
+        name = await self._agent.switch_user(user_id)
+        self._current_user_id = user_id
+        self._companion_display_name = name
+        self._chat_log.set_companion_label(name)
+        self._chat_log.append_line(f"[システム] ── {name} に切り替わりました ──")
 
     def _set_startup_status(self, text: str) -> None:
         self._startup_status = text
