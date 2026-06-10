@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from familiar_agent.user_profile import UserRegistry, _slugify
+from familiar_agent.user_profile import UserRegistry, _default_display_name, _slugify
 
 
 def test_slugify_basic():
@@ -19,7 +19,7 @@ def test_registry_get_creates_entry(tmp_path):
     reg = UserRegistry(users_dir=tmp_path)
     user = reg.get("alice")
     assert user.id == "alice"
-    assert user.name == "ユーザー"
+    assert user.name == _default_display_name()
     assert (tmp_path / "alice").is_dir()
 
 
@@ -60,20 +60,10 @@ def test_registry_list_users(tmp_path):
     assert "bob" in ids
 
 
-def test_registry_active(tmp_path):
+def test_registry_get_active_returns_default(tmp_path):
     reg = UserRegistry(users_dir=tmp_path)
-    assert reg.active_id() == "default"
-    reg.set_active("kagaya")
-    assert reg.active_id() == "kagaya"
-
-
-def test_registry_get_active(tmp_path):
-    reg = UserRegistry(users_dir=tmp_path)
-    reg.create("dave", "デイブ")
-    reg.set_active("dave")
     user = reg.get_active()
-    assert user.id == "dave"
-    assert user.name == "デイブ"
+    assert user.id == "default"
 
 
 def test_user_profile_paths(tmp_path):

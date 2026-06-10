@@ -915,9 +915,9 @@ class FamiliarWindow(QMainWindow):
         self._agent: EmbodiedAgent | None = None
         self._desires = desires
         self._agent_display_name = (config.agent_name or "Agent").strip() or "Agent"
-        self._user_registry = UserRegistry()
-        active_user = self._user_registry.get_active()
-        self._companion_display_name = active_user.name or (config.companion_name or "You").strip() or "You"
+        _init_registry = UserRegistry()
+        active_user = _init_registry.get_active()
+        self._companion_display_name = active_user.name
         self._current_user_id = active_user.id
         self._input_queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._agent_running = False
@@ -1369,7 +1369,8 @@ class FamiliarWindow(QMainWindow):
     def _refresh_user_combo(self) -> None:
         self._user_combo.blockSignals(True)
         self._user_combo.clear()
-        for user in self._user_registry.list_users():
+        users = self._agent.list_users() if self._agent else UserRegistry().list_users()
+        for user in users:
             self._user_combo.addItem(f"👤 {user.name}", userData=user.id)
         active_id = self._current_user_id
         idx = next(

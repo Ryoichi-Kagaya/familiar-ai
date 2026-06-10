@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 _FAI_DIR = Path.home() / ".familiar_ai"
 _USERS_DIR = _FAI_DIR / "users"
-_USERS_JSON = _USERS_DIR / "users.json"
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+
+
+def _default_display_name() -> str:
+    return os.environ.get("COMPANION_NAME", "").strip() or "ユーザー"
 
 
 def _slugify(name: str) -> str:
@@ -37,10 +41,12 @@ class UserProfile:
 class UserRegistry:
     """Manages user profiles via ~/.familiar_ai/users/users.json."""
 
+    _REGISTRY_FILE = "users.json"
+
     def __init__(self, users_dir: Path | None = None) -> None:
         self._users_dir = users_dir or _USERS_DIR
         self._users_dir.mkdir(parents=True, exist_ok=True)
-        self._json_path = self._users_dir / "users.json"
+        self._json_path = self._users_dir / self._REGISTRY_FILE
 
     # ── internal helpers ──────────────────────────────────────────────
 
@@ -68,7 +74,7 @@ class UserRegistry:
         uid = entry["id"]
         return UserProfile(
             id=uid,
-            name=entry.get("name") or "ユーザー",
+            name=entry.get("name") or _default_display_name(),
             dir=self._ensure_dir(uid),
         )
 
@@ -87,7 +93,7 @@ class UserRegistry:
             if e["id"] == user_id:
                 return self._to_profile(e)
         # Not found — register with default name
-        entry: dict = {"id": user_id, "name": "ユーザー"}
+        entry: dict = {"id": user_id, "name": _default_display_name()}
         entries.append(entry)
         self._write(entries)
         return self._to_profile(entry)
@@ -107,16 +113,5 @@ class UserRegistry:
         self._write(entries)
         return self._to_profile(entry)
 
-    def active_id(self) -> str:
-        active_file = self._users_dir / "active.txt"
-        if active_file.exists():
-            val = active_file.read_text(encoding="utf-8").strip()
-            if val:
-                return val
-        return "default"
-
-    def set_active(self, user_id: str) -> None:
-        (self._users_dir / "active.txt").write_text(user_id, encoding="utf-8")
-
     def get_active(self) -> UserProfile:
-        return self.get(self.active_id())
+        return self.get("default")

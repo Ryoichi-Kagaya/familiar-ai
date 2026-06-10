@@ -22,9 +22,7 @@ def _migrate_legacy_user_files() -> None:
         dst = default_dir / fname
         if src.exists() and not dst.exists():
             src.rename(dst)
-    active_txt = _FAI_DIR / "users" / "active.txt"
-    if not active_txt.exists():
-        active_txt.write_text("default", encoding="utf-8")
+
 
 
 def resolve_env_path() -> Path:

@@ -32,7 +32,7 @@ from .mental_state import (
     WorkingMemoryItem,
 )
 from .relationship import RelationshipTracker
-from .user_profile import UserRegistry
+from .user_profile import UserProfile, UserRegistry
 from .routines import parse_schedule_config
 from .concern_engine import ConcernEngine
 from .self_state import SelfState
@@ -535,12 +535,8 @@ class EmbodiedAgent:
 
         self._mcp: MCPClientManager | None = None
         self._user_registry = UserRegistry()
-        # If COMPANION_NAME matches an existing user slug, use it; else use active user.
-        initial_user = self._user_registry.get_active()
-        self._current_user = initial_user
-        # Keep companion_name in sync so system prompt / ToM see the right name.
-        if not config.companion_name or config.companion_name == self._current_user.id:
-            config.companion_name = self._current_user.name
+        self._current_user = self._user_registry.get_active()
+        config.companion_name = self._current_user.name
         self._relationship = RelationshipTracker(user_id=self._current_user.id)
         self._self_state = SelfState()
         self._self_narrative = SelfNarrative(path=self._current_user.self_narrative_path)
@@ -592,9 +588,14 @@ class EmbodiedAgent:
         self._self_narrative = SelfNarrative(path=new_user.self_narrative_path)
         self._mental_state_bus.set_log_path(new_user.mental_state_path)
         self._tom_tool.default_person = new_user.name
-        self._user_registry.set_active(new_user.id)
-
         return new_user.name
+
+    @property
+    def current_user(self) -> UserProfile:
+        return self._current_user
+
+    def list_users(self) -> list[UserProfile]:
+        return self._user_registry.list_users()
 
     def _tape_backend(self):
         """Return the backend used for extra planning/replanning checks.

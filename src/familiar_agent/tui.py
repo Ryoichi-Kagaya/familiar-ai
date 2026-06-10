@@ -352,7 +352,7 @@ class FamiliarApp(App):
         if text.startswith("/switch"):
             user_id = text[len("/switch"):].strip()
             if not user_id:
-                users = self.agent._user_registry.list_users()
+                users = self.agent.list_users()
                 lines = "\n".join(f"  /switch {u.id}  ({u.name})" for u in users)
                 self._log_system(f"登録ユーザー:\n{lines}")
                 return
