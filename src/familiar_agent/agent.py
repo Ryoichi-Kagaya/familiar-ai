@@ -52,6 +52,11 @@ from .memory_worker import MemoryJobWorker
 from .tape import check_plan_blocked, generate_plan, generate_replan
 from .tools.camera import CameraTool
 from .tools.coding import CodingTool
+from .tools.commitments import (
+    CommitmentTool,
+    format_commitment_line,
+    format_commitments_for_context,
+)
 from .tools.memory import MemoryTool, ObservationMemory
 from .tools.tom import ToMTool
 from .tools.mobility import MobilityTool
@@ -62,6 +67,7 @@ from .mcp_client import MCPClientManager, _resolve_config_path
 from familiar_capabilities import (
     CameraCapability,
     CodingCapability,
+    CommitmentCapability,
     MCPCapability,
     MemoryCapability,
     MobilityCapability,
@@ -69,10 +75,15 @@ from familiar_capabilities import (
     VoiceCapability,
 )
 from familiar_neighbor.embodied_hook import EmbodiedAgentHook
+from familiar_neighbor.mind.person_model import PersonModelTracker
 from familiar_neighbor.prompts import assemble_neighbor_system_prompt
+from familiar_runtime.commitments import SQLiteCommitmentStore
 from familiar_runtime.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+# How far ahead to surface upcoming commitments in the turn context.
+COMMITMENT_UPCOMING_HORIZON_SECONDS = 6 * 3600
 
 
 _DEFAULT_TOOL_TIMEOUT = 20.0
@@ -484,12 +495,18 @@ class EmbodiedAgent:
         self._memory = ObservationMemory()
         self._memory_worker = MemoryJobWorker(self._memory)
         self._memory_tool = MemoryTool(self._memory)
+        self._person_model = PersonModelTracker()
         self._tom_tool = ToMTool(
             self._memory,
             default_person=config.companion_name,
             backend=self._utility_backend,
+            person_model=self._person_model,
         )
         self._coding = CodingTool(config.coding)
+        _commitments_dir = Path.home() / ".familiar_ai"
+        _commitments_dir.mkdir(parents=True, exist_ok=True)
+        self._commitment_store = SQLiteCommitmentStore(_commitments_dir / "commitments.db")
+        self._commitment_tool = CommitmentTool(self._commitment_store)
         self._exploration = ExplorationTracker()
         self._scene: SceneTracker | None = None  # initialized after DB ready in _init_tools
 
@@ -836,6 +853,9 @@ class EmbodiedAgent:
         registry.register(MemoryCapability(self._memory_tool, names={"remember", "recall"}))
         registry.register(ToMCapability(self._tom_tool))
         registry.register(CodingCapability(self._coding))
+        commitment_tool = getattr(self, "_commitment_tool", None)
+        if commitment_tool is not None:
+            registry.register(CommitmentCapability(commitment_tool))
         if self._mcp:
             provider = MCPCapability(self._mcp)
             registry.register(provider)
@@ -1062,6 +1082,9 @@ class EmbodiedAgent:
         variable_parts: list[str] = [intero]
         if relationship_ctx:
             variable_parts.append(relationship_ctx)
+        person_ctx = self._person_model_context()
+        if person_ctx:
+            variable_parts.append(person_ctx)
         if continuity_ctx:
             variable_parts.append(continuity_ctx)
         if mental_ctx:
@@ -1116,6 +1139,59 @@ class EmbodiedAgent:
                 blocks.append(trace_ctx)
 
         return "\n\n".join(blocks)
+
+    def _commitments_context(self) -> str:
+        """Surface due + soon-upcoming commitments so the secretary can act on them."""
+        store = getattr(self, "_commitment_store", None)
+        if store is None:
+            return ""
+        now = time.time()
+        try:
+            due = store.list_due(now=now)
+            upcoming = store.list_upcoming(now=now, horizon=COMMITMENT_UPCOMING_HORIZON_SECONDS)
+        except Exception:
+            logger.debug("commitment context fetch failed", exc_info=True)
+            return ""
+        return format_commitments_for_context(due=due[:5], upcoming=upcoming[:5], now=now)
+
+    def _today_agenda_context(self) -> str:
+        """Morning secretary surface: overdue + today's commitments as an agenda.
+
+        Horizon is the rest of the local day, extended to at least 12h so a
+        late-night first turn still previews the early morning.
+        """
+        store = getattr(self, "_commitment_store", None)
+        if store is None:
+            return ""
+        now = time.time()
+        local_now = datetime.now()
+        midnight = (
+            local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        ).timestamp() + 86400
+        horizon = max(midnight - now, 12 * 3600)
+        try:
+            due = store.list_due(now=now)
+            upcoming = store.list_upcoming(now=now, horizon=horizon)
+        except Exception:
+            logger.debug("agenda fetch failed", exc_info=True)
+            return ""
+        items = (due + upcoming)[:8]
+        if not items:
+            return ""
+        lines = ["[Today's agenda — weave these into the greeting naturally]"]
+        lines.extend(format_commitment_line(c, now=now) for c in items)
+        return "\n".join(lines)
+
+    def _person_model_context(self) -> str:
+        """Surface the accumulated ToM model of the companion, if any."""
+        tracker = getattr(self, "_person_model", None)
+        if tracker is None:
+            return ""
+        try:
+            return tracker.context_for_prompt(self.config.companion_name)
+        except Exception:
+            logger.debug("person model context fetch failed", exc_info=True)
+            return ""
 
     def _exploration_context(self) -> str:
         """Return exploration history for ICL-based direction steering."""
@@ -2087,6 +2163,15 @@ class EmbodiedAgent:
             await asyncio.wait_for(asyncio.to_thread(self._memory.close), timeout=1.0)
         except (asyncio.TimeoutError, Exception):
             pass
+        for closable in (
+            getattr(self, "_person_model", None),
+            getattr(self, "_commitment_store", None),
+        ):
+            if closable is not None:
+                try:
+                    closable.close()
+                except Exception:
+                    pass
 
     async def run(
         self,

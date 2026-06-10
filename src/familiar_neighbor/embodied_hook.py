@@ -37,7 +37,11 @@ from familiar_agent.routines import parse_schedule_config
 from familiar_neighbor.mind.appraisal import AppraisalContext, AppraisalEngine
 from familiar_neighbor.mind.desires import DesireSystem
 from familiar_neighbor.mind.mental_state import MentalStateBus, MentalStateSnapshot
-from familiar_neighbor.mind.social_policy import SocialPolicyDecision, SocialPolicyEngine
+from familiar_neighbor.mind.social_policy import (
+    SocialPolicyDecision,
+    SocialPolicyEngine,
+    relationship_learning_inputs,
+)
 from familiar_runtime.runtime import RuntimeHookBase
 
 if TYPE_CHECKING:
@@ -202,6 +206,10 @@ class EmbodiedAgentHook(RuntimeHookBase):
                     morning_ctx = (
                         f"{morning_ctx}\n\n{routine_notes}" if morning_ctx else routine_notes
                     )
+            # Secretary: open the day with today's commitments in view.
+            agenda_ctx = agent._today_agenda_context()
+            if agenda_ctx:
+                morning_ctx = f"{morning_ctx}\n\n{agenda_ctx}" if morning_ctx else agenda_ctx
 
         # ── Context compaction ──
         if agent._should_compact():
@@ -312,6 +320,7 @@ class EmbodiedAgentHook(RuntimeHookBase):
         previous_response_hurt = any(
             token in user_input.lower() for token in ("hurt", "傷つ", "前の返事", "嫌だった")
         )
+        learned_styles, learned_failures = relationship_learning_inputs(agent._relationship)
         social_policy = agent._social_policy.decide(
             user_text=user_input,
             affect=affect,
@@ -319,6 +328,8 @@ class EmbodiedAgentHook(RuntimeHookBase):
             intimacy=agent._relationship.intimacy,
             interoception=interoception_pressure,
             previous_response_hurt=previous_response_hurt,
+            support_styles=learned_styles,
+            failed_patterns=learned_failures,
         )
         agent._provisional_relationship_update(user_text=user_input, social_policy=social_policy)
 
@@ -387,6 +398,13 @@ class EmbodiedAgentHook(RuntimeHookBase):
                     + ("\n\n" if continuity_ctx else "")
                     + "[Open unfinished business]\n"
                     + "\n".join(f"- {item['summary'][:160]}" for item in unfinished_business[:3])
+                )
+            # First turn already carries [Today's agenda] in morning_ctx; skip the
+            # per-turn reminders block there to avoid listing the same items twice.
+            commitments_ctx = "" if first_turn else agent._commitments_context()
+            if commitments_ctx:
+                continuity_ctx = (
+                    continuity_ctx + ("\n\n" if continuity_ctx else "") + commitments_ctx
                 )
             if plan_ctx:
                 logger.debug("TAPE plan (cached): %s", plan_ctx[:80])
