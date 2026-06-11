@@ -306,3 +306,300 @@ def test_positive_pattern_with_resolved_does_not_trigger() -> None:
         failed_patterns=["they resolved things alone, I was not needed"],
     )
     assert same == baseline  # "resolved" must not match the "solve" marker
+
+
+# ── Agency boundary: honest capacity acknowledgement ────────────────────────
+#
+# When the agent itself is running low (need_rest high) and the companion asks
+# for work or repair, the policy should tell the model to be honest about
+# capacity instead of overpromising — never to fake being fine.
+
+
+def _decide_pressured(text: str, *, need_rest: float, mood: str = "engaged", **kwargs):
+    appraisal = AppraisalEngine()
+    policy_engine = SocialPolicyEngine()
+    pressure = _pressure(need_rest=need_rest)
+    affect = appraisal.appraise(
+        AppraisalContext(user_text=text, companion_mood=mood, interoception=pressure)
+    )
+    return policy_engine.decide(
+        user_text=text,
+        affect=affect,
+        trust=0.5,
+        intimacy=0.5,
+        interoception=pressure,
+        **kwargs,
+    )
+
+
+def test_exhausted_action_request_acknowledges_capacity() -> None:
+    rested = _decide_pressured("これ全部直しといて、頼むわ", need_rest=0.2)
+    assert rested.primary_act == "request_for_action"
+    assert rested.acknowledge_capacity is False
+
+    exhausted = _decide_pressured("これ全部直しといて、頼むわ", need_rest=0.85)
+    assert exhausted.primary_act == "request_for_action"
+    assert exhausted.acknowledge_capacity is True
+    assert exhausted.initiative < rested.initiative
+
+
+def test_exhausted_repair_request_acknowledges_capacity_but_keeps_repair() -> None:
+    decision = _decide_pressured(
+        "さっきの返事ちょっと傷ついた", need_rest=0.85, previous_response_hurt=True
+    )
+    assert decision.primary_act == "repair_attempt"
+    assert decision.response_mode == "repair"  # repair still happens
+    assert decision.acknowledge_capacity is True
+
+
+def test_exhausted_greeting_does_not_volunteer_fatigue() -> None:
+    decision = _decide_pressured("おはよう", need_rest=0.85)
+    assert decision.primary_act == "greeting"
+    assert decision.acknowledge_capacity is False
+
+
+def test_rested_default_is_false_everywhere() -> None:
+    decision = _decide_pressured("これどうしたらいいかな", need_rest=0.2)
+    assert decision.acknowledge_capacity is False
+
+
+def test_capacity_prompt_line_rendered() -> None:
+    from familiar_agent.agent import EmbodiedAgent
+
+    decision = _decide_pressured("これ直してくれへん", need_rest=0.85)
+    assert decision.primary_act == "request_for_action"
+    text = EmbodiedAgent._format_social_policy_prompt(decision)
+    assert "capacity" in text.lower()
+
+    rested = _decide_pressured("これ直してくれへん", need_rest=0.2)
+    text2 = EmbodiedAgent._format_social_policy_prompt(rested)
+    assert "capacity" not in text2.lower()
+
+
+# ── Kansai past-tense "〜やった" must not read as delight ───────────────────
+
+
+def test_kansai_past_tense_yatta_is_not_delight() -> None:
+    for text in ("今日ほんま散々やった", "えらい目にあって大変やった", "最悪の一日やった"):
+        decision = _decide(text, mood="frustrated")
+        assert decision.primary_act != "delight_share", text
+
+
+def test_exclamatory_yatta_still_delight() -> None:
+    for text in ("やったー、うまくいった！", "やった！受かった！", "やったぜ"):
+        decision = _decide(text)
+        assert decision.primary_act == "delight_share", text
+
+
+# ── playful "w" must be the laugh marker, not the letter w ──────────────────
+
+
+def test_english_sentences_with_w_are_not_playful() -> None:
+    for text in (
+        "we went to the new bakery today",
+        "I was reading a book about whales",
+        "the display is broken again",
+    ):
+        decision = _decide(text)
+        assert decision.primary_act != "playful_probe", text
+
+
+def test_laugh_markers_still_playful() -> None:
+    for text in ("それなwww", "おもろすぎるw", "なんでやねん笑", "let's play a game"):
+        decision = _decide(text)
+        assert decision.primary_act == "playful_probe", text
+
+
+# ── classifier pattern audit (2026-06): reproduced misfires must stay fixed ──
+#
+# Every utterance below was REPRODUCED misclassifying before the pattern
+# hygiene pass. The wrong register is noted; we assert the misfire is gone.
+
+
+def test_audit_jp_misfires_fixed() -> None:
+    cases = [
+        ("めっちゃうれしい！", "clarification"),  # ちゃう inside めっちゃ
+        ("めっちゃうまかったで", "clarification"),
+        ("笑っちゃうくらい晴れてる", "clarification"),
+        ("死ぬほど笑った", "grief_signal"),  # hyperbolic 死
+        ("必死で頑張ってん", "grief_signal"),
+        ("昨日は一日ゲームしてた", "request_for_action"),  # past progressive してた
+        ("さっきまでコウタと電話してた", "request_for_action"),
+        ("もうどうでもええわ", "request_for_advice"),  # どうでもいい
+        ("どうもありがとうな", "request_for_advice"),
+        ("田中君が遊びに来てくれた", "meta_conversation"),  # name+君
+        ("君津まで出張やった", "meta_conversation"),
+        ("あー、やってもうたわ", "request_for_action"),  # やってもうた dismay
+        ("うんざりやわ", "silence_or_low_presence"),  # うん inside うんざり
+        ("寝る前にちょっとだけ話聞いてや", "silence_or_low_presence"),
+    ]
+    for text, wrong_act in cases:
+        decision = _decide(text)
+        assert decision.primary_act != wrong_act, f"{text!r} still {wrong_act}"
+
+
+def test_audit_en_misfires_fixed() -> None:
+    cases = [
+        ("We laughed so hard at the comedy show last night", "venting"),  # ugh in laughed
+        ("My daughter drew me a picture today, it made my day", "venting"),
+        ("I'm not happy with how the demo went", "delight_share"),  # negated happy
+        ("My back hurts from sitting all day", "repair_attempt"),  # physical hurt
+        ("We totally lost track of time, what a fun night", "grief_signal"),  # lost track
+        ("My dad finally retired last week, we threw him a party", "fatigue_signal"),
+        ("We have no more milk in the fridge", "boundary_assertion"),
+        ("Had brunch with Sarah this morning, it was lovely", "request_for_action"),
+        ("How do you make carbonara?", "meta_conversation"),
+    ]
+    for text, wrong_act in cases:
+        decision = _decide(text)
+        assert decision.primary_act != wrong_act, f"{text!r} still {wrong_act}"
+
+
+def test_audit_intended_positives_still_classify() -> None:
+    appraisal = AppraisalEngine()
+    engine = SocialPolicyEngine()
+
+    def act_of(text: str, mood: str = "engaged") -> str:
+        affect = appraisal.appraise(
+            AppraisalContext(user_text=text, companion_mood=mood, interoception=_pressure())
+        )
+        return engine.decide(
+            user_text=text, affect=affect, trust=0.5, intimacy=0.5, interoception=_pressure()
+        ).primary_act
+
+    assert act_of("これどうしたらいいかな") == "request_for_advice"
+    assert act_of("これ直してくれへん") == "request_for_action"
+    assert act_of("翻訳して") == "request_for_action"
+    assert act_of("おばあちゃんが死んでしまった", mood="sad") == "grief_signal"
+    assert act_of("I'm so tired today", mood="tired") == "fatigue_signal"
+    assert act_of("ちゃうちゃう、そういう意味やない") == "clarification"
+    assert act_of("それはちゃうやろ") == "clarification"
+    assert act_of("うん") == "silence_or_low_presence"
+    assert act_of("もう寝るわ") == "silence_or_low_presence"
+    assert act_of("君はどう思う？") in ("meta_conversation", "request_for_advice")
+    assert act_of("I'm so happy for you!") == "delight_share"
+
+
+# ── classifier audit round 2: variation + tail misfires must stay fixed ──
+
+
+def test_audit_round2_misfires_fixed() -> None:
+    cases = [
+        ("I'm not very happy with how the demo went", "delight_share"),  # adverb-negation
+        ("I am not at all happy about this", "delight_share"),
+        ("もうどうしようもないわ", "request_for_advice"),  # どうしようもない resignation
+        ("No more bugs! We finally shipped it!", "boundary_assertion"),
+        ("Went for a run this morning, it was great", "request_for_action"),
+        ("お疲れ様です！", "fatigue_signal"),  # workplace greeting
+        ("今日の会議ほんまきつかったわ", "repair_attempt"),  # ordinary vent
+        ("健康診断で腫瘍ができたって言われた", "delight_share"),  # medical bad news
+        ("これ見てや https://www.example.com/news/2026", "playful_probe"),  # URL www
+        ("迷子の猫がまだ見つからへん ;w;", "playful_probe"),  # crying kaomoji
+        ("違う話なんやけど、ばあちゃんが死んでしまった", "clarification"),  # prenominal 違う
+        ("おはよう。昨日じいちゃんが亡くなったんや", "greeting"),  # multi-clause opener
+    ]
+    for text, wrong_act in cases:
+        decision = _decide(text)
+        assert decision.primary_act != wrong_act, f"{text!r} still {wrong_act}"
+
+
+def test_audit_round2_fix_regressions_restored() -> None:
+    """Round-1 narrowing dropped real grief forms — they must classify again."""
+    for text in ("祖父が死にました", "じいちゃんが死んでもうた", "We lost him last night"):
+        decision = _decide(text, mood="sad")
+        assert decision.primary_act == "grief_signal", text
+
+
+def test_audit_round2_intended_positives_still_classify() -> None:
+    assert _decide("お疲れ様です！").primary_act == "greeting"
+    assert (
+        _decide("おはよう。昨日じいちゃんが亡くなったんや", mood="sad").primary_act
+        == "grief_signal"
+    )
+    assert _decide("今日の会議ほんまきつかったわ", mood="frustrated").primary_act == "venting"
+    assert _decide("やっとアプリできたで！").primary_act == "delight_share"
+    assert _decide("can you run the tests?").primary_act == "request_for_action"
+    assert _decide("no more of this, please").primary_act == "boundary_assertion"
+    assert _decide("それ違うで").primary_act == "clarification"
+    assert _decide("どうしよう、財布なくしたかも").primary_act == "request_for_advice"
+    assert _decide("I'm so happy for you!").primary_act == "delight_share"
+    assert _decide("それなwww").primary_act == "playful_probe"
+
+
+# ── classifier audit round 3: systematic vetoes ──────────────────────────────
+
+
+def test_audit_round3_misfires_fixed() -> None:
+    cases = [
+        ("さっきの会議、ほんまきつかったわ", "repair_attempt"),
+        ("首にしこりができたで、ちょっと怖い", "delight_share"),
+        ("全然嬉しくないわ", "delight_share"),  # JP negated positive
+        ("最高じゃないわ、これ", "delight_share"),
+        ("I can't say I'm happy about the layoffs", "delight_share"),
+        ("I'm not really all that happy with how it turned out", "delight_share"),
+        ("far from happy with the result", "delight_share"),
+        ("ありがとう、ほんま助かった。実は昨日ばあちゃんが亡くなってん", "acknowledgement"),
+        ("思い切って会社やめてん", "boundary_assertion"),
+        ("最悪や、最高の誕生日になるはずやったのに", "delight_share"),  # mixed sentiment
+        ("最高かよ、ほんま", "delight_share"),  # かよ sarcasm
+        ("泣きそうや…", "silence_or_low_presence"),
+    ]
+    for text, wrong_act in cases:
+        decision = _decide(text)
+        assert decision.primary_act != wrong_act, f"{text!r} still {wrong_act}"
+
+
+def test_audit_round3_mixed_sentiment_vents() -> None:
+    decision = _decide("最悪や、最高の誕生日になるはずやったのに", mood="frustrated")
+    assert decision.primary_act == "venting"
+    assert _decide("泣きそうや…", mood="sad").primary_act == "venting"
+
+
+def test_audit_round3_intended_positives_still_classify() -> None:
+    assert _decide("ありがとうな！").primary_act == "acknowledgement"
+    assert _decide("助かったわ").primary_act == "acknowledgement"
+    assert _decide("それやめてほしい").primary_act == "boundary_assertion"
+    assert _decide("やめてや！").primary_act == "boundary_assertion"
+    assert _decide("さっきの返事、ちょっとつらかった").primary_act == "repair_attempt"
+    assert _decide("やっとアプリできたで！").primary_act == "delight_share"
+    assert _decide("How was your day?").primary_act == "meta_conversation"
+
+
+# ── classifier audit round 4: lexicon frames and reported speech ─────────────
+
+
+def test_audit_round4_misfires_fixed() -> None:
+    cases = [
+        ("虫歯ができた", "delight_share"),  # off-list ailment
+        ("ものもらいができたわ、痛い", "delight_share"),
+        ("足にまめができた", "delight_share"),  # locative formation frame
+        ("上司に嫌味言われてん。それは嫌やったわ", "boundary_assertion"),
+        ("この前の返事ありがとうな", "repair_attempt"),
+        ("I stubbed my toe this morning, wow that hurt", "repair_attempt"),
+        ("昨日のライブ最高すぎて死んだ", "grief_signal"),  # hyperbolic joy slang
+        ("笑いすぎて死んだわ", "grief_signal"),
+        ("昨日友達を傷つけてしまったかもしれん", "repair_attempt"),  # third-party guilt
+        ("医者に酒やめろって言われてん", "boundary_assertion"),  # reported speech
+        ("嬉しいわけないやろ、こんなん", "delight_share"),
+    ]
+    for text, wrong_act in cases:
+        decision = _decide(text)
+        assert decision.primary_act != wrong_act, f"{text!r} still {wrong_act}"
+
+
+def test_audit_round4_concessive_joy_celebrates() -> None:
+    assert _decide("疲れたけど最高の一日やった！", mood="happy").primary_act == "delight_share"
+    assert _decide("嬉しくて泣きそうや", mood="happy").primary_act == "delight_share"
+
+
+def test_audit_round4_intended_positives_still_classify() -> None:
+    assert _decide("彼女ができた！").primary_act == "delight_share"
+    assert _decide("新しい友達ができたわ").primary_act == "delight_share"
+    assert _decide("それは嫌や").primary_act == "boundary_assertion"
+    assert _decide("やめろ！").primary_act == "boundary_assertion"
+    assert _decide("さっきの返事、ちょっと傷ついた").primary_act == "repair_attempt"
+    assert _decide("おばあちゃんが死んでしまった", mood="sad").primary_act == "grief_signal"
+    assert (
+        _decide("最悪や、最高の誕生日になるはずやったのに", mood="frustrated").primary_act
+        == "venting"
+    )

@@ -825,3 +825,152 @@ async def test_post_response_pipeline_updates_self_continuity_state():
 
     agent._concerns.update_from_turn.assert_called_once()
     agent._self_state.apply_turn_context.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Tests: deterministic ToM wiring (auto_tom_ctx -> mental_ctx -> system prompt)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_flagged_turn_runs_auto_tom_and_injects_result():
+    """A venting turn (should_use_tom=True) runs ToM deterministically and the
+    result reaches the system prompt via mental_ctx."""
+    agent = _make_agent()
+    agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text="うん"), "うん"))
+
+    auto_tom = AsyncMock(return_value="TOM-SENTINEL-XYZ")
+    patches = dict(_HEAVY_PATCHES)
+    patches["familiar_agent.agent.EmbodiedAgent._run_auto_tom"] = auto_tom
+
+    ps = [patch(t, n) for t, n in patches.items()]
+    for p in ps:
+        p.start()
+    try:
+        await agent.run("むかつくわ、ほんまに最悪な一日や")
+    finally:
+        for p in ps:
+            p.stop()
+
+    auto_tom.assert_awaited_once()
+    system = agent.backend.stream_turn.await_args.kwargs.get("system")
+    if system is None:
+        system = agent.backend.stream_turn.await_args.args[0]
+    joined = "\n".join(system) if isinstance(system, tuple) else str(system)
+    assert "TOM-SENTINEL-XYZ" in joined
+
+
+@pytest.mark.asyncio
+async def test_brief_greeting_turn_skips_auto_tom():
+    agent = _make_agent(with_tts=True)
+    agent.backend.stream_turn = AsyncMock(
+        return_value=(_turn("end_turn", text="おはよう。"), "おはよう。")
+    )
+
+    auto_tom = AsyncMock(return_value="TOM-SENTINEL-XYZ")
+    patches = dict(_HEAVY_PATCHES)
+    patches["familiar_agent.agent.EmbodiedAgent._run_auto_tom"] = auto_tom
+
+    ps = [patch(t, n) for t, n in patches.items()]
+    for p in ps:
+        p.start()
+    try:
+        await agent.run("おはよう")
+    finally:
+        for p in ps:
+            p.stop()
+
+    auto_tom.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Tests: deferred-topic capture (user says "後で話す" -> unfinished business)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deferral_is_recorded_as_unfinished_business():
+    agent = _make_agent()
+    agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text="ええよ"), "ええよ"))
+    agent._memory.list_unfinished_business_async = AsyncMock(return_value=[])
+    open_mock = AsyncMock(return_value="biz-1")
+    agent._memory.open_unfinished_business_async = open_mock
+
+    ps = _patch_heavy()
+    for p in ps:
+        p.start()
+    try:
+        await agent.run("その話はあとで話すわ、ごめんな")
+    finally:
+        for p in ps:
+            p.stop()
+
+    open_mock.assert_awaited_once()
+    summary = open_mock.await_args.args[0]
+    assert summary.startswith("deferred topic: ")
+    assert "あとで話す" in summary
+    assert open_mock.await_args.kwargs.get("source") == "deferral"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_deferral_not_recorded_twice():
+    agent = _make_agent()
+    agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text="ええよ"), "ええよ"))
+    existing = {"id": "biz-1", "summary": "deferred topic: その話はあとで話すわ、ごめんな"}
+    agent._memory.list_unfinished_business_async = AsyncMock(return_value=[existing])
+    open_mock = AsyncMock(return_value="biz-2")
+    agent._memory.open_unfinished_business_async = open_mock
+
+    ps = _patch_heavy()
+    for p in ps:
+        p.start()
+    try:
+        await agent.run("その話はあとで話すわ、ごめんな")
+    finally:
+        for p in ps:
+            p.stop()
+
+    open_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_normal_input_records_no_deferral():
+    agent = _make_agent()
+    agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text="ん"), "ん"))
+    agent._memory.list_unfinished_business_async = AsyncMock(return_value=[])
+    open_mock = AsyncMock(return_value="biz-1")
+    agent._memory.open_unfinished_business_async = open_mock
+
+    ps = _patch_heavy()
+    for p in ps:
+        p.start()
+    try:
+        await agent.run("今日は新しいカメラの設定をいじっててんけど、なかなか難しいわ")
+    finally:
+        for p in ps:
+            p.stop()
+
+    open_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_deferral_dedup_sees_beyond_surfaced_top3():
+    """A duplicate whose twin sits at position >=4 must still be deduped."""
+    agent = _make_agent()
+    agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text="ええよ"), "ええよ"))
+    dup = {"id": "biz-4", "summary": "deferred topic: その話はあとで話すわ、ごめんな"}
+    fresher = [{"id": f"biz-{i}", "summary": f"other {i}"} for i in range(3)]
+    agent._memory.list_unfinished_business_async = AsyncMock(return_value=fresher + [dup])
+    open_mock = AsyncMock(return_value="biz-5")
+    agent._memory.open_unfinished_business_async = open_mock
+
+    ps = _patch_heavy()
+    for p in ps:
+        p.start()
+    try:
+        await agent.run("その話はあとで話すわ、ごめんな")
+    finally:
+        for p in ps:
+            p.stop()
+
+    open_mock.assert_not_awaited()

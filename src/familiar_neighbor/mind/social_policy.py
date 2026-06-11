@@ -8,29 +8,198 @@ import re
 from .interoception import InteroceptivePressure
 from .mental_state import AffectiveState
 
-_ADVICE_PATTERNS = [r"どう", r"教えて", r"advice", r"should i", r"どうしたら"]
-_ACTION_PATTERNS = [r"して", r"やって", r"run", r"fix", r"please do", r"頼む"]
-_REPAIR_PATTERNS = [r"hurt", r"傷つ", r"前の返事", r"つらかった", r"きつかった"]
-_DELIGHT_PATTERNS = [r"やった", r"嬉し", r"うれし", r"最高", r"できた", r"happy", r"yay"]
-_VENTING_PATTERNS = [r"むかつ", r"最悪", r"つらい", r"しんど", r"疲れ", r"ugh"]
-_GRIEF_PATTERNS = [r"寂し", r"悲し", r"grief", r"lost", r"死", r"つらい"]
-_FATIGUE_PATTERNS = [r"疲れ", r"眠い", r"しんど", r"だるい", r"exhausted", r"tired"]
-_META_PATTERNS = [r"君", r"あなた", r"この会話", r"meta", r"how do you", r"あなたは"]
-_PLAYFUL_PATTERNS = [r"w", r"笑", r"ふふ", r"play", r"tease", r"冗談"]
-_BOUNDARY_PATTERNS = [r"やめて", r"やめろ", r"それは嫌", r"no more", r"stop that"]
-_SILENCE_PATTERNS = [r"…", r"\.\.\.", r"うん", r"ok$", r"おけ$", r"寝る"]
+# Pattern hygiene (2026-06 audit): every short pattern below was once a bare
+# substring and misfired on common speech (めっちゃ→ちゃう, laughed→ugh,
+# 死ぬほど笑った→grief, retired→tired, brunch→run, …). Keep new entries
+# anchored / word-bounded / morphology-aware, and reproduce-by-running before
+# loosening anything.
+
+# Interrogative advice forms only — bare どう also matched どうも/どうぞ/
+# どうでもいい; どうしようもない is resignation, not an advice ask.
+_ADVICE_PATTERNS = [
+    r"どう(?:したら|すれば|しよう(?!もな)|思う|やったら|かな)",
+    r"教えて",
+    r"\badvice\b",
+    r"\bshould i\b",
+]
+# Request morphology only — bare して/やって matched past-progressives (してた)
+# and dismay (やってもうた); bare \brun\b matched "went for a run".
+_ACTION_PATTERNS = [
+    r"して(?:くれ|ください|もらえ|ほしい|頂|いただ)",
+    r"して[よなや]?[!！。]?$",
+    r"やって(?:くれ|ください|もらえ|ほしい)",
+    r"やって[よなや]?[!！。]?$",
+    r"\b(?:can|could|would|will|please)\s+(?:you\s+)?run\b",
+    r"^run\b",
+    r"\bfix\b",
+    r"please do",
+    r"頼む",
+]
+# Relational hurt only — repair is the FIRST branch, so it must never fire on
+# physical pain ("my back hurts" / "stubbed my toe, that hurt"), third-party
+# guilt (友達を傷つけてしまった), or benign references (この前の返事ありがとう).
+_REPAIR_PATTERNS = [
+    r"hurt (?:me|my feelings)",
+    r"feel(?:ing)?s? hurt",
+    r"you hurt",
+    r"(?:^|[\"”」]\s*)that (?:really )?hurt\b",
+    # self-directed hurt only: intransitive 傷つい, passive 傷つけられ, or an
+    # explicit first-person object
+    r"(?<!を)傷つい",
+    r"傷つけられ",
+    r"(?:私|ウチ|うち|俺|僕)を?傷つけ",
+    r"(?:返事|言葉|言い方|あの一言|さっきの(?:返事|言葉|言い方|発言|あれ|やつ)).{0,10}(?:つらかった|きつかった)",
+]
+# "やった" only as an exclamation: utterance-initial (but not やったら/やったん
+# conditionals/questions) or followed by an exclamatory mark. Kansai past tense
+# "〜やった" ("散々やった") must NOT read as delight.
+_DELIGHT_PATTERNS = [
+    r"^やった(?![らん])",
+    r"やった[ー〜!！ぜ]",
+    r"嬉し",
+    r"うれし",
+    r"最高",
+    # できた only as clause-final/exclamatory accomplishment — the formation
+    # sense (腫瘍ができたって言われた) must not celebrate.
+    r"できた(?:[!！ー〜♪]|で|ぞ|やん|わ|$)",
+    r"\bhappy\b",
+    r"\byay\b",
+]
+# Negation veto for the delight branch — fixed-width lookbehinds can't catch
+# "I'm not VERY happy with…". \w+n't covers every contraction (a bare \bn't\b
+# can never match inside one); the 32-char window absorbs multi-word hedges
+# ("not really all that happy").
+_NEGATED_POSITIVE_RE = re.compile(
+    r"\b(?:not|never|cannot|hardly|barely|far from|anything but|\w+n't)\b"
+    r"[\w\s']{0,32}\b(?:happy|glad|thrilled)\b"
+)
+# Japanese delight vetoes: negated positives (嬉しくない/最高やない), かよ
+# sarcasm (最高かよ), and ailment formations (しこりができた must not celebrate).
+_DELIGHT_VETO_JA_RE = re.compile(
+    r"(?:嬉し|うれし)く(?:も|は)?な(?:い|かった|さそう)"
+    r"|(?:嬉し|うれし)い?(?:わけ|はず)(?:が|も|は)?な(?:い|かった)"
+    r"|最高(?:じゃ|では|や)?な(?:い|かった)"
+    r"|最高ちゃう"
+    r"|(?:最高|嬉し)(?:すぎ)?かよ"
+    # ailment formations never celebrate: a lexicon net plus the locative
+    # frame 体部位+に…できた (the lexicon alone can't enumerate every ailment)
+    r"|(?:しこり|腫瘍|口内炎|ニキビ|湿疹|あざ|肩こり|クマ|虫歯|ものもらい|たんこぶ|まめ|ヘルペス|結石|できもの|吹き出物|イボ|蕁麻疹|血豆|水ぶくれ)(?:まで|が|も)?できた"
+    r"|(?:首|肩|足|腰|口|目|歯|顔|背中|腕|手|肌|喉|おでこ|まぶた)(?:の[^、。]{0,4})?に[^、。]{0,8}できた"
+)
+# Concessive joy: 疲れたけど最高の一日やった！ — the distress token concedes to
+# the delight that follows, so the distress-precedence veto must not fire.
+_CONCESSIVE_JOY_RE = re.compile(
+    r"(?:けど|けれど|のに|\bbut\b)[^、。!！]{0,12}(?:最高|嬉し|うれし|\bhappy\b)"
+)
+# bare "ugh" matched laughed/daughter/thought/enough; うんざり and the past
+# forms つらかった/きつかった live here so ordinary vents validate instead of
+# repairing; 疲れ excludes the お疲れ greeting.
+_VENTING_PATTERNS = [
+    r"むかつ",
+    r"最悪",
+    r"つらい",
+    r"つらかった",
+    r"きつかった",
+    r"しんど",
+    r"(?<!お)疲れ",
+    r"うんざり",
+    # 嬉しくて泣きそう is joy, not distress
+    r"(?<!くて)泣きそう(?!なくらい)",
+    r"落ち込",
+    r"へこむ",
+    r"\bugh+\b",
+]
+# bereavement forms only — bare 死 matched 死ぬほど笑った/必死, bare "lost"
+# matched "lost track of time"; polite/Kansai death forms and pronoun objects
+# ("we lost him") must still reach the comfort register.
+_GRIEF_PATTERNS = [
+    r"寂し",
+    r"悲し",
+    r"\bgrief\b",
+    r"\blost (?:a |my |our |her |his )?(?:\w+ )?(?:someone|mom|dad|mother|father|grand\w+|friend|husband|wife|partner|dog|cat|pet|baby)\b",
+    r"\b(?:we|i|she|he|they) (?:just )?lost (?:him|her|them)\b",
+    r"passed away",
+    r"亡くな",
+    # すぎて死んだ is hyperbolic joy slang (最高すぎて死んだ), not bereavement
+    r"(?<!すぎて)(?<!過ぎて)死ん(?:だ|でしまっ|でしも|でもう|じゃっ)",
+    r"死にました",
+    r"死別",
+    r"つらい",
+]
+_FATIGUE_PATTERNS = [
+    r"(?<!お)疲れ",
+    r"眠い",
+    r"しんど",
+    r"だるい",
+    r"\bexhausted\b",
+    r"\btired\b",
+]
+# 君 only as a standalone second-person pronoun (not 田中君/君津); "how do you"
+# only for introspective targets (not "how do you make carbonara").
+_META_PATTERNS = [
+    r"(?<![一-龯ァ-ヶぁ-んー])君(?=[はがのにをもと]|って|$)",
+    r"あなた",
+    r"この会話",
+    r"\bmeta\b",
+    r"how do you (?:feel|think|remember|decide|work|see|experience|know)\b",
+    # reciprocal social questions target the agent itself
+    r"\bhow (?:was|is|'s) your\b",
+    r"\bwhat (?:did|have) you\b",
+]
+# "w" is the Japanese laugh marker only when not embedded in an ASCII word
+# ("we went..." must not classify as playful); "play" needs word boundaries
+# ("display" is not playful).
+_PLAYFUL_PATTERNS = [
+    # laugh-w must not match URLs (www.) or kaomoji eyes (;w;)
+    r"(?<![a-z./:;])[wｗ]+(?![a-z./;])",
+    r"笑",
+    r"ふふ",
+    r"\bplay(?:ful|ing)?\b",
+    r"\bteas(?:e|ing)\b",
+    r"冗談",
+]
+# "no more" as protest only — utterance-final or "no more of this/that";
+# an opener ("No more bugs! We shipped!") is usually celebration, not protest.
+_BOUNDARY_PATTERNS = [
+    # imperative/request form only — やめてん is "I quit" (a disclosure),
+    # やめてって言われた / やめろって言われた are reported speech, それは嫌やった
+    # is a past-tense disclosure: none of them is a boundary at the agent
+    r"やめて(?:[よやな]|くれ|ください|ほしい|もらえ|もらって|[ー〜!！。…]|$)",
+    r"やめろ(?!って|と(?:言|の|か))",
+    r"それは嫌(?:や|だ|です)?[ー〜!！。…]*$",
+    r"\bno more[.!！]*$",
+    r"no more of (?:this|that)",
+    r"\bstop that\b",
+]
+# うん only as a standalone acknowledgement (not うんざり/ううん); 寝る only as
+# an utterance-final sign-off (not 寝る前に…).
+_SILENCE_PATTERNS = [
+    r"…",
+    r"\.\.\.",
+    r"^うん(?:うん)?[。…〜ー]?$",
+    r"ok$",
+    r"おけ$",
+    r"寝る(?:わ|ね|で|ぞ)?[ー〜。…!！]*$",
+]
+# Whole-utterance anchors: a greeting that merely OPENS a longer message
+# ("おはよう。昨日じいちゃんが亡くなった") must not short-circuit the branches
+# that follow (grief/venting/…). お疲れ様 is a greeting, not a fatigue signal.
 _GREETING_PATTERNS = [
-    r"^おはよ",
-    r"^こんにちは",
-    r"^こんばんは",
+    r"^おはよ(?:う|うございます)?[ー〜!！。\s]*$",
+    r"^こんにちは[ー〜!！。\s]*$",
+    r"^こんばんは[ー〜!！。\s]*$",
+    r"^お疲れ(?:様|さま)?(?:です|でした)?[ー〜!！。\s]*$",
+    r"^おつかれ(?:さま)?(?:です|でした)?[ー〜!！。\s]*$",
     r"^おーい$",
     r"^もしもし$",
 ]
+# Whole-utterance anchors (same treatment as greetings): a thanks that merely
+# OPENS a longer message (ありがとう。実は昨日ばあちゃんが亡くなってん) must not
+# short-circuit the grief/venting branches.
 _ACK_PATTERNS = [
-    r"^ありがとう",
-    r"^ありがと",
-    r"^助か",
-    r"^よかった",
+    r"^ありがとう?(?:な|ね|やで|ございます|ございました)?[ー〜!！。\s]*$",
+    r"^助か(?:った|る|ります|りました)?(?:わ|で)?[ー〜!！。\s]*$",
+    r"^よかった[ー〜!！。\s]*$",
     r"^了解$",
     r"^ok$",
     r"^okay$",
@@ -44,8 +213,15 @@ _CORRECTION_PATTERNS = [
     r"食い違",
     r"そういう意味じゃ",
     r"そうじゃない",
-    r"違う",
-    r"ちゃう",
+    # 間違う is the mistake-verb; prenominal 違う+noun (違う話なんやけど…) is a
+    # topic shift, not a correction — only predicate-final 違う corrects.
+    r"(?<!間)違う(?:[よでわぞ]|って|ねん|やん|と思)?\s*(?:[、。!！?？…]|$)",
+    # Kansai ちゃう as a correction needs a clause boundary or demonstrative —
+    # bare ちゃう hijacked めっちゃ (めっ「ちゃう」れしい) and the 〜ちゃう
+    # contraction (食べちゃう).
+    r"(?:^|[\s、。!！?？])ちゃう",
+    r"(?:それ|これ)(?:は)?ちゃう",
+    r"ちゃうちゃう",
     r"^いや[、, ]",
 ]
 
@@ -67,6 +243,31 @@ _DISTRESS_ACTS = {"venting", "fatigue_signal", "grief_signal", "conflict_signal"
 _ADVICE_FAILURE_RE = re.compile(r"\b(advice|advise|solution|solve|lecture)\b")
 _ADVICE_FAILURE_MARKERS_JA = ("正論", "アドバイス", "解決", "説教")
 _VALIDATE_FIRST_STYLES = {"validate_first", "listen_first", "listen_only"}
+
+# Agency boundary: above this need_rest, demanding turns trigger an honest
+# capacity acknowledgement instead of silently degraded effort.
+_CAPACITY_HONESTY_THRESHOLD = 0.7
+_CAPACITY_SENSITIVE_ACTS = {"request_for_action", "request_for_advice", "repair_attempt"}
+
+
+def _apply_capacity_honesty(
+    decision: "SocialPolicyDecision",
+    interoception: InteroceptivePressure,
+) -> "SocialPolicyDecision":
+    """Never fake being fine: flag demanding turns when the agent runs low.
+
+    Only acts the companion *initiated* (work, advice, repair) get the flag —
+    a greeting must not volunteer fatigue. The response mode is unchanged
+    (repair still repairs); the model is just told to be honest about capacity
+    and offer a smaller step instead of overpromising.
+    """
+    if interoception.need_rest < _CAPACITY_HONESTY_THRESHOLD:
+        return decision
+    if decision.primary_act not in _CAPACITY_SENSITIVE_ACTS:
+        return decision
+    decision.acknowledge_capacity = True
+    decision.initiative = max(0.0, decision.initiative - 0.15)
+    return decision
 
 
 def relationship_learning_inputs(relationship) -> tuple[list[str], list[str]]:
@@ -135,6 +336,9 @@ class SocialPolicyDecision:
     avoid_problem_solving: bool
     mention_memory: bool
     avoid_raw_interoception_numbers: bool = True
+    # Agency boundary: when the agent itself is running low and is asked for
+    # work or repair, be honest about capacity instead of overpromising.
+    acknowledge_capacity: bool = False
 
 
 class SocialPolicyEngine:
@@ -160,11 +364,12 @@ class SocialPolicyEngine:
             interoception=interoception,
             previous_response_hurt=previous_response_hurt,
         )
-        return _apply_relationship_learning(
+        decision = _apply_relationship_learning(
             decision,
             support_styles=support_styles,
             failed_patterns=failed_patterns,
         )
+        return _apply_capacity_honesty(decision, interoception)
 
     def _base_decision(
         self,
@@ -244,7 +449,19 @@ class SocialPolicyEngine:
                 mention_memory=False,
             )
 
-        if _matches(text, _DELIGHT_PATTERNS) and affect.valence >= -0.1:
+        # Delight must lose to explicit distress in the same utterance
+        # (「最悪や、最高の誕生日になるはずやったのに」 is a lament, not a share)
+        # — unless the distress is concessive (疲れたけど最高の一日やった！).
+        distress_overrides_delight = (
+            _matches(text, _VENTING_PATTERNS) or _matches(text, _GRIEF_PATTERNS)
+        ) and not _CONCESSIVE_JOY_RE.search(text)
+        if (
+            _matches(text, _DELIGHT_PATTERNS)
+            and not _NEGATED_POSITIVE_RE.search(text.lower())
+            and not _DELIGHT_VETO_JA_RE.search(text)
+            and not distress_overrides_delight
+            and affect.valence >= -0.1
+        ):
             return SocialPolicyDecision(
                 primary_act="delight_share",
                 response_mode="celebrate",

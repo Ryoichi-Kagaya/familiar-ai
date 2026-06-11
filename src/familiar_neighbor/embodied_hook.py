@@ -35,6 +35,7 @@ from familiar_agent._runtime_helpers import (
 from familiar_agent.heartbeat import HeartbeatRuntime
 from familiar_agent.routines import parse_schedule_config
 from familiar_neighbor.mind.appraisal import AppraisalContext, AppraisalEngine
+from familiar_neighbor.mind.deferral import DEFERRAL_PREFIX, detect_deferral
 from familiar_neighbor.mind.desires import DesireSystem
 from familiar_neighbor.mind.mental_state import MentalStateBus, MentalStateSnapshot
 from familiar_neighbor.mind.social_policy import (
@@ -43,6 +44,38 @@ from familiar_neighbor.mind.social_policy import (
     relationship_learning_inputs,
 )
 from familiar_runtime.runtime import RuntimeHookBase
+
+
+# Within a sustained distress conversation, re-running ToM every turn adds a
+# serial utility call to time-to-first-token and writes near-duplicate person
+# model rows. Re-run only after this many turns unless the speech act changed.
+_AUTO_TOM_COOLDOWN_TURNS = 3
+
+
+def _should_auto_tom(
+    social_policy: "SocialPolicyDecision",
+    *,
+    brief_reply_turn: bool,
+    is_desire_turn: bool,
+    user_input: str,
+    turns_since_last: int | None = None,
+    last_act: str | None = None,
+) -> bool:
+    """Gate for deterministic ToM: only flagged, full, companion-driven turns."""
+    if not social_policy.should_use_tom:
+        return False
+    if brief_reply_turn or is_desire_turn:
+        return False
+    if not user_input.strip():
+        return False
+    if (
+        turns_since_last is not None
+        and turns_since_last < _AUTO_TOM_COOLDOWN_TURNS
+        and last_act == social_policy.primary_act
+    ):
+        return False
+    return True
+
 
 if TYPE_CHECKING:
     from familiar_agent.agent import EmbodiedAgent
@@ -225,11 +258,28 @@ class EmbodiedAgentHook(RuntimeHookBase):
             list_unfinished_business = getattr(
                 agent._memory, "list_unfinished_business_async", None
             )
-            unfinished_business = await _call_optional_async(
+            # Fetch a wider window than the surfaced top-3 so deferral dedup
+            # doesn't re-insert an item that merely fell off the visible slice.
+            unfinished_open = await _call_optional_async(
                 list_unfinished_business,
-                limit=3,
+                limit=20,
                 fallback=[],
             )
+            unfinished_business = unfinished_open[:3]
+            # ── Deferred-topic capture ──
+            # "後で話すわ" must not be lost: record it as unfinished business so
+            # it stays surfaced until the model resolves it.
+            deferral = detect_deferral(user_input) if not is_desire_turn else None
+            if deferral:
+                summary = f"{DEFERRAL_PREFIX}{deferral}"
+                if not any(item.get("summary") == summary for item in unfinished_open):
+                    open_unfinished = getattr(agent._memory, "open_unfinished_business_async", None)
+                    await _call_optional_async(
+                        open_unfinished,
+                        summary,
+                        source="deferral",
+                        fallback=None,
+                    )
         companion_mood = "engaged"
         working_memory: list[dict] = []
         semantic_facts: list[dict] = []
@@ -317,8 +367,20 @@ class EmbodiedAgentHook(RuntimeHookBase):
         )
 
         # ── Social policy + provisional relationship update ──
+        # Relational-hurt tokens only — bare "hurt" turned "My back hurts"
+        # into a repair turn.
         previous_response_hurt = any(
-            token in user_input.lower() for token in ("hurt", "傷つ", "前の返事", "嫌だった")
+            token in user_input.lower()
+            for token in (
+                "hurt me",
+                "hurt my feelings",
+                "you hurt",
+                "that hurt",
+                "傷つい",
+                "傷つけられ",
+                "前の返事",
+                "嫌だった",
+            )
         )
         learned_styles, learned_failures = relationship_learning_inputs(agent._relationship)
         social_policy = agent._social_policy.decide(
@@ -367,6 +429,30 @@ class EmbodiedAgentHook(RuntimeHookBase):
             is_desire_turn=is_desire_turn,
         )
 
+        # ── Deterministic perspective-taking ──
+        # should_use_tom used to be advisory only; now the inference actually
+        # runs (and accumulates into the person model) on flagged turns.
+        auto_tom_ctx = ""
+        last_auto_tom_turn = getattr(agent, "_last_auto_tom_turn", None)
+        if _should_auto_tom(
+            social_policy,
+            brief_reply_turn=brief_reply_turn,
+            is_desire_turn=is_desire_turn,
+            user_input=user_input,
+            turns_since_last=(
+                agent._turn_count - last_auto_tom_turn if last_auto_tom_turn is not None else None
+            ),
+            last_act=getattr(agent, "_last_auto_tom_act", None),
+        ):
+            agent._last_auto_tom_turn = agent._turn_count
+            agent._last_auto_tom_act = social_policy.primary_act
+            auto_tom_ctx = await agent._run_auto_tom(user_input)
+            if auto_tom_ctx:
+                auto_tom_ctx = (
+                    "[Perspective-taking already done this turn — do not call the "
+                    "tom tool again]\n" + auto_tom_ctx
+                )
+
         # ── Append user message to history ──
         agent.messages.append(agent.backend.make_user_message(user_input_with_ctx))
 
@@ -396,8 +482,11 @@ class EmbodiedAgentHook(RuntimeHookBase):
                 continuity_ctx = (
                     continuity_ctx
                     + ("\n\n" if continuity_ctx else "")
-                    + "[Open unfinished business]\n"
-                    + "\n".join(f"- {item['summary'][:160]}" for item in unfinished_business[:3])
+                    + "[Open unfinished business — resolve_unfinished_business(id) once addressed]\n"
+                    + "\n".join(
+                        f"- [{str(item.get('id', ''))[:8]}] {item['summary'][:160]}"
+                        for item in unfinished_business[:3]
+                    )
                 )
             # First turn already carries [Today's agenda] in morning_ctx; skip the
             # per-turn reminders block there to avoid listing the same items twice.
@@ -436,6 +525,7 @@ class EmbodiedAgentHook(RuntimeHookBase):
                     agent._mental_state_bus.summarize_recent_for_prompt(2),
                     mental_snapshot.prompt_summary(),
                     agent._format_social_policy_prompt(social_policy),
+                    auto_tom_ctx,
                 )
                 if part
             )

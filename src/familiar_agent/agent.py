@@ -532,6 +532,9 @@ class EmbodiedAgent:
         )
         self._last_tool_error: str | None = None
         self._tool_failure_streak: int = 0
+        # Deterministic ToM cooldown bookkeeping (see embodied_hook._should_auto_tom)
+        self._last_auto_tom_turn: int | None = None
+        self._last_auto_tom_act: str | None = None
 
         # Mood persistence (Phase 2 companion-likeness)
         self._mood: str = "neutral"
@@ -850,7 +853,12 @@ class EmbodiedAgent:
             registry.register(MobilityCapability(self._mobility))
         if self._tts:
             registry.register(VoiceCapability(self._tts))
-        registry.register(MemoryCapability(self._memory_tool, names={"remember", "recall"}))
+        registry.register(
+            MemoryCapability(
+                self._memory_tool,
+                names={"remember", "recall", "resolve_unfinished_business"},
+            )
+        )
         registry.register(ToMCapability(self._tom_tool))
         registry.register(CodingCapability(self._coding))
         commitment_tool = getattr(self, "_commitment_tool", None)
@@ -1182,6 +1190,30 @@ class EmbodiedAgent:
         lines.extend(format_commitment_line(c, now=now) for c in items)
         return "\n".join(lines)
 
+    async def _run_auto_tom(self, user_input: str, *, timeout: float = 12.0) -> str:
+        """Run the ToM tool deterministically when social policy demands it.
+
+        The model is not relied on to call the tool itself; this guarantees
+        perspective-taking happens on emotionally loaded turns (and the result
+        feeds the persistent person model as a side effect). Failures and
+        timeouts degrade to an empty string — never break the turn.
+        """
+        tom_tool = getattr(self, "_tom_tool", None)
+        if tom_tool is None:
+            return ""
+        try:
+            # 12s default is deliberately tighter than _TOOL_TIMEOUTS["tom"] (20s):
+            # this runs serially before the main loop, so it caps time-to-first-token.
+            text, _image = await asyncio.wait_for(
+                tom_tool.call("tom", {"situation": user_input[:500]}),
+                timeout=timeout,
+            )
+        except Exception:
+            logger.debug("auto ToM failed", exc_info=True)
+            return ""
+        text = str(text).strip()
+        return text[:1200] if text else ""
+
     def _person_model_context(self) -> str:
         """Surface the accumulated ToM model of the companion, if any."""
         tracker = getattr(self, "_person_model", None)
@@ -1272,6 +1304,11 @@ class EmbodiedAgent:
             lines.append("- a memory mention is allowed only if it fits naturally")
         if policy.avoid_raw_interoception_numbers:
             lines.append("- never mention raw internal/body metrics")
+        if policy.acknowledge_capacity:
+            lines.append(
+                "- you are running low right now; be honest about your current "
+                "capacity instead of overpromising — offer a smaller step or a deferral"
+            )
         return "\n".join(lines)
 
     def _build_mental_snapshot(
