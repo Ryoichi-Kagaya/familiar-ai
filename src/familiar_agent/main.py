@@ -584,9 +584,14 @@ def main() -> None:
 
                 # GUI has its own internal agent; Telegram gets a separate one
                 # so the two conversations stay independent.
-                # Mute TTS for the Telegram agent — no point speaking aloud for remote chats.
+                # Mute TTS and disable camera — no audio/video needed for remote text chat,
+                # and two agents sharing one RTSP stream causes the second to fail.
                 import dataclasses as _dc
-                tg_config = _dc.replace(config, tts=_dc.replace(config.tts, volume=0.0))
+                tg_config = _dc.replace(
+                    config,
+                    tts=_dc.replace(config.tts, volume=0.0),
+                    camera=_dc.replace(config.camera, host=""),
+                )
                 tg_agent = EmbodiedAgent(tg_config)
                 tg_desires = DesireSystem(companion_name=config.companion_name)
                 bg.append(run_telegram_bot(token, tg_agent, tg_desires))
@@ -599,7 +604,11 @@ def main() -> None:
         from .telegram_bot import run_telegram_bot
 
         import dataclasses as _dc
-        tg_config = _dc.replace(config, tts=_dc.replace(config.tts, volume=0.0))
+        tg_config = _dc.replace(
+            config,
+            tts=_dc.replace(config.tts, volume=0.0),
+            camera=_dc.replace(config.camera, host=""),
+        )
         agent = EmbodiedAgent(tg_config)
         desires = DesireSystem(companion_name=config.companion_name)
         try:
