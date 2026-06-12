@@ -584,7 +584,10 @@ def main() -> None:
 
                 # GUI has its own internal agent; Telegram gets a separate one
                 # so the two conversations stay independent.
-                tg_agent = EmbodiedAgent(config)
+                # Mute TTS for the Telegram agent — no point speaking aloud for remote chats.
+                import dataclasses as _dc
+                tg_config = _dc.replace(config, tts=_dc.replace(config.tts, volume=0.0))
+                tg_agent = EmbodiedAgent(tg_config)
                 tg_desires = DesireSystem(companion_name=config.companion_name)
                 bg.append(run_telegram_bot(token, tg_agent, tg_desires))
         run_gui(config, desires, background_coros=bg or None)
@@ -595,7 +598,9 @@ def main() -> None:
             sys.exit(1)
         from .telegram_bot import run_telegram_bot
 
-        agent = EmbodiedAgent(config)
+        import dataclasses as _dc
+        tg_config = _dc.replace(config, tts=_dc.replace(config.tts, volume=0.0))
+        agent = EmbodiedAgent(tg_config)
         desires = DesireSystem(companion_name=config.companion_name)
         try:
             asyncio.run(run_telegram_bot(token, agent, desires))
