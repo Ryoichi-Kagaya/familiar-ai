@@ -21,6 +21,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+telegram = [
+    "python-telegram-bot>=20.0",
+]
 gui = [
     "PySide6>=6.7.0",
     "qasync>=0.27.0",
@@ -38,7 +41,7 @@ voice = [
     "av>=14.0.0",
 ]
 all = [
-    "familiar-ai[gui,camera,voice]",
+    "familiar-ai[gui,camera,voice,telegram]",
 ]
 
 [project.scripts]

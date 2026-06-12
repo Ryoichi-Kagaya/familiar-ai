@@ -519,7 +519,13 @@ def main() -> None:
     use_gui = "--gui" in sys.argv
     use_serve = "--serve" in sys.argv
     use_voice_server = "--voice-server" in sys.argv
-    use_tui = "--no-tui" not in sys.argv and not use_gui and not use_voice_server
+    use_telegram = "--telegram" in sys.argv
+    use_tui = (
+        "--no-tui" not in sys.argv
+        and not use_gui
+        and not use_voice_server
+        and not use_telegram
+    )
 
     serve_port = 8080
     if "--port" in sys.argv:
@@ -568,7 +574,33 @@ def main() -> None:
         from .gui import run_gui
 
         desires = DesireSystem(companion_name=config.companion_name)
-        run_gui(config, desires)
+        bg: list = []
+        if use_telegram:
+            token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+            if not token:
+                print("Warning: --telegram flag set but TELEGRAM_BOT_TOKEN is not set. Starting GUI only.")
+            else:
+                from .telegram_bot import run_telegram_bot
+
+                # GUI has its own internal agent; Telegram gets a separate one
+                # so the two conversations stay independent.
+                tg_agent = EmbodiedAgent(config)
+                tg_desires = DesireSystem(companion_name=config.companion_name)
+                bg.append(run_telegram_bot(token, tg_agent, tg_desires))
+        run_gui(config, desires, background_coros=bg or None)
+    elif use_telegram:
+        token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        if not token:
+            print("Error: TELEGRAM_BOT_TOKEN is not set in your .env file.")
+            sys.exit(1)
+        from .telegram_bot import run_telegram_bot
+
+        agent = EmbodiedAgent(config)
+        desires = DesireSystem(companion_name=config.companion_name)
+        try:
+            asyncio.run(run_telegram_bot(token, agent, desires))
+        except KeyboardInterrupt:
+            pass
     elif use_tui:
         if use_serve:
             from .serve import serve_dual as _serve_tui

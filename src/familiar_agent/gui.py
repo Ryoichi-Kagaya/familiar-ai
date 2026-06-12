@@ -1392,8 +1392,8 @@ class FamiliarWindow(QMainWindow):
         name = await self._agent.switch_user(user_id)
         self._current_user_id = user_id
         self._companion_display_name = name
-        self._chat_log.set_companion_label(name)
-        self._chat_log.append_line(f"[システム] ── {name} に切り替わりました ──")
+        self._log.set_companion_label(name)
+        self._log.append_line(f"[システム] ── {name} に切り替わりました ──")
 
     def _set_startup_status(self, text: str) -> None:
         self._startup_status = text
@@ -1994,8 +1994,17 @@ class FamiliarWindow(QMainWindow):
 # ---------------------------------------------------------------------------
 
 
-def run_gui(config: "AgentConfig", desires: "DesireSystem") -> None:
-    """Launch the PySide6 GUI with qasync event loop."""
+def run_gui(
+    config: "AgentConfig",
+    desires: "DesireSystem",
+    background_coros: "list[Any] | None" = None,
+) -> None:
+    """Launch the PySide6 GUI with qasync event loop.
+
+    background_coros: optional list of awaitables to schedule as asyncio tasks
+    on the qasync event loop (e.g. the Telegram bot coroutine).  They are
+    cancelled automatically when the Qt window closes.
+    """
     import signal
 
     existing = QApplication.instance()
@@ -2016,7 +2025,20 @@ def run_gui(config: "AgentConfig", desires: "DesireSystem") -> None:
         if not icon.isNull():
             window.setWindowIcon(icon)
     window.show()
-    qt_app.aboutToQuit.connect(window._ensure_shutdown_task)
+
+    # Schedule background coroutines (e.g. Telegram bot) on the qasync loop
+    bg_tasks: list[asyncio.Task] = []
+    if background_coros:
+        for coro in background_coros:
+            bg_tasks.append(loop.create_task(coro))
+
+    def _on_quit() -> None:
+        window._ensure_shutdown_task()
+        for t in bg_tasks:
+            if not t.done():
+                t.cancel()
+
+    qt_app.aboutToQuit.connect(_on_quit)
 
     # Qt's event loop does not yield to CPython's signal-checking mechanism on its own.
     # A periodic no-op timer wakes up the Python interpreter so that SIGINT (Ctrl+C)

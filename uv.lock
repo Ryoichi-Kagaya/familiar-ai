@@ -702,6 +702,7 @@ all = [
     { name = "opencv-python" },
     { name = "pillow" },
     { name = "pyside6" },
+    { name = "python-telegram-bot" },
     { name = "qasync" },
     { name = "sounddevice" },
     { name = "soundfile" },
@@ -716,6 +717,9 @@ camera = [
 gui = [
     { name = "pyside6" },
     { name = "qasync" },
+]
+telegram = [
+    { name = "python-telegram-bot" },
 ]
 voice = [
     { name = "av" },
@@ -753,7 +757,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "anthropic", specifier = ">=0.40.0" },
     { name = "av", marker = "extra == 'voice'", specifier = ">=14.0.0" },
-    { name = "familiar-ai", extras = ["gui", "camera", "voice"], marker = "extra == 'all'" },
+    { name = "familiar-ai", extras = ["gui", "camera", "voice", "telegram"], marker = "extra == 'all'" },
     { name = "google-genai", specifier = ">=1.0" },
     { name = "google-generativeai", specifier = ">=0.8.6" },
     { name = "mcp", specifier = ">=1.0.0" },
@@ -766,6 +770,7 @@ requires-dist = [
     { name = "pillow", marker = "extra == 'camera'", specifier = ">=10.0.0" },
     { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.7.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "python-telegram-bot", marker = "extra == 'telegram'", specifier = ">=20.0" },
     { name = "qasync", marker = "extra == 'gui'", specifier = ">=0.27.0" },
     { name = "sentence-transformers", specifier = ">=3.0.0" },
     { name = "sounddevice", marker = "extra == 'voice'", specifier = ">=0.5.5" },
@@ -776,7 +781,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.22.1" },
     { name = "zeroconf", marker = "extra == 'camera'", specifier = ">=0.132.2" },
 ]
-provides-extras = ["gui", "camera", "voice", "all"]
+provides-extras = ["telegram", "gui", "camera", "voice", "all"]
 
 [package.metadata.requires-dev]
 camera = [
@@ -3099,6 +3104,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/01/979e98d542a70714b0cb2b6728ed0b7c46792b695e3eaec3e20711271ca3/python_multipart-0.0.22.tar.gz", hash = "sha256:7340bef99a7e0032613f56dc36027b959fd3b30a787ed62d310e951f7c3a3a58", size = 37612, upload-time = "2026-01-25T10:15:56.219Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1b/d0/397f9626e711ff749a95d96b7af99b9c566a9bb5129b8e4c10fc4d100304/python_multipart-0.0.22-py3-none-any.whl", hash = "sha256:2b2cd894c83d21bf49d702499531c7bafd057d730c201782048f7945d82de155", size = 24579, upload-time = "2026-01-25T10:15:54.811Z" },
+]
+
+[[package]]
+name = "python-telegram-bot"
+version = "22.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpcore", marker = "python_full_version >= '3.14'" },
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ba/77/153517bb1ac1bba670c6fb1dbf09e1fd0730494b1705934e715391413a0d/python_telegram_bot-22.8.tar.gz", hash = "sha256:f9d3847fcb23ee603477e442800b33bb4adf851a73e0619d2050be879decf1ef", size = 1551700, upload-time = "2026-06-12T08:10:29.1Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/60/7c/ed7d4dd94280bd434173cae9f7a7aedaaab9af128ae4f494423a5687c820/python_telegram_bot-22.8-py3-none-any.whl", hash = "sha256:42373918097f1b837cc4e717d588c19ea79651497ec712bb5b0c76e5e63c50e1", size = 769397, upload-time = "2026-06-12T08:10:27.066Z" },
 ]
 
 [[package]]
