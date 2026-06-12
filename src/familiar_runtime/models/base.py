@@ -34,6 +34,9 @@ class ModelBackend(Protocol):
     def make_user_message(self, content: str | list[Any]) -> dict[str, Any]:
         """Serialize a user message for this provider."""
 
+    def make_image_block(self, b64: str, media_type: str = "image/jpeg") -> dict[str, Any]:
+        """Return a provider-specific image content block for user messages."""
+
     def make_assistant_message(
         self,
         result: ModelTurnResult,

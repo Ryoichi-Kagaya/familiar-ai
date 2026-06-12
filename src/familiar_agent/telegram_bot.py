@@ -14,6 +14,7 @@ Optional env var:
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 
@@ -89,6 +90,43 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
             "/help  — このメッセージ"
         )
 
+    async def _run_turn(
+        update: Update,
+        user_input: str,
+        images_b64: list[str] | None = None,
+    ) -> None:
+        """Execute one agent turn and send the response back."""
+        await update.message.chat.send_action("typing")  # type: ignore[union-attr]
+
+        chunks: list[str] = []
+
+        def on_text(chunk: str) -> None:
+            chunks.append(chunk)
+
+        async with _turn_lock:
+            try:
+                await agent.run(
+                    user_input,
+                    on_text=on_text,
+                    desires=desires,
+                    user_images=images_b64,
+                )
+            except Exception:
+                logger.exception("Agent error during Telegram turn")
+                await update.message.reply_text(  # type: ignore[union-attr]
+                    "エラーが発生しました。ログを確認してください。"
+                )
+                return
+
+        response = "".join(chunks).strip()
+        if not response:
+            return
+
+        for i in range(0, len(response), _MAX_MSG_LEN):
+            await update.message.reply_text(response[i : i + _MAX_MSG_LEN])  # type: ignore[union-attr]
+
+        desires.satisfy("greet_companion")
+
     async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.effective_user is None or not _is_allowed(update.effective_user.id):
             logger.warning("Rejected message from Telegram user %s", update.effective_user)
@@ -100,36 +138,41 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
         if not user_input:
             return
 
-        await update.message.chat.send_action("typing")
+        await _run_turn(update, user_input)
 
-        chunks: list[str] = []
-
-        def on_text(chunk: str) -> None:
-            chunks.append(chunk)
-
-        async with _turn_lock:
-            try:
-                await agent.run(user_input, on_text=on_text, desires=desires)
-            except Exception:
-                logger.exception("Agent error during Telegram turn")
-                await update.message.reply_text("エラーが発生しました。ログを確認してください。")
-                return
-
-        response = "".join(chunks).strip()
-        if not response:
+    async def _handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.effective_user is None or not _is_allowed(update.effective_user.id):
+            logger.warning("Rejected photo from Telegram user %s", update.effective_user)
+            return
+        if update.message is None:
             return
 
-        # Split into ≤4096-char chunks (Telegram hard limit)
-        for i in range(0, len(response), _MAX_MSG_LEN):
-            await update.message.reply_text(response[i : i + _MAX_MSG_LEN])
+        # Largest available size is last in the list
+        photos = update.message.photo
+        if not photos:
+            return
+        photo = photos[-1]
 
-        desires.satisfy("greet_companion")
+        try:
+            file = await context.bot.get_file(photo.file_id)
+            raw = await file.download_as_bytearray()
+            b64 = base64.b64encode(raw).decode()
+        except Exception:
+            logger.exception("Failed to download Telegram photo")
+            await update.message.reply_text("画像のダウンロードに失敗しました。")
+            return
+
+        caption = (update.message.caption or "").strip()
+        user_input = caption if caption else "この画像を見て。"
+
+        await _run_turn(update, user_input, images_b64=[b64])
 
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", _cmd_start))
     app.add_handler(CommandHandler("clear", _cmd_clear))
     app.add_handler(CommandHandler("help", _cmd_help))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
+    app.add_handler(MessageHandler(filters.PHOTO, _handle_photo))
 
     await app.initialize()
     await app.start()

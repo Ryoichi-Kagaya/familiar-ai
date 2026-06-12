@@ -38,6 +38,9 @@ class CLIBackend:
 
     # ── message factories ─────────────────────────────────────────
 
+    def make_image_block(self, b64: str, media_type: str = "image/jpeg") -> dict:  # noqa: ARG002
+        return {"type": "text", "text": "[image]"}
+
     def make_user_message(self, content: str | list) -> dict:
         if isinstance(content, list):
             text = "\n".join(

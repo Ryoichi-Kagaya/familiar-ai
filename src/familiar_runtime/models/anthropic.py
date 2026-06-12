@@ -84,6 +84,9 @@ class AnthropicBackend:
     def make_user_message(self, content: str | list) -> dict:
         return {"role": "user", "content": content}
 
+    def make_image_block(self, b64: str, media_type: str = "image/jpeg") -> dict:
+        return {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}}
+
     def make_assistant_message(self, result: ModelTurnResult, raw_content: Any) -> dict:  # noqa: ARG002
         return {"role": "assistant", "content": raw_content}
 

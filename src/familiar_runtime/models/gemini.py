@@ -31,6 +31,9 @@ class GeminiBackend:
 
     # ── message factories ─────────────────────────────────────────
 
+    def make_image_block(self, b64: str, media_type: str = "image/jpeg") -> dict:
+        return {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}}
+
     def make_user_message(self, content: str | list) -> dict:
         if isinstance(content, str):
             return {"role": "user", "parts": [{"text": content}]}
