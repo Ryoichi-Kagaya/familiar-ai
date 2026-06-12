@@ -912,12 +912,6 @@ class EmbodiedAgent:
     async def _execute_tool(self, name: str, tool_input: dict) -> tuple[str, list[str]]:
         """Route tool call to the right handler. Returns (text, images_b64)."""
         registry = self._build_tool_registry()
-        if self._mcp and not registry.has_tool(name):
-            mcp_task = getattr(self, "_mcp_start_task", None)
-            if mcp_task and not mcp_task.done():
-                await mcp_task
-                registry = self._build_tool_registry()
-
         result = await registry.call(name, tool_input)
         raw = result.image_b64
         images: list[str] = raw if isinstance(raw, list) else ([raw] if raw else [])
@@ -2232,6 +2226,7 @@ class EmbodiedAgent:
         inner_voice: str = "",
         interrupt_queue=None,
         excluded_tools: frozenset[str] | None = None,
+        user_images: list[str] | None = None,
     ) -> str:
         """Run one conversation turn with the agent loop.
 
@@ -2272,9 +2267,10 @@ class EmbodiedAgent:
         if on_phase:
             on_phase("startup" if startup_phase else "thinking")
 
-        # Start MCP connections in background (non-blocking) and memory worker
+        # Start MCP connections and memory worker.
+        # MCP is awaited so tools are available before the model is called.
         if self._mcp and not self._mcp.is_started:
-            self._mcp_start_task = asyncio.ensure_future(self._mcp.start())
+            await self._mcp.start()
         if memory_worker and not memory_worker.is_running:
             await memory_worker.start()
 
@@ -2457,7 +2453,17 @@ class EmbodiedAgent:
         if is_desire_turn:
             _main_messages = self.messages
             self.messages = list(self.messages)
-        self.messages.append(self.backend.make_user_message(user_input_with_ctx))
+        if user_images:
+            make_img = getattr(self.backend, "make_image_block", None)
+            if callable(make_img):
+                content: str | list = [{"type": "text", "text": user_input_with_ctx}]
+                for b64 in user_images:
+                    content.append(make_img(b64))  # type: ignore[union-attr]
+            else:
+                content = user_input_with_ctx
+        else:
+            content = user_input_with_ctx
+        self.messages.append(self.backend.make_user_message(content))
 
         # Use cached plan & workspace context from previous turn's post-response pipeline.
         # These are computed in the background after each response and are ready for the

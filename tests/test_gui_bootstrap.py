@@ -41,7 +41,7 @@ def test_main_gui_path_defers_agent_construction(monkeypatch) -> None:
 
     import familiar_agent.gui as gui_mod
 
-    monkeypatch.setattr(gui_mod, "run_gui", lambda config, desires: calls.append((config, desires)))
+    monkeypatch.setattr(gui_mod, "run_gui", lambda config, desires, **_kw: calls.append((config, desires)))
     monkeypatch.setattr(main_mod.sys, "argv", ["familiar", "--gui"])
 
     main_mod.main()
