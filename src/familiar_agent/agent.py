@@ -3,19 +3,24 @@
 from __future__ import annotations
 import asyncio
 import hashlib
-import inspect
 import logging
 import math
 import os
 import re
 import time
+from collections import deque
 from collections.abc import Callable, Coroutine, Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+from ._runtime_helpers import (
+    MAX_ITERATIONS,
+    _MORNING_CONTEXT_MAX_CHARS,
+    _noop_str,
+)
 from .backend import create_backend, create_scene_backend, create_utility_backend
-from .appraisal import AppraisalContext, AppraisalEngine
+from .appraisal import AppraisalEngine
 from .config import AgentConfig
 from .desires import DesireSystem, detect_worry_signal
 from .heartbeat import HeartbeatRuntime
@@ -26,6 +31,7 @@ from .interoception import (
 )
 from .mental_state import (
     DriveVector,
+    IdentityState,
     MentalStateBus,
     MentalStateSnapshot,
     SocialState,
@@ -46,10 +52,28 @@ from .prediction import PredictionEngine
 from .social_policy import SocialPolicyDecision, SocialPolicyEngine
 from .workspace import GlobalWorkspace
 from .memory_worker import MemoryJobWorker
-from .tape import check_plan_blocked, generate_plan, generate_replan
+from .inner_loop import (
+    CompeteResult,
+    InnerLoop,
+    InnerLoopConfig,
+    InnerThought,
+    TrainOfThought,
+)
+
+# check_plan_blocked / generate_replan are referenced via this module's
+# namespace by EmbodiedAgentHook.after_tool_result (and patched here by tests).
+from .tape import check_plan_blocked, generate_plan, generate_replan  # noqa: F401
 from .tools.art_critique import ArtCritiqueTool, ArtCritiqueStore
 from .tools.camera import CameraTool
 from .tools.coding import CodingTool
+from .tools.commitments import (
+    CommitmentTool,
+    format_commitment_line,
+    format_commitments_for_context,
+)
+from .tools.delegation import DelegatedTaskRunner, DelegationTool
+from .tools.identity import IdentityTool
+from familiar_neighbor.mind.identity import IdentityCore
 from .tools.memory import MemoryTool, ObservationMemory
 from .tools.tom import ToMTool
 from .tools.mobility import MobilityTool
@@ -61,50 +85,31 @@ from familiar_capabilities import (
     ArtCritiqueCapability,
     CameraCapability,
     CodingCapability,
+    CommitmentCapability,
+    DelegationCapability,
+    IdentityCapability,
     MCPCapability,
     MemoryCapability,
     MobilityCapability,
     ToMCapability,
     VoiceCapability,
 )
+from familiar_neighbor.embodied_hook import EmbodiedAgentHook
+from familiar_neighbor.mind.person_model import PersonModelTracker
 from familiar_neighbor.prompts import assemble_neighbor_system_prompt
+from familiar_runtime.commitments import SQLiteCommitmentStore
+from familiar_runtime.models.base import ModelBackend as RuntimeModelBackend
+from familiar_runtime.react_loop import ReActLoop
+from familiar_runtime.runtime import TurnContext
+from familiar_runtime.tools.base import ToolExecutionResult
 from familiar_runtime.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-
-async def _noop_str() -> str:
-    """Async no-op that returns an empty string (used as a placeholder in asyncio.gather)."""
-    return ""
+# How far ahead to surface upcoming commitments in the turn context.
+COMMITMENT_UPCOMING_HORIZON_SECONDS = 6 * 3600
 
 
-async def _noop_list() -> list:
-    """Async no-op list placeholder."""
-    return []
-
-
-async def _call_optional_async(
-    method: Any | None,
-    *args,
-    fallback: Any,
-    **kwargs,
-) -> Any:
-    """Call optional async-like method; gracefully fall back for mocks/missing methods."""
-    if method is None:
-        return fallback
-    try:
-        result = method(*args, **kwargs)
-    except Exception:
-        return fallback
-    if inspect.isawaitable(result):
-        return await result
-    if result.__class__.__module__.startswith("unittest.mock"):
-        return fallback
-    return result
-
-
-MAX_ITERATIONS = 50
-_MORNING_CONTEXT_MAX_CHARS = 2600
 _DEFAULT_TOOL_TIMEOUT = 20.0
 _TOOL_TIMEOUTS: dict[str, float] = {
     "see": 12.0,
@@ -129,11 +134,6 @@ _TOOL_TIMEOUTS: dict[str, float] = {
     "run_tests": 120.0,
     "bash": 45.0,
 }
-_BRIEF_REPLY_MAX_ITERATIONS = 2
-_BRIEF_REPLY_MAX_TOKENS = 120
-# Thinking/reasoning models consume tokens on internal reasoning before emitting
-# any visible content.  Give them enough room to finish both phases.
-_BRIEF_REPLY_MAX_TOKENS_THINKING = 800
 _BRIEF_REPLY_TOOL_NAMES = frozenset({"say"})
 _BRIEF_GREETING_PATTERNS = (
     r"^おはよ",
@@ -496,6 +496,51 @@ def _react_to_scene_events(events: list[dict], desires: DesireSystem | None) -> 
                 desires.boost("worry_companion", 0.2)
 
 
+class _TurnToolAdapter:
+    """Present the agent's per-turn tool surface to the substrate ReActLoop.
+
+    ``tool_defs()`` returns the (possibly brief-turn-restricted) defs prepared
+    for this turn, and ``call()`` routes through ``EmbodiedAgent._execute_tool``
+    so MCP late-start and registry rebuild behaviour stay intact. Timeouts are
+    applied by the loop itself, mirroring the historical inline handling.
+    """
+
+    def __init__(self, agent: "EmbodiedAgent", tool_defs: list[dict]) -> None:
+        self._agent = agent
+        self._defs = tool_defs
+
+    def tool_defs(self) -> list[dict]:
+        return self._defs
+
+    async def call(self, name: str, tool_input: dict) -> ToolExecutionResult:
+        logger.info("Tool call: %s(%s)", name, tool_input)
+        text, image = await self._agent._execute_tool(name, tool_input)
+        logger.info("Tool result: %s", text[:100])
+        return ToolExecutionResult(text=text, image_b64=image[0] if image else None)
+
+
+class _InterruptQueueSource:
+    """Adapt the UI's asyncio interrupt queue to the runtime InterruptSource.
+
+    Stays disarmed until the hook arms it after the first model call, so an
+    input queued before the turn started is not double-included.
+    """
+
+    def __init__(self, agent: "EmbodiedAgent", queue: Any) -> None:
+        self._agent = agent
+        self._queue = queue
+        self._armed = False
+
+    def arm(self) -> None:
+        self._armed = True
+
+    def empty(self) -> bool:
+        return not self._armed or self._queue.empty()
+
+    async def drain(self) -> list[str]:
+        return self._agent._drain_interrupt_queue(self._queue)
+
+
 class EmbodiedAgent:
     """Real-world exploration agent using a pluggable LLM backend."""
 
@@ -522,18 +567,45 @@ class EmbodiedAgent:
         self._memory = ObservationMemory()
         self._memory_worker = MemoryJobWorker(self._memory)
         self._memory_tool = MemoryTool(self._memory)
+        self._person_model = PersonModelTracker()
         self._art_critique_store = ArtCritiqueStore()
         self._art_critique_tool = ArtCritiqueTool(self._art_critique_store, self._memory)
         self._tom_tool = ToMTool(
             self._memory,
             default_person=config.companion_name,
             backend=self._utility_backend,
+            person_model=self._person_model,
         )
         self._coding = CodingTool(config.coding)
+        _commitments_dir = Path.home() / ".familiar_ai"
+        _commitments_dir.mkdir(parents=True, exist_ok=True)
+        self._commitment_store = SQLiteCommitmentStore(_commitments_dir / "commitments.db")
+        self._commitment_tool = CommitmentTool(self._commitment_store)
+        self._delegation_runner = DelegatedTaskRunner(
+            config=config, commitment_store=self._commitment_store
+        )
+        self._delegation_tool = DelegationTool(self._delegation_runner)
+        try:
+            self._identity: IdentityCore | None = IdentityCore(self._memory)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("IdentityCore init failed (identity layer dormant): %s", exc)
+            self._identity = None
+        self._identity_tool = IdentityTool(self._memory)
+        # Phase 2 inner loop (off by default). Constructed always so close() can
+        # stop it unconditionally; the tick is a no-op stub until PR2 wires the
+        # real cycle, and it is never started unless config.inner_loop is set.
+        self._turn_active = False
+        self._inner_monologue: deque[InnerThought] = deque(maxlen=8)
+        self._train_of_thought = TrainOfThought()
+        self._inner_loop = InnerLoop(
+            self._inner_loop_tick,
+            InnerLoopConfig(interval_sec=config.inner_loop_interval),
+        )
         self._exploration = ExplorationTracker()
         self._scene: SceneTracker | None = None  # initialized after DB ready in _init_tools
 
         self._mcp: MCPClientManager | None = None
+        self._mcp_start_task: asyncio.Future[Any] | None = None
         self._user_registry = UserRegistry()
         self._current_user = self._user_registry.get_active()
         config.companion_name = self._current_user.name
@@ -557,6 +629,9 @@ class EmbodiedAgent:
         )
         self._last_tool_error: str | None = None
         self._tool_failure_streak: int = 0
+        # Deterministic ToM cooldown bookkeeping (see embodied_hook._should_auto_tom)
+        self._last_auto_tom_turn: int | None = None
+        self._last_auto_tom_act: str | None = None
 
         # Mood persistence (Phase 2 companion-likeness)
         self._mood: str = "neutral"
@@ -568,6 +643,9 @@ class EmbodiedAgent:
         self._cached_workspace_ctx: str = ""
         self._cached_temporal_ctx: str | None = None
         self._cached_companion_mood: str = "engaged"
+
+        # Per-turn cognition pipeline (PR3 of the runtime reorg).
+        self._hook = EmbodiedAgentHook(self)
 
         self._init_tools()
 
@@ -586,8 +664,8 @@ class EmbodiedAgent:
 
         self._relationship = RelationshipTracker(user_id=new_user.id)
         self._self_narrative = SelfNarrative(path=new_user.self_narrative_path)
-        self._mental_state_bus.set_log_path(new_user.mental_state_path)
-        self._tom_tool.default_person = new_user.name
+        self._mental_state_bus = MentalStateBus(path=new_user.mental_state_path)
+        self._tom_tool._default_person = new_user.name  # type: ignore[attr-defined]
         return new_user.name
 
     @property
@@ -755,6 +833,9 @@ class EmbodiedAgent:
                     )
                     logger.info("Curiosity persisted: %s", curiosity)
 
+            if user_input and not is_desire_turn:
+                await self._capture_companion_thread(user_input, desires)
+
             pred_signal = self._prediction.last_signal()
             concerns = getattr(self, "_concerns", None)
             if concerns is not None:
@@ -783,6 +864,12 @@ class EmbodiedAgent:
                 curiosity=curiosity,
                 is_desire_turn=is_desire_turn,
                 desires=desires,
+            )
+
+            await self._maybe_update_identity(
+                user_input=user_input,
+                final_text=final_text,
+                is_desire_turn=is_desire_turn,
             )
 
             # ── Deferred pre-response work (results cached for next turn) ──
@@ -899,10 +986,26 @@ class EmbodiedAgent:
             registry.register(MobilityCapability(self._mobility))
         if self._tts:
             registry.register(VoiceCapability(self._tts))
-        registry.register(MemoryCapability(self._memory_tool, names={"remember", "recall"}))
+        registry.register(
+            MemoryCapability(
+                self._memory_tool,
+                names={"remember", "recall", "resolve_unfinished_business"},
+            )
+        )
         registry.register(ToMCapability(self._tom_tool))
         registry.register(CodingCapability(self._coding))
-        registry.register(ArtCritiqueCapability(self._art_critique_tool))
+        art_critique_tool = getattr(self, "_art_critique_tool", None)
+        if art_critique_tool is not None:
+            registry.register(ArtCritiqueCapability(art_critique_tool))
+        commitment_tool = getattr(self, "_commitment_tool", None)
+        if commitment_tool is not None:
+            registry.register(CommitmentCapability(commitment_tool))
+        delegation_tool = getattr(self, "_delegation_tool", None)
+        if delegation_tool is not None:
+            registry.register(DelegationCapability(delegation_tool))
+        identity_tool = getattr(self, "_identity_tool", None)
+        if identity_tool is not None:
+            registry.register(IdentityCapability(identity_tool))
         if self._mcp:
             provider = MCPCapability(self._mcp)
             registry.register(provider)
@@ -1127,6 +1230,9 @@ class EmbodiedAgent:
         variable_parts: list[str] = [intero]
         if relationship_ctx:
             variable_parts.append(relationship_ctx)
+        person_ctx = self._person_model_context()
+        if person_ctx:
+            variable_parts.append(person_ctx)
         if continuity_ctx:
             variable_parts.append(continuity_ctx)
         if mental_ctx:
@@ -1181,6 +1287,83 @@ class EmbodiedAgent:
                 blocks.append(trace_ctx)
 
         return "\n\n".join(blocks)
+
+    def _commitments_context(self) -> str:
+        """Surface due + soon-upcoming commitments so the secretary can act on them."""
+        store = getattr(self, "_commitment_store", None)
+        if store is None:
+            return ""
+        now = time.time()
+        try:
+            due = store.list_due(now=now)
+            upcoming = store.list_upcoming(now=now, horizon=COMMITMENT_UPCOMING_HORIZON_SECONDS)
+        except Exception:
+            logger.debug("commitment context fetch failed", exc_info=True)
+            return ""
+        return format_commitments_for_context(due=due[:5], upcoming=upcoming[:5], now=now)
+
+    def _today_agenda_context(self) -> str:
+        """Morning secretary surface: overdue + today's commitments as an agenda.
+
+        Horizon is the rest of the local day, extended to at least 12h so a
+        late-night first turn still previews the early morning.
+        """
+        store = getattr(self, "_commitment_store", None)
+        if store is None:
+            return ""
+        now = time.time()
+        local_now = datetime.now()
+        midnight = (
+            local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        ).timestamp() + 86400
+        horizon = max(midnight - now, 12 * 3600)
+        try:
+            due = store.list_due(now=now)
+            upcoming = store.list_upcoming(now=now, horizon=horizon)
+        except Exception:
+            logger.debug("agenda fetch failed", exc_info=True)
+            return ""
+        items = (due + upcoming)[:8]
+        if not items:
+            return ""
+        lines = ["[Today's agenda — weave these into the greeting naturally]"]
+        lines.extend(format_commitment_line(c, now=now) for c in items)
+        return "\n".join(lines)
+
+    async def _run_auto_tom(self, user_input: str, *, timeout: float = 12.0) -> str:
+        """Run the ToM tool deterministically when social policy demands it.
+
+        The model is not relied on to call the tool itself; this guarantees
+        perspective-taking happens on emotionally loaded turns (and the result
+        feeds the persistent person model as a side effect). Failures and
+        timeouts degrade to an empty string — never break the turn.
+        """
+        tom_tool = getattr(self, "_tom_tool", None)
+        if tom_tool is None:
+            return ""
+        try:
+            # 12s default is deliberately tighter than _TOOL_TIMEOUTS["tom"] (20s):
+            # this runs serially before the main loop, so it caps time-to-first-token.
+            text, _image = await asyncio.wait_for(
+                tom_tool.call("tom", {"situation": user_input[:500]}),
+                timeout=timeout,
+            )
+        except Exception:
+            logger.debug("auto ToM failed", exc_info=True)
+            return ""
+        text = str(text).strip()
+        return text[:1200] if text else ""
+
+    def _person_model_context(self) -> str:
+        """Surface the accumulated ToM model of the companion, if any."""
+        tracker = getattr(self, "_person_model", None)
+        if tracker is None:
+            return ""
+        try:
+            return tracker.context_for_prompt(self.config.companion_name)
+        except Exception:
+            logger.debug("person model context fetch failed", exc_info=True)
+            return ""
 
     def _exploration_context(self) -> str:
         """Return exploration history for ICL-based direction steering."""
@@ -1261,6 +1444,11 @@ class EmbodiedAgent:
             lines.append("- a memory mention is allowed only if it fits naturally")
         if policy.avoid_raw_interoception_numbers:
             lines.append("- never mention raw internal/body metrics")
+        if policy.acknowledge_capacity:
+            lines.append(
+                "- you are running low right now; be honest about your current "
+                "capacity instead of overpromising — offer a smaller step or a deferral"
+            )
         return "\n".join(lines)
 
     def _build_mental_snapshot(
@@ -1309,22 +1497,34 @@ class EmbodiedAgent:
             ),
             working_memory=working_items,
             continuity_note=continuity_note,
+            identity=(
+                identity.state_for_snapshot()
+                if (identity := getattr(self, "_identity", None)) is not None
+                else IdentityState()
+            ),
         )
 
-    async def _gather_workspace_context(
+    async def _inner_loop_tick(self) -> None:
+        """One idle workspace cycle. No-op stub until PR2 wires the real cycle."""
+        return None
+
+    async def _compete_once(
         self,
+        *,
+        cheap: bool = False,
         desires: DesireSystem | None = None,
         extra_coalitions: list | None = None,
-    ) -> str:
-        """Run one Global Workspace competition cycle and return the broadcast context.
+    ) -> CompeteResult:
+        """Gather coalitions and run one ignition competition.
 
-        Gathers coalitions from all available processors in parallel, runs the
-        ignition competition, and returns the winning coalition's context_block
-        plus a compact peripheral-awareness summary of non-winners.
-
-        Returns empty string if nothing reaches ignition threshold.
+        Returns the structured outcome (winner / others / all coalitions) so
+        callers can either render the broadcast string (the turn path) or act
+        on the winner object (the inner loop). When ``cheap=True`` the two
+        embedding-backed sources are skipped — the async memory recall and the
+        DMN mind-wander fallback — leaving only the in-memory sync providers, so
+        a cheap cycle costs zero LLM/embedding calls.
         """
-        # Sync coalitions (wrap in to_thread to avoid blocking)
+        # Sync coalitions (wrap in to_thread to avoid blocking) — all in-memory.
         sync_tasks = [
             asyncio.to_thread(self._exploration.as_coalition),
             asyncio.to_thread(self._self_narrative.as_coalition),
@@ -1337,11 +1537,12 @@ class EmbodiedAgent:
             sync_tasks.append(asyncio.to_thread(self._scene.as_coalition))
         if desires is not None:
             sync_tasks.append(asyncio.to_thread(desires.as_coalition))
+        identity = getattr(self, "_identity", None)
+        if identity is not None:
+            sync_tasks.append(asyncio.to_thread(identity.as_coalition))
 
-        # Async coalitions
-        async_tasks = [
-            self._memory.as_coalition_async(),
-        ]
+        # Async coalitions (embedding-backed) — skipped on the cheap cycle.
+        async_tasks = [] if cheap else [self._memory.as_coalition_async()]
 
         results = await asyncio.gather(*sync_tasks, *async_tasks, return_exceptions=True)
 
@@ -1358,23 +1559,42 @@ class EmbodiedAgent:
                 coalitions.append(coalition)
 
         if not coalitions:
-            return ""
+            return CompeteResult(winner=None, others=[], coalitions=[])
 
         winner = self._workspace.compete(coalitions)
-        if winner is None:
+        if winner is None and not cheap:
             logger.debug("GlobalWorkspace: nothing reached ignition threshold — activating DMN")
-            # Default Mode Network: mind-wander when workspace is idle
+            # Default Mode Network: mind-wander when workspace is idle.
             dmn_coalition = await self._dmn.wander()
-            if dmn_coalition is None:
-                return ""
-            winner = dmn_coalition
-            coalitions.append(dmn_coalition)
+            if dmn_coalition is not None:
+                winner = dmn_coalition
+                coalitions.append(dmn_coalition)
 
         others = [c for c in coalitions if c is not winner]
-        # Update attention schema with this turn's winner (AST)
-        self._attention_schema.update_focus(winner)
-        await self._workspace.notify_listeners(winner)
-        return self._workspace.broadcast(winner, others)
+        return CompeteResult(winner=winner, others=others, coalitions=coalitions)
+
+    async def _gather_workspace_context(
+        self,
+        desires: DesireSystem | None = None,
+        extra_coalitions: list | None = None,
+    ) -> str:
+        """Run one Global Workspace competition cycle and return the broadcast context.
+
+        Gathers coalitions from all available processors in parallel, runs the
+        ignition competition, and returns the winning coalition's context_block
+        plus a compact peripheral-awareness summary of non-winners.
+
+        Returns empty string if nothing reaches ignition threshold.
+        """
+        result = await self._compete_once(
+            cheap=False, desires=desires, extra_coalitions=extra_coalitions
+        )
+        if result.winner is None:
+            return ""
+        # Update attention schema with this turn's winner (AST).
+        self._attention_schema.update_focus(result.winner)
+        await self._workspace.notify_listeners(result.winner)
+        return self._workspace.broadcast(result.winner, result.others)
 
     @staticmethod
     def _select_context_blocks(
@@ -1938,6 +2158,61 @@ class EmbodiedAgent:
         except Exception as e:
             logger.warning("Could not update self narrative mid-session: %s", e)
 
+    async def _maybe_update_identity(
+        self,
+        *,
+        user_input: str,
+        final_text: str,
+        is_desire_turn: bool,
+    ) -> None:
+        """Background honor-check: did this reply honor the values it touched?
+
+        Boundaries are enforced deterministically in the turn loop; this softer
+        pass only adjusts *value* assertions' conviction with evidence, using
+        one bounded utility call per implicated value. Runs only when a
+        dedicated utility backend exists, off the hot path.
+        """
+        identity = getattr(self, "_identity", None)
+        if identity is None or is_desire_turn or not user_input.strip():
+            return
+        if self._utility_backend is self.backend:
+            return  # no dedicated utility model — skip rather than burn the main one
+        try:
+            values = identity.implicated_values(user_input)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Identity implicated_values failed: %s", exc)
+            return
+        for assertion in values[:2]:  # cap utility calls per turn
+            try:
+                verdict = await self._classify_identity_honor(assertion.statement, final_text)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Identity honor-check failed: %s", exc)
+                continue
+            if verdict == "honored":
+                await self._memory.adjust_identity_confidence_async(
+                    assertion.assertion_key, 0.02, reason="honored_in_response"
+                )
+                await self._memory.append_identity_evidence_async(
+                    assertion.assertion_key, note="honored in a reply"
+                )
+            elif verdict == "strained":
+                await self._memory.adjust_identity_confidence_async(
+                    assertion.assertion_key, -0.04, reason="strained_in_response"
+                )
+                identity.nudge_dissonance(0.1)
+            # "unclear" / anything else → no change
+
+    async def _classify_identity_honor(self, statement: str, response: str) -> str | None:
+        """One bounded utility call: did the reply honor the value? Strict labels."""
+        raw = await self._utility_backend.complete(
+            "Did this reply honor the speaker's stated value? Reply with exactly "
+            "one word: honored, strained, or unclear.\n\n"
+            f"Value: {statement[:200]}\nReply: {response[:300]}",
+            max_tokens=8,
+        )
+        label = (raw or "").strip().strip('"').strip("'").lower()
+        return label if label in ("honored", "strained", "unclear") else None
+
     async def _maybe_adapt_values(
         self,
         *,
@@ -2031,6 +2306,64 @@ class EmbodiedAgent:
         except Exception as e:
             logger.warning("Curiosity extraction failed: %s", e)
         return None
+
+    async def extract_companion_thread(self, user_input: str) -> str | None:
+        """Ask the LLM whether the companion mentioned something to follow up on.
+
+        "I have a presentation tomorrow" should resurface later as "how did it
+        go?" — the thread is an event or situation in THEIR life, not a request
+        to the agent (that is the commitments domain).
+        """
+        if not user_input or not user_input.strip():
+            return None
+        try:
+            none_word = _t("curiosity_none")
+            text = await self._utility_backend.complete(
+                "Read the companion's message. If it mentions a concrete upcoming "
+                "event or an ongoing situation in THEIR life that a caring friend "
+                "would ask about later (a presentation tomorrow, feeling unwell, "
+                "a job interview, a trip), describe it in one short sentence in "
+                f"{_t('summary_lang')}. Only their life events qualify — not "
+                "requests to you, not questions, not small talk. If there is "
+                f'nothing to follow up on, reply with just "{none_word}".'
+                f"\n\nMessage: {user_input[:400]}",
+                max_tokens=60,
+            )
+            text = text.strip()
+            if not text or none_word in text or len(text) > 140:
+                return None
+            return text
+        except Exception as e:
+            logger.debug("Companion thread extraction failed: %s", e)
+        return None
+
+    async def _capture_companion_thread(
+        self, user_input: str, desires: DesireSystem | None
+    ) -> None:
+        """Persist a follow-up-worthy thread as unfinished business.
+
+        Source "companion_thread" reuses the existing surfacing + resolve loop:
+        the hook renders open threads with a follow-up instruction and the
+        model resolves them once the outcome is known.  Exact-duplicate
+        summaries are skipped and at most 3 threads stay open at a time.
+        """
+        try:
+            await self._memory.expire_stale_companion_threads_async(max_age_days=14.0)
+            thread = await self.extract_companion_thread(user_input)
+            if not thread:
+                return
+            open_items = await self._memory.list_unfinished_business_async(limit=20)
+            if any(item.get("summary") == thread for item in open_items):
+                return
+            open_threads = [item for item in open_items if item.get("source") == "companion_thread"]
+            if len(open_threads) >= 3:
+                return
+            await self._memory.open_unfinished_business_async(thread, source="companion_thread")
+            if desires is not None:
+                desires.boost("worry_companion", 0.1)
+            logger.info("Companion thread captured: %s", thread)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Companion thread capture failed: %s", exc)
 
     def _should_compact(self, threshold_tokens: int = 60_000) -> bool:
         """Return True when context is large enough to warrant compaction.
@@ -2162,6 +2495,12 @@ class EmbodiedAgent:
                 await asyncio.wait_for(memory_worker.stop(), timeout=1.5)
             except (asyncio.TimeoutError, Exception):
                 pass
+        inner_loop = getattr(self, "_inner_loop", None)
+        if inner_loop is not None:
+            try:
+                await asyncio.wait_for(inner_loop.stop(), timeout=1.5)
+            except (asyncio.TimeoutError, Exception):
+                pass
         if self._mcp:
             try:
                 await asyncio.wait_for(self._mcp.stop(), timeout=2.0)
@@ -2171,6 +2510,21 @@ class EmbodiedAgent:
             await asyncio.wait_for(asyncio.to_thread(self._memory.close), timeout=1.0)
         except (asyncio.TimeoutError, Exception):
             pass
+        delegation_runner = getattr(self, "_delegation_runner", None)
+        if delegation_runner is not None:
+            try:
+                await asyncio.wait_for(delegation_runner.shutdown(), timeout=2.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
+        for closable in (
+            getattr(self, "_person_model", None),
+            getattr(self, "_commitment_store", None),
+        ):
+            if closable is not None:
+                try:
+                    closable.close()
+                except Exception:
+                    pass
 
     async def _stream_with_retry(
         self,
@@ -2231,565 +2585,162 @@ class EmbodiedAgent:
         """Run one conversation turn with the agent loop.
 
         inner_voice: agent's own desire/impulse (injected into system prompt, NOT a user message).
+
+        The deterministic pre-loop pipeline lives in
+        ``EmbodiedAgentHook.prepare_turn``; the loop body is the substrate
+        ``ReActLoop`` with the embodied behaviours (TAPE replan, coherence
+        retry, interrupt drain, say reminders) supplied by the hook's
+        lifecycle methods; finalisation (meta-gate repair, continuation
+        status, auto-say, commit) stays here.
         """
-        if not hasattr(self, "_schedule_rules"):
-            self._schedule_rules = parse_schedule_config(
-                Path.home() / ".familiar_ai" / "schedule.conf"
-            )
-        if not hasattr(self, "_mental_state_bus"):
-            user = getattr(self, "_current_user", None)
-            path = user.mental_state_path if user is not None else None
-            self._mental_state_bus = MentalStateBus(
-                **({} if path is None else {"path": path})
-            )
-        if not hasattr(self, "_appraisal"):
-            self._appraisal = AppraisalEngine()
-        if not hasattr(self, "_social_policy"):
-            self._social_policy = SocialPolicyEngine()
-        if not hasattr(self, "_heartbeat"):
-            self._heartbeat = HeartbeatRuntime(
-                memory=getattr(self, "_memory", None),
-                quiet_rules=self._schedule_rules,
-            )
-        if not hasattr(self, "_last_tool_error"):
-            self._last_tool_error = None
-        if not hasattr(self, "_tool_failure_streak"):
-            self._tool_failure_streak = 0
-        self._turn_count += 1
-        first_turn = self._turn_count == 1
-        memory_worker = getattr(self, "_memory_worker", None)
-        startup_phase = (
-            first_turn
-            or not self._memory.is_embedding_ready()
-            or (self._mcp is not None and not self._mcp.is_started)
-            or (memory_worker is not None and not memory_worker.is_running)
-        )
-        if on_phase:
-            on_phase("startup" if startup_phase else "thinking")
-
-        # Start MCP connections and memory worker.
-        # MCP is awaited so tools are available before the model is called.
-        if self._mcp and not self._mcp.is_started:
-            await self._mcp.start()
-        if memory_worker and not memory_worker.is_running:
-            await memory_worker.start()
-
-        is_desire_turn = bool(inner_voice and not user_input)
-        candidate_brief_turn = self._is_candidate_brief_turn(
-            user_input,
-            is_desire_turn=is_desire_turn,
-        )
-
-        # First turn: morning reconstruction — bridge yesterday's self to today's
-        morning_ctx = ""
-        routine_state = self._heartbeat.routine_state()
-        if first_turn:
-            self._relationship.record_session()
-            routine_notes = self._heartbeat.morning_reconstruction_notes()
-            if candidate_brief_turn:
-                morning_ctx = routine_notes or ""
-            else:
-                morning_ctx = await self._morning_reconstruction(desires=desires)
-                if routine_notes:
-                    morning_ctx = (
-                        f"{morning_ctx}\n\n{routine_notes}" if morning_ctx else routine_notes
-                    )
-
-        # Compact context if it has grown too large (GC-like: compress old turns)
-        if self._should_compact():
-            await self._compact_messages()
-
-        # Inject relevant past memories + emotional context (skip for desire-driven turns)
-        recall_n = 5 if self._post_compact else 3
-        self._post_compact = False  # consume the flag regardless
-        interoception_signal, interoception_pressure = self._collect_interoception()
-        prediction_signal = self._prediction.last_signal()
-        unfinished_business: list[dict] = []
-        if not candidate_brief_turn:
-            list_unfinished_business = getattr(self._memory, "list_unfinished_business_async", None)
-            unfinished_business = await _call_optional_async(
-                list_unfinished_business,
-                limit=3,
-                fallback=[],
-            )
-        companion_mood = "engaged"
-        working_memory: list[dict] = []
-        semantic_facts: list[dict] = []
-        behavior_policies: list[dict] = []
-        feelings: list[dict] = []
-        memories: list[dict] = []
-        recall_divergent = getattr(self._memory, "recall_divergent_async", None)
-        refresh_working = getattr(self._memory, "refresh_working_memory_async", None)
-        get_working = getattr(self._memory, "get_working_memory_async", None)
-        if not is_desire_turn:
-            if candidate_brief_turn:
-                companion_mood = self._cached_companion_mood or "engaged"
-                user_input_with_ctx = user_input
-                feelings_ctx = ""
-            else:
-                (
-                    memories,
-                    feelings,
-                    semantic_facts,
-                    behavior_policies,
-                    working_memory,
-                    companion_mood,
-                ) = await asyncio.gather(
-                    _call_optional_async(
-                        recall_divergent,
-                        user_input,
-                        n=recall_n,
-                        fallback=await self._memory.recall_async(user_input, n=recall_n),
-                    ),
-                    self._memory.recent_feelings_async(n=4),
-                    self._memory.recall_semantic_facts_async(user_input, n=3),
-                    self._memory.recall_behavior_policies_async(user_input, n=2),
-                    _call_optional_async(
-                        refresh_working,
-                        user_input,
-                        n=4,
-                        fallback=[],
-                    ),
-                    self._infer_companion_mood(user_input),
-                )
-                working_memory = await _call_optional_async(get_working, n=4, fallback=[])
-                temporal_ctx = self._cached_temporal_ctx
-                memory_parts = []
-                if memories:
-                    memory_parts.append(self._memory.format_for_context(memories))
-                if feelings:
-                    memory_parts.append(self._memory.format_feelings_for_context(feelings))
-                if semantic_facts:
-                    memory_parts.append(
-                        self._memory.format_semantic_facts_for_context(semantic_facts)
-                    )
-                if behavior_policies:
-                    memory_parts.append(
-                        self._memory.format_behavior_policies_for_context(behavior_policies)
-                    )
-                if temporal_ctx:
-                    memory_parts.append(temporal_ctx)
-                if memory_parts:
-                    user_input_with_ctx = user_input + "\n\n" + "\n\n".join(memory_parts)
-                else:
-                    user_input_with_ctx = user_input
-                feelings_ctx = (
-                    self._memory.format_feelings_for_context(feelings) if feelings else ""
-                )
-        else:
-            # Desire turn: no user context needed; feelings injected via interoception.
-            # inner_voice is injected into the system prompt with proper framing, so the user
-            # message only needs a neutral placeholder to satisfy the API's non-empty requirement.
-            feelings_ctx = ""
-            user_input_with_ctx = "好きにして〜"
-
-        if self._tool_failure_streak >= 2 and desires is not None:
-            desires.boost("self_protect", min(0.5, 0.15 * self._tool_failure_streak))
-
-        affect = self._appraisal.appraise(
-            AppraisalContext(
-                user_text=user_input,
-                companion_mood=companion_mood,
-                relationship_trust=self._relationship.trust,
-                relationship_intimacy=self._relationship.intimacy,
-                recalled_memory_summaries=tuple(m.get("summary", "") for m in memories[:3]),
-                prediction_signal=prediction_signal,
-                interoception=interoception_pressure,
-                blocked_drives=("tool_failure",) if self._tool_failure_streak else (),
-                unfinished_business_count=len(unfinished_business),
-            )
-        )
-        self._last_affect = affect
-
-        previous_response_hurt = any(
-            token in user_input.lower() for token in ("hurt", "傷つ", "前の返事", "嫌だった")
-        )
-        social_policy = self._social_policy.decide(
-            user_text=user_input,
-            affect=affect,
-            trust=self._relationship.trust,
-            intimacy=self._relationship.intimacy,
-            interoception=interoception_pressure,
-            previous_response_hurt=previous_response_hurt,
-        )
-        self._provisional_relationship_update(user_text=user_input, social_policy=social_policy)
-
-        if desires is not None:
-            context_affordances = {
-                "repair": 1.3 if social_policy.primary_act == "repair_attempt" else 1.0,
-                "care": 1.2
-                if social_policy.primary_act in {"fatigue_signal", "grief_signal", "venting"}
-                else 1.0,
-                "play": 1.15 if social_policy.primary_act == "playful_probe" else 0.9,
-                "attachment": 1.1 if affect.attachment_pull > 0.55 else 1.0,
-                "consolidate": 1.2 if unfinished_business else 1.0,
-                "self_protect": 1.2 if self._tool_failure_streak >= 2 else 1.0,
-            }
-            desires.update_context(
-                schedule_multiplier=routine_state.schedule_multiplier,
-                social_permission=max(0.2, 1.0 - affect.threat * 0.35),
-                energy_budget=max(0.2, 1.0 - interoception_pressure.need_rest * 0.6),
-                unfinished_business_bonus=min(0.4, len(unfinished_business) * 0.1),
-                context_affordances=context_affordances,
-            )
-            if social_policy.primary_act == "repair_attempt":
-                desires.boost("repair", 0.45)
-            if social_policy.primary_act == "delight_share":
-                desires.boost("attachment", 0.18)
-            if social_policy.primary_act in {"fatigue_signal", "grief_signal"}:
-                desires.boost("care", 0.22)
-            if affect.frustration > 0.45:
-                desires.boost("self_protect", 0.12)
-
-        brief_reply_turn = self._should_use_brief_reply_mode(
+        prep = await self._hook.prepare_turn(
             user_input=user_input,
-            social_policy=social_policy,
-            is_desire_turn=is_desire_turn,
-        )
-        # Desire turns are self-generated; fork the history so "…" and the model's response
-        # never pollute the main conversation thread.  All appends during the loop go to the
-        # fork; the finally block restores self.messages to the snapshot taken here.
-        _main_messages: list | None = None
-        if is_desire_turn:
-            _main_messages = self.messages
-            self.messages = list(self.messages)
-        if user_images:
-            make_img = getattr(self.backend, "make_image_block", None)
-            if callable(make_img):
-                content: str | list = [{"type": "text", "text": user_input_with_ctx}]
-                for b64 in user_images:
-                    content.append(make_img(b64))  # type: ignore[union-attr]
-            else:
-                content = user_input_with_ctx
-        else:
-            content = user_input_with_ctx
-        self.messages.append(self.backend.make_user_message(content))
-
-        # Use cached plan & workspace context from previous turn's post-response pipeline.
-        # These are computed in the background after each response and are ready for the
-        # next turn.  First turn uses empty defaults — morning_ctx dominates anyway.
-        plan_ctx = "" if brief_reply_turn else self._cached_plan_ctx
-        workspace_ctx = ""
-        continuity_ctx = ""
-        tape_backend = self._tape_backend()  # still needed for in-loop replanning
-        if not brief_reply_turn:
-            extra_coalitions = [affect.as_coalition()]
-            workspace_ctx = await self._gather_workspace_context(
-                desires=desires,
-                extra_coalitions=extra_coalitions,
-            )
-            if not workspace_ctx:
-                workspace_ctx = self._cached_workspace_ctx
-            continuity_ctx = self._self_continuity_context()
-            heartbeat_ctx = self._heartbeat.continuity_context_for_prompt()
-            if heartbeat_ctx:
-                continuity_ctx = (
-                    continuity_ctx
-                    + ("\n\n" if continuity_ctx else "")
-                    + "[Continuation]\n"
-                    + heartbeat_ctx
-                )
-            if unfinished_business:
-                continuity_ctx = (
-                    continuity_ctx
-                    + ("\n\n" if continuity_ctx else "")
-                    + "[Open unfinished business]\n"
-                    + "\n".join(f"- {item['summary'][:160]}" for item in unfinished_business[:3])
-                )
-            if plan_ctx:
-                logger.debug("TAPE plan (cached): %s", plan_ctx[:80])
-            if workspace_ctx:
-                logger.debug("GlobalWorkspace broadcast (cached): %s", workspace_ctx[:80])
-
-        mental_snapshot = self._build_mental_snapshot(
-            interoception_signal=interoception_signal,
-            affect=affect,
-            social_policy=social_policy,
-            working_memory=working_memory,
-            continuity_note="; ".join(item["summary"][:80] for item in unfinished_business[:2]),
+            on_phase=on_phase,
             desires=desires,
+            inner_voice=inner_voice,
         )
-        if brief_reply_turn:
-            mental_ctx = "\n\n".join(
-                part
-                for part in (
-                    self._format_social_policy_prompt(social_policy),
-                    self._brief_reply_prompt(),
-                )
-                if part
-            )
-        else:
-            mental_ctx = "\n\n".join(
-                part
-                for part in (
-                    self._mental_state_bus.summarize_recent_for_prompt(2),
-                    mental_snapshot.prompt_summary(),
-                    self._format_social_policy_prompt(social_policy),
-                )
-                if part
-            )
-
-        if on_phase and startup_phase:
-            on_phase("thinking")
-
-        camera_used = False
-        say_used = False
-        final_text = "(no response)"
-        non_say_streak = 0  # consecutive tool calls without say()
-        observation_action_name: str | None = None
-        observation_action_input: dict | None = None
-        pending_view_action_name: str | None = None
-        pending_view_action_input: dict | None = None
-        turn_tools = self._tool_defs_for_turn(brief_reply_mode=brief_reply_turn, excluded_tools=excluded_tools)
-        _brief_token_cap = (
-            _BRIEF_REPLY_MAX_TOKENS_THINKING
-            if getattr(self.backend, "emits_reasoning", False)
-            else _BRIEF_REPLY_MAX_TOKENS
-        )
-        turn_max_tokens = (
-            min(self.config.max_tokens, _brief_token_cap)
-            if brief_reply_turn
-            else self.config.max_tokens
-        )
-        turn_max_iterations = _BRIEF_REPLY_MAX_ITERATIONS if brief_reply_turn else MAX_ITERATIONS
-        backend_turn_snapshot = self._configure_backend_for_turn(brief_reply_mode=brief_reply_turn)
 
         try:
-            for i in range(turn_max_iterations):
-                logger.debug("Agent iteration %d", i + 1)
+            interrupt_source = (
+                _InterruptQueueSource(self, interrupt_queue)
+                if interrupt_queue is not None
+                else None
+            )
+            ctx = TurnContext(user_input=user_input, profile="neighbor")
+            ctx.metadata["prep"] = prep
+            ctx.metadata["interrupt_source"] = interrupt_source
 
-                result, raw_content = await self._stream_with_retry(
-                    system=self._system_prompt(
-                        feelings_ctx,
-                        morning_ctx,
-                        inner_voice=inner_voice,
-                        plan_ctx=plan_ctx,
-                        companion_mood=companion_mood,
-                        continuity_ctx=continuity_ctx,
-                        workspace_ctx=workspace_ctx,
-                        mental_ctx=mental_ctx,
-                    ),
-                    messages=self.messages,
-                    tools=turn_tools,
-                    max_tokens=turn_max_tokens,
-                    on_text=on_text,
-                )
-                self._last_context_tokens = result.input_tokens
-                self._session_input_tokens += result.input_tokens
-                self._session_output_tokens += result.output_tokens
+            # Timeouts go through _tool_timeout_seconds so the historical
+            # per-tool seam (and its test patches) stays authoritative —
+            # resolved for every tool on this turn's surface, not just the
+            # static override table.
+            turn_tool_names = {str(tool_def.get("name", "")) for tool_def in prep.turn_tools} | set(
+                _TOOL_TIMEOUTS
+            )
+            loop = ReActLoop(
+                backend=cast("RuntimeModelBackend", self.backend),
+                tools=cast(ToolRegistry, _TurnToolAdapter(self, prep.turn_tools)),
+                max_iterations=prep.turn_max_iterations,
+                default_tool_timeout=self._tool_timeout_seconds(""),
+                tool_timeouts={
+                    name: self._tool_timeout_seconds(name) for name in turn_tool_names if name
+                },
+                hooks=[self._hook],
+            )
+            run_result = await loop.run(
+                system=self._system_prompt(
+                    prep.feelings_ctx,
+                    prep.morning_ctx,
+                    inner_voice=prep.inner_voice,
+                    plan_ctx=prep.plan_ctx,
+                    companion_mood=prep.companion_mood,
+                    continuity_ctx=prep.continuity_ctx,
+                    workspace_ctx=prep.workspace_ctx,
+                    mental_ctx=prep.mental_ctx,
+                ),
+                messages=self.messages,
+                max_tokens=prep.turn_max_tokens,
+                on_text=on_text,
+                context=ctx,
+                interrupt_source=interrupt_source,
+                on_action=on_action,
+                on_image=on_image,
+                on_tool_result=on_tool_result,
+            )
 
-                # HOT layer: record this step metacognitively
-                _focus = self._attention_schema.current_focus()
-                if _focus is not None:
-                    _action = result.stop_reason
-                    if result.stop_reason == "tool_use" and result.tool_calls:
-                        _action = result.tool_calls[0].name
-                    _conf = min(1.0, result.output_tokens / max(1, self.config.max_tokens))
-                    self._meta_monitor.record_step(_focus, action=_action, confidence=_conf)
+            if run_result.stop_reason == "end_turn":
+                final_text = run_result.final_text
 
-                if result.stop_reason == "end_turn":
-                    self.messages.append(self.backend.make_assistant_message(result, raw_content))
-                    final_text = result.text or "(no response)"
-
-                    gate_method = getattr(self._meta_monitor, "gate_response", None)
-                    gate: MetaGateDecision | None = None
-                    if callable(gate_method):
-                        maybe_gate = gate_method(
+                # Identity backstop (tier 2): the in-loop retry is the primary
+                # defence; compute remaining violations once and let the
+                # meta-gate replace a still-violating reply outright.
+                identity = getattr(self, "_identity", None)
+                identity_violations: list[Any] = []
+                if identity is not None and final_text and final_text != "(no response)":
+                    try:
+                        identity_violations = identity.check_response(
                             user_text=user_input,
                             candidate_response=final_text,
-                            social_policy=social_policy,
-                            last_error=self._last_tool_error,
                         )
-                        if isinstance(maybe_gate, MetaGateDecision):
-                            gate = maybe_gate
-                    if gate is not None and gate.needs_repair and gate.repaired_response:
-                        final_text = gate.repaired_response
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Identity response check failed: %s", exc)
 
-                    continuation_status = "DONE"
-                    status_match = re.search(
-                        r"(?:^|\n)(DONE|CONTINUE:[^\n]+|DEFER:[^\n]+)\s*$", final_text
+                gate_method = getattr(self._meta_monitor, "gate_response", None)
+                gate: MetaGateDecision | None = None
+                if callable(gate_method):
+                    maybe_gate = gate_method(
+                        user_text=user_input,
+                        candidate_response=final_text,
+                        social_policy=prep.social_policy,
+                        last_error=self._last_tool_error,
+                        identity_violations=identity_violations or None,
                     )
-                    if status_match:
-                        continuation_status = status_match.group(1)
-                        stripped = final_text[: status_match.start(1)].rstrip()
-                        if not stripped:
-                            logger.warning(
-                                "Status token '%s' stripped entire response — model returned no visible text",
-                                continuation_status,
-                            )
-                        final_text = stripped or "(no response)"
-                    self._heartbeat.apply_status(continuation_status)
+                    if isinstance(maybe_gate, MetaGateDecision):
+                        gate = maybe_gate
+                if gate is not None and gate.needs_repair and gate.repaired_response:
+                    final_text = gate.repaired_response
 
-                    # Coherence gate: ask utility backend whether the response contains
-                    # a logical error. Only fires once to avoid infinite loops.
-                    _coherence_enabled = os.environ.get("FAMILIAR_COHERENCE_CHECK", "").strip() in (
-                        "1",
-                        "true",
-                        "yes",
-                    )
-                    if _coherence_enabled and not getattr(self, "_coherence_retried", False):
-                        violation = await self._check_response_coherence(final_text)
-                        if violation:
-                            self._coherence_retried = True
-                            self.messages.append(
-                                self.backend.make_user_message(
-                                    f"[SELF-CHECK] Your previous response has a problem: "
-                                    f"{violation}. Please correct it and respond again."
-                                )
-                            )
-                            say_used = False
-                            continue
-
-                    self._coherence_retried = False
-
-                    # Auto-say: if the model wrote text but never called say(), speak it aloud.
-                    _auto_say_enabled = getattr(self.config, "auto_say", False)
-                    if (
-                        _auto_say_enabled
-                        and self._tts
-                        and not say_used
-                        and final_text
-                        and final_text != "(no response)"
-                    ):
-                        if on_action:
-                            on_action("say", {"text": final_text})
-                        await self._tts.call("say", {"text": final_text})
-
-                    if final_text and final_text != "(no response)":
+                # A violation — even a repaired one — leaves dissonance behind
+                # and raises the drive to reflect on it later.
+                if identity is not None and identity_violations:
+                    top = identity_violations[0]
+                    try:
+                        identity.record_violation(top, turn_index=self._turn_count)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Identity violation record failed: %s", exc)
+                    if desires is not None:
+                        desires.boost("identity_coherence", 0.3 + 0.4 * top.severity)
+                    concerns = getattr(self, "_concerns", None)
+                    if concerns is not None:
                         try:
-                            self._mental_state_bus.append(mental_snapshot)
-                        except Exception as exc:  # noqa: BLE001
-                            logger.warning("Failed to persist mental state snapshot: %s", exc)
-                        self._spawn_background_task(
-                            self._run_post_response_pipeline(
-                                user_input=user_input,
-                                final_text=final_text,
-                                camera_used=camera_used,
-                                observation_action_name=observation_action_name,
-                                observation_action_input=observation_action_input,
-                                companion_mood=companion_mood,
-                                is_desire_turn=is_desire_turn,
-                                desires=desires,
-                            ),
-                            name="post-response-pipeline",
-                        )
-
-                    return final_text
-
-                if result.stop_reason == "tool_use":
-                    collected: list[tuple[str, list[str]]] = []
-                    for tc in result.tool_calls:
-                        if tc.name == "see":
-                            camera_used = True
-                            if pending_view_action_name is not None:
-                                observation_action_name = pending_view_action_name
-                                observation_action_input = dict(pending_view_action_input or {})
-                            else:
-                                observation_action_name = "see"
-                                observation_action_input = dict(tc.input)
-                            pending_view_action_name = None
-                            pending_view_action_input = None
-                        elif tc.name in {"look", "walk"}:
-                            pending_view_action_name = tc.name
-                            pending_view_action_input = dict(tc.input)
-                        if tc.name == "say":
-                            say_used = True
-                            non_say_streak = 0
-                        else:
-                            non_say_streak += 1
-                        logger.info("Tool call: %s(%s)", tc.name, tc.input)
-                        if on_action:
-                            on_action(tc.name, tc.input)
-
-                        timeout_s = self._tool_timeout_seconds(tc.name)
-                        try:
-                            text, images = await asyncio.wait_for(
-                                self._execute_tool(tc.name, tc.input),
-                                timeout=timeout_s,
+                            concerns.activate(
+                                f"Something I hold was strained: {top.statement[:80]}",
+                                category="identity",
+                                intensity=0.4 + 0.5 * top.severity,
+                                turn_index=self._turn_count,
                             )
-                            self._last_tool_error = None
-                            self._tool_failure_streak = 0
-                        except asyncio.TimeoutError:
-                            logger.warning("Tool %s timed out after %.1fs", tc.name, timeout_s)
-                            text, images = (
-                                f"Tool timeout: {tc.name} exceeded {timeout_s:.1f}s.",
-                                [],
-                            )
-                            self._last_tool_error = text
-                            self._tool_failure_streak += 1
-                        except Exception as e:
-                            logger.warning("Tool %s failed: %s", tc.name, e)
-                            text, images = f"Tool error: {e}", []
-                            self._last_tool_error = str(e)
-                            self._tool_failure_streak += 1
+                        except Exception:  # noqa: BLE001
+                            pass
 
-                        if (
-                            tape_backend
-                            and plan_ctx
-                            and await check_plan_blocked(
-                                tape_backend, plan_ctx, tc.name, tc.input, text
-                            )
-                        ):
-                            logger.info("TAPE: plan blocked after %s, replanning...", tc.name)
-                            replan = await generate_replan(
-                                tape_backend, plan_ctx, tc.name, tc.input, text
-                            )
-                            if replan:
-                                text = f"{text}\n\n[ADAPTIVE REPLAN] {replan}"
-                                logger.info("TAPE replan: %s", replan[:80])
+                continuation_status = "DONE"
+                status_match = re.search(
+                    r"(?:^|\n)(DONE|CONTINUE:[^\n]+|DEFER:[^\n]+)\s*$", final_text
+                )
+                if status_match:
+                    continuation_status = status_match.group(1)
+                    final_text = final_text[: status_match.start(1)].rstrip() or "(no response)"
+                self._heartbeat.apply_status(continuation_status)
 
-                        logger.info("Tool result: %s", text[:100])
-                        if on_image is not None:
-                            for img in images:
-                                on_image(img)
-                        if on_tool_result is not None:
-                            on_tool_result(tc.name, tc.input, text)
-                        collected.append((text, images))
+                self._coherence_retried = False
 
-                    self.messages.append(self.backend.make_assistant_message(result, raw_content))
-                    tool_msgs = self.backend.make_tool_results(result.tool_calls, collected)
-                    self.messages.append(tool_msgs)
+                # Auto-say: if the model wrote text but never called say(), speak it aloud.
+                _auto_say_enabled = getattr(self.config, "auto_say", False)
+                if (
+                    _auto_say_enabled
+                    and self._tts
+                    and not prep.say_used
+                    and final_text
+                    and final_text != "(no response)"
+                ):
+                    if on_action:
+                        on_action("say", {"text": final_text})
+                    await self._tts.call("say", {"text": final_text})
 
-                    if interrupt_queue is not None and not interrupt_queue.empty():
-                        interrupts = self._drain_interrupt_queue(interrupt_queue)
-                        if interrupts:
-                            head = " / ".join(interrupts[:3])
-                            if len(interrupts) > 3:
-                                head += f" (+{len(interrupts) - 3} more)"
-                            logger.debug("Consumed %d queued interrupts", len(interrupts))
-                            self.messages.append(
-                                self.backend.make_user_message(
-                                    f"[User interrupted x{len(interrupts)}]: {head}. "
-                                    "Respond to this directly with say() now."
-                                )
-                            )
-                            non_say_streak = 0
+                await self._hook.commit_after_end_turn(
+                    prep=prep,
+                    user_input=user_input,
+                    final_text=final_text,
+                    is_desire_turn=prep.is_desire_turn,
+                    desires=desires,
+                )
 
-                    elif non_say_streak >= 2 and not say_used:
-                        self.messages.append(
-                            self.backend.make_user_message(
-                                "REMINDER: Writing text is silent. You MUST call say() to be heard. "
-                                "Call say() NOW. Keep it to 1-2 sentences."
-                            )
-                        )
-                        non_say_streak = 0
+                return final_text
 
-                    elif say_used and non_say_streak >= 2:
-                        self.messages.append(
-                            self.backend.make_user_message(
-                                "You already spoke. Stop exploring and end your turn now."
-                            )
-                        )
-                        non_say_streak = 0
-
-                    continue
-
-                logger.warning("Unexpected stop_reason: %s", result.stop_reason)
-                break
-
+            # max_iterations (or an unexpected stop reason): force a final,
+            # tool-free response so the turn always ends with words.
             logger.warning(
                 "Reached max iterations (%d). Forcing final response.",
-                turn_max_iterations,
+                prep.turn_max_iterations,
             )
             self.messages.append(
                 self.backend.make_user_message(
@@ -2798,22 +2749,20 @@ class EmbodiedAgent:
             )
             result, _ = await self._stream_with_retry(
                 system=self._system_prompt(
-                    morning_ctx=morning_ctx,
-                    plan_ctx=plan_ctx,
-                    continuity_ctx=continuity_ctx,
-                    workspace_ctx=workspace_ctx,
-                    mental_ctx=mental_ctx,
+                    morning_ctx=prep.morning_ctx,
+                    plan_ctx=prep.plan_ctx,
+                    continuity_ctx=prep.continuity_ctx,
+                    workspace_ctx=prep.workspace_ctx,
+                    mental_ctx=prep.mental_ctx,
                 ),
                 messages=self.messages,
                 tools=[],
-                max_tokens=turn_max_tokens,
+                max_tokens=prep.turn_max_tokens,
                 on_text=on_text,
             )
             return result.text or "(max iterations reached)"
         finally:
-            self._restore_backend_after_turn(backend_turn_snapshot)
-            if _main_messages is not None:
-                self.messages = _main_messages
+            self._restore_backend_after_turn(prep.backend_turn_snapshot)
 
     @property
     def stt(self) -> STTTool | None:

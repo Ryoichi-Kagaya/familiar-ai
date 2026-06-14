@@ -224,6 +224,20 @@ class AgentConfig:
             or os.environ.get("FAMILIAR_AUTO", "").strip().lower() in ("1", "true", "yes")
         )
     )
+    # Proactive commitment reminders are a baseline neighbor behaviour: on by
+    # default and INDEPENDENT of auto_desire (you can silence idle musings yet
+    # still be reminded). Disable with FAMILIAR_PROACTIVE_REMINDERS=0.
+    proactive_reminders: bool = field(
+        default_factory=lambda: _bool_env("FAMILIAR_PROACTIVE_REMINDERS", default=True)
+    )
+    # Phase 2 inner loop: cheap workspace cycling between turns. Default OFF —
+    # the agent's idle behaviour is byte-identical unless this is enabled.
+    inner_loop: bool = field(
+        default_factory=lambda: _bool_env("FAMILIAR_INNER_LOOP", default=False)
+    )
+    inner_loop_interval: float = field(
+        default_factory=lambda: float(os.environ.get("FAMILIAR_INNER_LOOP_INTERVAL", "20") or "20")
+    )
 
     max_tokens: int = 4096
     camera: CameraConfig = field(default_factory=CameraConfig)
