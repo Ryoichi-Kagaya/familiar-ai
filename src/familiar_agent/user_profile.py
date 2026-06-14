@@ -28,6 +28,7 @@ class UserProfile:
     id: str
     name: str
     dir: Path
+    telegram_id: int | None = None
 
     @property
     def mental_state_path(self) -> Path:
@@ -76,6 +77,7 @@ class UserRegistry:
             id=uid,
             name=entry.get("name") or _default_display_name(),
             dir=self._ensure_dir(uid),
+            telegram_id=entry.get("telegram_id"),
         )
 
     # ── public API ────────────────────────────────────────────────────
@@ -109,6 +111,32 @@ class UserRegistry:
                 self._write(entries)
                 return self._to_profile(e)
         entry: dict = {"id": user_id, "name": name}
+        entries.append(entry)
+        self._write(entries)
+        return self._to_profile(entry)
+
+    def get_by_telegram_id(self, telegram_id: int) -> UserProfile | None:
+        """Return the profile linked to this Telegram user ID, or None."""
+        for e in self._read():
+            if e.get("telegram_id") == telegram_id:
+                return self._to_profile(e)
+        return None
+
+    def link_telegram(self, user_id: str, telegram_id: int) -> UserProfile:
+        """Associate a Telegram user ID with an existing user profile."""
+        user_id = user_id.strip()
+        entries = self._read()
+        # Clear any existing mapping for this telegram_id first
+        for e in entries:
+            if e.get("telegram_id") == telegram_id and e["id"] != user_id:
+                e.pop("telegram_id", None)
+        for e in entries:
+            if e["id"] == user_id:
+                e["telegram_id"] = telegram_id
+                self._write(entries)
+                return self._to_profile(e)
+        # user_id not yet registered — create it
+        entry: dict = {"id": user_id, "name": _default_display_name(), "telegram_id": telegram_id}
         entries.append(entry)
         self._write(entries)
         return self._to_profile(entry)

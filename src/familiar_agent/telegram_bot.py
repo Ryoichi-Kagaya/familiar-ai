@@ -18,6 +18,8 @@ import base64
 import logging
 import os
 
+from .user_profile import UserRegistry
+
 logger = logging.getLogger(__name__)
 
 _MAX_MSG_LEN = 4096  # Telegram hard limit
@@ -58,11 +60,21 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
     else:
         logger.info("Telegram: no ID allowlist — any user can chat")
 
+    registry = UserRegistry()
+
     # Serialize all agent turns so history stays consistent
     _turn_lock = asyncio.Lock()
 
     def _is_allowed(user_id: int) -> bool:
         return not allowed_ids or user_id in allowed_ids
+
+    def _resolve_speaker(tg_user) -> tuple[str, str | None]:
+        """Return (display_name, user_profile_id_or_None) for a Telegram user."""
+        profile = registry.get_by_telegram_id(tg_user.id)
+        if profile:
+            return profile.name, profile.id
+        # Fall back to Telegram first_name; no profile switch
+        return (tg_user.first_name or str(tg_user.id)), None
 
     async def _cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.effective_user is None or not _is_allowed(update.effective_user.id):
@@ -85,10 +97,55 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
         if update.message is None:
             return
         await update.message.reply_text(
-            "/start — 挨拶\n"
-            "/clear — 会話履歴をリセット\n"
-            "/help  — このメッセージ"
+            "/start            — 挨拶\n"
+            "/clear            — 会話履歴をリセット\n"
+            "/register <id>    — このTelegramアカウントをユーザープロファイルに紐付け\n"
+            "/whoami           — 現在の紐付け状況を確認\n"
+            "/help             — このメッセージ"
         )
+
+    async def _cmd_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Link the sender's Telegram ID to a users.json profile by slug."""
+        if update.effective_user is None or not _is_allowed(update.effective_user.id):
+            return
+        if update.message is None:
+            return
+        args = (context.args or [])
+        if not args:
+            await update.message.reply_text(
+                "使い方: /register <user_id>\n"
+                "例: /register default  または  /register honoruru"
+            )
+            return
+        user_id_slug = args[0].strip().lower()
+        tg_id = update.effective_user.id
+        try:
+            profile = registry.link_telegram(user_id_slug, tg_id)
+        except Exception:
+            logger.exception("Failed to link Telegram ID %s to profile %s", tg_id, user_id_slug)
+            await update.message.reply_text("登録に失敗しました。")
+            return
+        logger.info("Telegram: linked %d → profile '%s' (%s)", tg_id, profile.id, profile.name)
+        await update.message.reply_text(
+            f"紐付けました: Telegram ID {tg_id} → {profile.name} ({profile.id})"
+        )
+
+    async def _cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.effective_user is None or not _is_allowed(update.effective_user.id):
+            return
+        if update.message is None:
+            return
+        tg_id = update.effective_user.id
+        profile = registry.get_by_telegram_id(tg_id)
+        if profile:
+            await update.message.reply_text(
+                f"Telegram ID {tg_id} → {profile.name} ({profile.id})"
+            )
+        else:
+            await update.message.reply_text(
+                f"Telegram ID {tg_id} はまだ紐付けされていません。\n"
+                "/register <user_id> で登録してください。"
+            )
 
     async def _run_turn(
         update: Update,
@@ -96,6 +153,10 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
         images_b64: list[str] | None = None,
     ) -> None:
         """Execute one agent turn and send the response back."""
+        tg_user = update.effective_user
+        speaker_name, profile_id = _resolve_speaker(tg_user) if tg_user else ("unknown", None)
+        prefixed_input = f"[{speaker_name}]: {user_input}"
+
         await update.message.chat.send_action("typing")  # type: ignore[union-attr]
 
         chunks: list[str] = []
@@ -104,9 +165,11 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
             chunks.append(chunk)
 
         async with _turn_lock:
+            if profile_id:
+                await agent.switch_user(profile_id)
             try:
                 await agent.run(
-                    user_input,
+                    prefixed_input,
                     on_text=on_text,
                     desires=desires,
                     user_images=images_b64,
@@ -171,6 +234,8 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
     app.add_handler(CommandHandler("start", _cmd_start))
     app.add_handler(CommandHandler("clear", _cmd_clear))
     app.add_handler(CommandHandler("help", _cmd_help))
+    app.add_handler(CommandHandler("register", _cmd_register))
+    app.add_handler(CommandHandler("whoami", _cmd_whoami))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, _handle_photo))
 
