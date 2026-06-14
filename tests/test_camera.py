@@ -35,6 +35,7 @@ def _make_camera_tool(host: str = "192.168.1.100"):
         cam._ptz = None
         cam._profile_token = None
         cam._ptz_connect_failed_at = 0.0
+        cam._ptz_lock = None
         cam._cap = None
         cam._last_frame = None
         cam._running = False
@@ -174,7 +175,7 @@ async def test_call_look_delegates_to_move():
     """call('look', ...) delegates to move() and returns its result."""
     cam = _make_camera_tool()
 
-    async def _fake_move(direction, degrees=30):
+    async def _fake_move(direction, degrees=30, *, gui: bool = False):
         return f"Moved {direction} by {degrees}°"
 
     cam.move = _fake_move

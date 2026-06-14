@@ -55,7 +55,7 @@ def test_main_gui_path_defers_agent_construction(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_initialize_agent_builds_agent_in_background(monkeypatch) -> None:
     class _FakeAgent:
-        def __init__(self, config) -> None:
+        def __init__(self, config, **_kw) -> None:
             self.config = config
             self.is_embedding_ready = True
             self.stt = None
@@ -64,6 +64,7 @@ async def test_initialize_agent_builds_agent_in_background(monkeypatch) -> None:
 
     win = FamiliarWindow.__new__(FamiliarWindow)
     win._config = SimpleNamespace(agent_name="Yukine", companion_name="Kota")
+    win._shared_camera = None
     win._agent = None
     win._desires = object()
     win._agent_ready = False

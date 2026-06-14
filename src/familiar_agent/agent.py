@@ -544,7 +544,13 @@ class _InterruptQueueSource:
 class EmbodiedAgent:
     """Real-world exploration agent using a pluggable LLM backend."""
 
-    def __init__(self, config: AgentConfig):
+    def __init__(
+        self,
+        config: AgentConfig,
+        *,
+        shared_camera: "CameraTool | None" = None,
+        camera_gui_priority: bool = False,
+    ):
         self.config = config
         self.backend = create_backend(config)
         self._utility_backend = create_utility_backend(config) or self.backend
@@ -559,7 +565,8 @@ class EmbodiedAgent:
         self._post_compact: bool = False
         self._coherence_retried: bool = False
 
-        self._camera: CameraTool | None = None
+        self._camera: CameraTool | None = shared_camera
+        self._camera_gui_priority = camera_gui_priority
         self._mobility: MobilityTool | None = None
         self._tts: TTSTool | None = None
         self._stt: STTTool | None = None
@@ -907,8 +914,8 @@ class EmbodiedAgent:
 
     def _init_tools(self) -> None:
         cam = self.config.camera
-        # Allow camera if host is present, even without password (e.g. local RTSP)
-        if cam.host:
+        # Allow camera if host is present and not already provided via shared_camera.
+        if cam.host and self._camera is None:
             self._camera = CameraTool(
                 cam.host,
                 cam.username,
@@ -981,7 +988,7 @@ class EmbodiedAgent:
                 )
 
         if self._camera:
-            registry.register(CameraCapability(self._camera, before_call=_record_embodied_action))
+            registry.register(CameraCapability(self._camera, before_call=_record_embodied_action, gui_priority=self._camera_gui_priority))
         if self._mobility:
             registry.register(MobilityCapability(self._mobility))
         if self._tts:

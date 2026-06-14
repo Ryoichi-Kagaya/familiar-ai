@@ -26,7 +26,7 @@ class _FakeLegacyTool:
     def get_tool_definitions(self) -> list[dict[str, Any]]:
         return self._defs
 
-    async def call(self, name: str, tool_input: dict[str, Any]) -> tuple[str, str | None]:
+    async def call(self, name: str, tool_input: dict[str, Any], **_kw: Any) -> tuple[str, str | None]:
         self.last_call = (name, tool_input)
         return f"ok:{name}", None
 

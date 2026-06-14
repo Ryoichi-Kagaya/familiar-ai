@@ -911,9 +911,10 @@ def _set_combo(combo: QComboBox, value: str) -> None:
 class FamiliarWindow(QMainWindow):
     """Main application window."""
 
-    def __init__(self, config: "AgentConfig", desires: "DesireSystem") -> None:
+    def __init__(self, config: "AgentConfig", desires: "DesireSystem", *, shared_camera: "Any | None" = None) -> None:
         super().__init__()
         self._config = config
+        self._shared_camera = shared_camera
         self._agent: EmbodiedAgent | None = None
         self._desires = desires
         self._agent_display_name = (config.agent_name or "Agent").strip() or "Agent"
@@ -1919,7 +1920,7 @@ class FamiliarWindow(QMainWindow):
             def _build_agent():
                 from .agent import EmbodiedAgent  # noqa: PLC0415
 
-                return EmbodiedAgent(config)
+                return EmbodiedAgent(config, shared_camera=self._shared_camera, camera_gui_priority=True)
 
             agent = await asyncio.to_thread(_build_agent)
             self._agent = agent
@@ -2033,6 +2034,8 @@ def run_gui(
     config: "AgentConfig",
     desires: "DesireSystem",
     background_coros: "list[Any] | None" = None,
+    *,
+    shared_camera: "Any | None" = None,
 ) -> None:
     """Launch the PySide6 GUI with qasync event loop.
 
@@ -2054,7 +2057,7 @@ def run_gui(
     loop = qasync.QEventLoop(qt_app)
     asyncio.set_event_loop(loop)
 
-    window = FamiliarWindow(config, desires)
+    window = FamiliarWindow(config, desires, shared_camera=shared_camera)
     if icon_path:
         icon = QIcon(str(icon_path))
         if not icon.isNull():

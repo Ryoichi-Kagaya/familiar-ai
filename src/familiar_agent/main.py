@@ -630,20 +630,30 @@ def main() -> None:
                 print("Warning: --telegram flag set but TELEGRAM_BOT_TOKEN is not set. Starting GUI only.")
             else:
                 from .telegram_bot import run_telegram_bot
+                from .tools.camera import CameraTool, _PriorityPTZLock
 
-                # GUI has its own internal agent; Telegram gets a separate one
-                # so the two conversations stay independent.
-                # Mute TTS and disable camera — no audio/video needed for remote text chat,
-                # and two agents sharing one RTSP stream causes the second to fail.
+                # Both agents share one CameraTool to avoid dual RTSP connections.
+                # A shared _PriorityPTZLock serialises PTZ moves; GUI wins ties.
                 import dataclasses as _dc
-                tg_config = _dc.replace(
-                    config,
-                    tts=_dc.replace(config.tts, volume=0.0),
-                    camera=_dc.replace(config.camera, host=""),
-                )
-                tg_agent = EmbodiedAgent(tg_config)
+                shared_camera = None
+                if config.camera.host:
+                    cam = config.camera
+                    ptz_lock = _PriorityPTZLock()
+                    shared_camera = CameraTool(
+                        cam.host, cam.username, cam.password, cam.port,
+                        preview=cam.preview,
+                        ptz_host=cam.ptz_host,
+                        ptz_username=cam.ptz_username,
+                        ptz_password=cam.ptz_password,
+                        ptz_port=cam.ptz_port,
+                        ptz_lock=ptz_lock,
+                    )
+                tg_config = _dc.replace(config, tts=_dc.replace(config.tts, volume=0.0))
+                tg_agent = EmbodiedAgent(tg_config, shared_camera=shared_camera, camera_gui_priority=False)
                 tg_desires = DesireSystem(companion_name=config.companion_name)
                 bg.append(run_telegram_bot(token, tg_agent, tg_desires))
+                run_gui(config, desires, background_coros=bg, shared_camera=shared_camera)
+                return
         run_gui(config, desires, background_coros=bg or None)
     elif use_telegram:
         token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -653,11 +663,7 @@ def main() -> None:
         from .telegram_bot import run_telegram_bot
 
         import dataclasses as _dc
-        tg_config = _dc.replace(
-            config,
-            tts=_dc.replace(config.tts, volume=0.0),
-            camera=_dc.replace(config.camera, host=""),
-        )
+        tg_config = _dc.replace(config, tts=_dc.replace(config.tts, volume=0.0))
         agent = EmbodiedAgent(tg_config)
         desires = DesireSystem(companion_name=config.companion_name)
         try:

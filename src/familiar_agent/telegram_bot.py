@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import logging
 import os
 
@@ -160,9 +161,13 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
         await update.message.chat.send_action("typing")  # type: ignore[union-attr]
 
         chunks: list[str] = []
+        captured_images: list[str] = []
 
         def on_text(chunk: str) -> None:
             chunks.append(chunk)
+
+        def on_image(b64: str) -> None:
+            captured_images.append(b64)
 
         async with _turn_lock:
             if profile_id:
@@ -171,6 +176,7 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
                 await agent.run(
                     prefixed_input,
                     on_text=on_text,
+                    on_image=on_image,
                     desires=desires,
                     user_images=images_b64,
                 )
@@ -180,6 +186,15 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
                     "エラーが発生しました。ログを確認してください。"
                 )
                 return
+
+        for b64 in captured_images:
+            try:
+                raw = base64.b64decode(b64)
+                bio = io.BytesIO(raw)
+                bio.name = "capture.jpg"
+                await update.message.reply_photo(bio)  # type: ignore[union-attr]
+            except Exception:
+                logger.exception("Failed to send camera capture to Telegram")
 
         response = "".join(chunks).strip()
         if not response:

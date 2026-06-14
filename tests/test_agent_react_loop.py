@@ -111,6 +111,7 @@ def _make_agent(*, with_tts: bool = False, with_camera: bool = False, with_mcp: 
     agent._art_critique_tool = art_critique
 
     agent._camera = None
+    agent._camera_gui_priority = False
     agent._mobility = None
     agent._mcp = None
 
