@@ -16,6 +16,7 @@ from .agent import EmbodiedAgent
 from .bootstrap import load_app_bootstrap
 from .config import AgentConfig
 from .desires import DesireSystem
+from .drive_executor import DriveActionExecutor
 from .realtime_stt_session import create_realtime_stt_session
 from .setup import run_cli_setup_wizard
 from ._i18n import BANNER, _t
@@ -23,7 +24,6 @@ from ._ui_helpers import (
     DESIRE_COOLDOWN,
     IDLE_CHECK_INTERVAL,
     commitment_reminder_prompt,
-    desire_tick_prompt,
     format_action as _format_action,
     should_fire_commitment_reminder,
     should_fire_idle_desire,
@@ -86,6 +86,7 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
         print(f"\r  {_t('initializing_done')} ({int(time.time() - start_init)}s)          ")
 
     loop = asyncio.get_event_loop()
+    executor = DriveActionExecutor(agent, desires)
 
     # Persistent input queue — stdin reader runs as a background task
     # so user input is captured even while the agent is busy.
@@ -225,25 +226,24 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                     if item:
                         pending_items.append(item)
 
-                tick = desire_tick_prompt(desires, pending_items)
-                if tick:
-                    desire_name, prompt, _pending = tick
+                dominant = desires.get_dominant()
+                if dominant and not pending_items:
+                    desire_name, _ = dominant
                     try:
                         murmur = _t(f"desire_{desire_name}")
                     except KeyError:
                         murmur = _t("desire_default")
                     print(f"\n{murmur}\n")
-
-                    await agent.run(
-                        "",
+                    result = await executor.dispatch(
+                        desire_name,
+                        last_interaction_time=last_interaction_time,
                         on_action=on_action,
                         on_text=on_text,
-                        desires=desires,
-                        inner_voice=prompt,
                         interrupt_queue=input_queue,
                     )
-                    desires.satisfy(desire_name)
-                    desires.curiosity_target = None
+                    if result.fired:
+                        desires.curiosity_target = None
+                        last_interaction_time = time.time()
                 elif pending_items:
                     # Had pending input but no desire — process it as user message
                     for msg in pending_items:
