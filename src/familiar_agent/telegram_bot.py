@@ -51,8 +51,7 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
         )
     except ImportError as exc:
         raise RuntimeError(
-            "python-telegram-bot is not installed. "
-            "Run: uv pip install 'familiar-ai[telegram]'"
+            "python-telegram-bot is not installed. Run: uv pip install 'familiar-ai[telegram]'"
         ) from exc
 
     allowed_ids = _parse_allowed_ids()
@@ -111,11 +110,10 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
             return
         if update.message is None:
             return
-        args = (context.args or [])
+        args = context.args or []
         if not args:
             await update.message.reply_text(
-                "使い方: /register <user_id>\n"
-                "例: /register default  または  /register honoruru"
+                "使い方: /register <user_id>\n例: /register default  または  /register honoruru"
             )
             return
         user_id_slug = args[0].strip().lower()
@@ -139,9 +137,7 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
         tg_id = update.effective_user.id
         profile = registry.get_by_telegram_id(tg_id)
         if profile:
-            await update.message.reply_text(
-                f"Telegram ID {tg_id} → {profile.name} ({profile.id})"
-            )
+            await update.message.reply_text(f"Telegram ID {tg_id} → {profile.name} ({profile.id})")
         else:
             await update.message.reply_text(
                 f"Telegram ID {tg_id} はまだ紐付けされていません。\n"
@@ -160,11 +156,14 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
 
         await update.message.chat.send_action("typing")  # type: ignore[union-attr]
 
-        chunks: list[str] = []
+        say_chunks: list[str] = []
         captured_images: list[str] = []
 
-        def on_text(chunk: str) -> None:
-            chunks.append(chunk)
+        def on_action(name: str, args: dict) -> None:
+            if name == "say":
+                t = args.get("text", "")
+                if isinstance(t, str) and t:
+                    say_chunks.append(t)
 
         def on_image(b64: str) -> None:
             captured_images.append(b64)
@@ -173,13 +172,16 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
             if profile_id:
                 await agent.switch_user(profile_id)
             try:
-                await agent.run(
-                    prefixed_input,
-                    on_text=on_text,
-                    on_image=on_image,
-                    desires=desires,
-                    user_images=images_b64,
-                )
+                final_text = (
+                    await agent.run(
+                        prefixed_input,
+                        on_action=on_action,
+                        on_image=on_image,
+                        desires=desires,
+                        user_images=images_b64,
+                    )
+                    or ""
+                ).strip()
             except Exception:
                 logger.exception("Agent error during Telegram turn")
                 await update.message.reply_text(  # type: ignore[union-attr]
@@ -196,7 +198,14 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
             except Exception:
                 logger.exception("Failed to send camera capture to Telegram")
 
-        response = "".join(chunks).strip()
+        # Prefer say() calls (spoken output); fall back to the final text response.
+        if say_chunks:
+            response = " ".join(say_chunks).strip()
+        elif final_text and final_text != "(no response)":
+            response = final_text
+        else:
+            response = ""
+
         if not response:
             return
 
