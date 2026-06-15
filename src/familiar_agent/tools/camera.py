@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import heapq
 import logging
 import os
 import threading
@@ -22,6 +23,43 @@ logger = logging.getLogger(__name__)
 CAPTURE_DIR = Path.home() / ".familiar_ai" / "captures"
 
 
+class _PriorityPTZLock:
+    """Serializes concurrent PTZ moves: first-come-first-served, GUI wins ties.
+
+    Priority 0 = GUI (high priority), 1 = Telegram/other (low priority).
+    Within the same priority, arrival order (seq) decides.
+    """
+
+    def __init__(self) -> None:
+        self._locked = False
+        # heap entries: (priority, seq, Future)
+        self._waiters: list[tuple[int, int, asyncio.Future[None]]] = []
+        self._seq = 0
+
+    async def acquire(self, *, gui: bool = False) -> None:
+        if not self._locked:
+            self._locked = True
+            return
+        loop = asyncio.get_event_loop()
+        fut: asyncio.Future[None] = loop.create_future()
+        heapq.heappush(self._waiters, (0 if gui else 1, self._seq, fut))
+        self._seq += 1
+        try:
+            await fut
+        except asyncio.CancelledError:
+            self._waiters = [(p, s, f) for p, s, f in self._waiters if f is not fut]
+            heapq.heapify(self._waiters)
+            raise
+
+    def release(self) -> None:
+        while self._waiters:
+            _, _, fut = heapq.heappop(self._waiters)
+            if not fut.done():
+                fut.set_result(None)
+                return
+        self._locked = False
+
+
 class CameraTool:
     """Controls a camera via OpenCV (RTSP, USB, file) and optionally via ONVIF (PTZ)."""
 
@@ -37,6 +75,7 @@ class CameraTool:
         ptz_username: str | None = None,
         ptz_password: str | None = None,
         ptz_port: int | None = None,
+        ptz_lock: _PriorityPTZLock | None = None,
     ):
         self.host = host
         self.username = username
@@ -52,6 +91,7 @@ class CameraTool:
         self._ptz: Any = None
         self._profile_token: str | None = None
         self._ptz_connect_failed_at: float = 0.0
+        self._ptz_lock = ptz_lock
 
         self._cap: cv2.VideoCapture | None = None
         self._last_frame: Any = None
@@ -274,9 +314,11 @@ class CameraTool:
             logger.warning("Error processing frame: %s", e)
             return None, None
 
-    async def move(self, direction: str, degrees: int = 30) -> str:
+    async def move(self, direction: str, degrees: int = 30, *, gui: bool = False) -> str:
         if not await self._ensure_connected():
             return "Camera movement (PTZ) not supported for this source."
+        if self._ptz_lock is not None:
+            await self._ptz_lock.acquire(gui=gui)
         try:
             pan_delta = 0.0
             tilt_delta = 0.0
@@ -303,6 +345,9 @@ class CameraTool:
             logger.warning("Camera move failed: %s", e)
             self._cam_onvif = None
             return f"Camera move failed: {e}"
+        finally:
+            if self._ptz_lock is not None:
+                self._ptz_lock.release()
 
     def get_tool_definitions(self) -> list[dict]:
         return [
@@ -325,12 +370,12 @@ class CameraTool:
             },
         ]
 
-    async def call(self, tool_name: str, tool_input: dict) -> tuple[str, list[str]]:
+    async def call(self, tool_name: str, tool_input: dict, *, gui: bool = False) -> tuple[str, list[str]]:
         if tool_name == "see":
             b64, save_path = await self.capture()
             if b64:
                 return f"You see the current view (saved to {save_path}).", [b64]
             return "Camera capture failed.", []
         elif tool_name == "look":
-            return await self.move(tool_input["direction"], tool_input.get("degrees", 30)), []
+            return await self.move(tool_input["direction"], tool_input.get("degrees", 30), gui=gui), []
         return f"Unknown tool: {tool_name}", []

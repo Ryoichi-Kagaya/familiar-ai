@@ -66,6 +66,13 @@ JSONL append-only logging with replay support remains available.
 - Preferences (likes/dislikes)
 - Boundaries (things to avoid)
 - Session/conversation counting, days-together tracking
+- Support preferences and failed support patterns feed back into social
+  policy decisions (learned validate-first, advice aversion)
+
+**Person model** — `familiar_neighbor/mind/person_model.py`:
+- ToM inferences accumulate per person (states + confidence + chosen policy)
+- Surfaced as an accumulated-impressions prompt block (7-day staleness cutoff)
+- Written deterministically: flagged turns run the ToM inference themselves
 
 **Working memory** — Recent context + workspace coalitions
 
@@ -95,6 +102,36 @@ JSONL append-only logging with replay support remains available.
 - Score = activation × (0.4×urgency + 0.3×novelty + 0.3)
 - Ignition threshold modulated by prediction error
 - Winner's context injected into LLM prompt
+
+**Commitments / proactive reminders** — `familiar_runtime/commitments` + idle-loop wiring:
+- Due-time promises (reminders, appointments, follow-ups) with priority and snooze
+- Fire self-initiated turns from REPL/TUI/GUI idle loops, independent of desires
+- Quiet hours pass urgent-only; escalating backoff goes quiet after 3 reminders
+- Passive surface every turn + `[Today's agenda]` on the first turn of the day
+
+**Delegated background tasks** — `tools/delegation.py`:
+- `delegate_task` spawns an independent non-embodied task-mode `AgentRuntime`
+  (same construction as `familiar task`, minus MCP) in a background asyncio task
+- Conversation continues unblocked; at most 2 delegated tasks run at once
+- Completion/failure creates a *due* follow-up commitment, so the proactive
+  reminder machinery delivers the report even after the companion stepped away
+- `check_delegated_tasks` lists running and recent results
+
+**Identity as load-bearing state** — `mind/identity.py` + `identity_assertions`:
+- Values, boundaries, and self-commitments are typed, persisted assertions;
+  checkers are code (`agreement_with_request` / `forbidden_phrase` /
+  `keyword_pair` / `topic_relevance`), persona patterns are seed/row data
+- `assess()` feeds an `identity_dissonance` affect dimension; the identity
+  coalition goes urgent only when something held is at stake
+- Two-tier veto on the final reply: an in-loop `[IDENTITY]` retry (the model
+  refuses in its own words), then a meta-gate `repair_text` backstop
+- Violations boost the boost-only `identity_coherence` drive → a self-initiated
+  reflection turn → `resolve_reflection()` relieves the dissonance
+- `identity_commit` / `identity_review` tools let the agent self-author values
+  (never non-negotiable, never a hard-veto checker); a background honor-check
+  nudges value conviction with evidence
+- Seeded from `~/.familiar_ai/identity_seed.json` (insert-if-missing); dormant
+  and byte-stable when nothing is held
 
 ### Layer E: Expression → `agent.py` ReAct loop + `tools/tts.py`
 

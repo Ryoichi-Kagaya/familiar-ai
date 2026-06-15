@@ -46,6 +46,7 @@ def _make_agent(
     agent._art_critique_tool = art_critique
 
     agent._camera = None
+    agent._camera_gui_priority = False
     agent._mobility = None
     agent._tts = None
     agent._mcp = None
@@ -150,7 +151,7 @@ async def test_execute_tool_routes_see_to_camera():
     result, img = await agent._execute_tool("see", {})
     assert result == "I see a room"
     assert img == ["base64img"]
-    agent._camera.call.assert_awaited_once_with("see", {})
+    agent._camera.call.assert_awaited_once_with("see", {}, gui=False)
 
 
 @pytest.mark.asyncio

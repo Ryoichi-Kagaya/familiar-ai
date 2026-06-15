@@ -9,7 +9,9 @@ from .attention_schema import AttentionSchema
 from .concern_engine import ConcernEngine
 from .default_mode import DefaultModeProcessor
 from .desires import DesireSystem
+from .mental_state import MentalStateBus
 from .meta_monitor import MetaMonitor
+from .person_model import PersonModelTracker
 from .prediction import PredictionEngine
 from .relationship import RelationshipTracker
 from .scene import SceneTracker
@@ -23,7 +25,9 @@ __all__ = [
     "DefaultModeProcessor",
     "DesireSystem",
     "GlobalWorkspace",
+    "MentalStateBus",
     "MetaMonitor",
+    "PersonModelTracker",
     "PredictionEngine",
     "RelationshipTracker",
     "SceneTracker",

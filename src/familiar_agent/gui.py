@@ -58,9 +58,11 @@ from ._i18n import _t
 from ._ui_helpers import (
     DESIRE_COOLDOWN,
     IDLE_CHECK_INTERVAL,
+    commitment_reminder_prompt,
     desire_tick_prompt,
     format_action,
     format_tool_result,
+    should_fire_commitment_reminder,
     should_fire_idle_desire,
 )
 from .bootstrap import resolve_env_path
@@ -909,9 +911,10 @@ def _set_combo(combo: QComboBox, value: str) -> None:
 class FamiliarWindow(QMainWindow):
     """Main application window."""
 
-    def __init__(self, config: "AgentConfig", desires: "DesireSystem") -> None:
+    def __init__(self, config: "AgentConfig", desires: "DesireSystem", *, shared_camera: "Any | None" = None) -> None:
         super().__init__()
         self._config = config
+        self._shared_camera = shared_camera
         self._agent: EmbodiedAgent | None = None
         self._desires = desires
         self._agent_display_name = (config.agent_name or "Agent").strip() or "Agent"
@@ -1667,8 +1670,41 @@ class FamiliarWindow(QMainWindow):
                     continue
                 if not getattr(self, "_agent_ready", True):
                     continue
+                agent_obj = getattr(self, "_agent", None)
+                agent_config = getattr(agent_obj, "config", None)
+                # Proactive commitment reminders fire independently of auto_desire.
+                store = getattr(agent_obj, "_commitment_store", None)
+                if (
+                    store is not None
+                    and agent_config is not None
+                    and getattr(agent_config, "proactive_reminders", True)
+                ):
+                    try:
+                        heartbeat = getattr(agent_obj, "_heartbeat", None)
+                        quiet = heartbeat.routine_state().quiet_hours if heartbeat else False
+                        reminders = should_fire_commitment_reminder(
+                            agent_running=self._agent_running,
+                            has_pending_input=not self._input_queue.empty(),
+                            last_interaction=last_interaction,
+                            now=now,
+                            store=store,
+                            quiet_hours=quiet,
+                        )
+                        if reminders and self._input_queue.empty() and not self._agent_running:
+                            # Record the fire BEFORE the turn: the cadence advances
+                            # regardless of the turn's outcome, and a mid-turn
+                            # snooze reset survives intact.
+                            store.mark_reminded([c.id for c in reminders], at=time.time())
+                        else:
+                            reminders = []
+                    except Exception:
+                        logger.exception("reminder gate failed; skipping this tick")
+                        reminders = []
+                    if reminders:
+                        await self._run_agent("", inner_voice=commitment_reminder_prompt(reminders))
+                        last_interaction = time.time()
+                        continue
                 # Skip desire-driven turns when auto_desire is disabled (default OFF)
-                agent_config = getattr(getattr(self, "_agent", None), "config", None)
                 if agent_config is not None and not getattr(agent_config, "auto_desire", False):
                     continue
                 if not should_fire_idle_desire(
@@ -1884,7 +1920,7 @@ class FamiliarWindow(QMainWindow):
             def _build_agent():
                 from .agent import EmbodiedAgent  # noqa: PLC0415
 
-                return EmbodiedAgent(config)
+                return EmbodiedAgent(config, shared_camera=self._shared_camera, camera_gui_priority=True)
 
             agent = await asyncio.to_thread(_build_agent)
             self._agent = agent
@@ -1998,6 +2034,8 @@ def run_gui(
     config: "AgentConfig",
     desires: "DesireSystem",
     background_coros: "list[Any] | None" = None,
+    *,
+    shared_camera: "Any | None" = None,
 ) -> None:
     """Launch the PySide6 GUI with qasync event loop.
 
@@ -2019,7 +2057,7 @@ def run_gui(
     loop = qasync.QEventLoop(qt_app)
     asyncio.set_event_loop(loop)
 
-    window = FamiliarWindow(config, desires)
+    window = FamiliarWindow(config, desires, shared_camera=shared_camera)
     if icon_path:
         icon = QIcon(str(icon_path))
         if not icon.isNull():
