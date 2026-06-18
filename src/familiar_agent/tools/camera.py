@@ -156,13 +156,39 @@ class CameraTool:
 
             logger.info("Camera capture thread started for source: %s", source)
 
+            _RETRY_INITIAL = 2.0  # seconds
+            _RETRY_MAX = 300.0  # cap at 5 minutes
+            fail_count = 0
+            prev_logged_delay = 0.0
+
             while self._running:
                 ret, frame = self._cap.read()
                 if not ret:
-                    logger.warning("Failed to read frame, retrying in 2s...")
-                    time.sleep(2.0)
-                    self._cap.open(source)
+                    fail_count += 1
+                    delay = min(_RETRY_INITIAL * (2 ** (fail_count - 1)), _RETRY_MAX)
+                    # Log only on the first failure and each time the delay increases.
+                    if delay != prev_logged_delay:
+                        if fail_count == 1:
+                            logger.warning("Camera unavailable, retrying in %.0fs...", delay)
+                        else:
+                            logger.warning(
+                                "Camera still unavailable (attempt %d), backing off to %.0fs...",
+                                fail_count,
+                                delay,
+                            )
+                        prev_logged_delay = delay
+                    # Sleep in 1-second chunks so _running=False is noticed promptly.
+                    deadline = time.monotonic() + delay
+                    while self._running and time.monotonic() < deadline:
+                        time.sleep(min(1.0, deadline - time.monotonic()))
+                    if self._running:
+                        self._cap.open(source)
                     continue
+
+                if fail_count > 0:
+                    logger.info("Camera reconnected after %d attempt(s).", fail_count)
+                    fail_count = 0
+                    prev_logged_delay = 0.0
 
                 with self._lock:
                     self._last_frame = frame.copy()
@@ -186,7 +212,10 @@ class CameraTool:
             return True
 
         # Don't retry within 60 s of a previous failure to avoid blocking every look() call.
-        if self._ptz_connect_failed_at > 0 and time.monotonic() - self._ptz_connect_failed_at < 60.0:
+        if (
+            self._ptz_connect_failed_at > 0
+            and time.monotonic() - self._ptz_connect_failed_at < 60.0
+        ):
             return False
 
         hostname, username, password, port = self._get_ptz_connection_params()
@@ -370,12 +399,16 @@ class CameraTool:
             },
         ]
 
-    async def call(self, tool_name: str, tool_input: dict, *, gui: bool = False) -> tuple[str, list[str]]:
+    async def call(
+        self, tool_name: str, tool_input: dict, *, gui: bool = False
+    ) -> tuple[str, list[str]]:
         if tool_name == "see":
             b64, save_path = await self.capture()
             if b64:
                 return f"You see the current view (saved to {save_path}).", [b64]
             return "Camera capture failed.", []
         elif tool_name == "look":
-            return await self.move(tool_input["direction"], tool_input.get("degrees", 30), gui=gui), []
+            return await self.move(
+                tool_input["direction"], tool_input.get("degrees", 30), gui=gui
+            ), []
         return f"Unknown tool: {tool_name}", []
