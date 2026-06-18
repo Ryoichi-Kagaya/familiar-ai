@@ -44,7 +44,7 @@ async def _call_optional_async(
 
 MAX_ITERATIONS = 50
 _MORNING_CONTEXT_MAX_CHARS = 2600
-_BRIEF_REPLY_MAX_ITERATIONS = 2
+_BRIEF_REPLY_MAX_ITERATIONS = 4
 _BRIEF_REPLY_MAX_TOKENS = 120
 # Reasoning/thinking models emit internal tokens before visible content — give them more room.
 _BRIEF_REPLY_MAX_TOKENS_THINKING = 800
