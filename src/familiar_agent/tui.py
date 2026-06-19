@@ -175,9 +175,8 @@ class FamiliarApp(App):
         Binding("pagedown", "scroll_log_down", "↓ Scroll", show=False, priority=True),
     ]
 
-    def __init__(self, agent: "EmbodiedAgent", desires: "DesireSystem", *, serve_mode: bool = False, term_attrs: object = None) -> None:
+    def __init__(self, agent: "EmbodiedAgent", desires: "DesireSystem", *, term_attrs: object = None) -> None:
         super().__init__()
-        self._serve_mode = serve_mode
         self._term_attrs = term_attrs  # saved before Textual changes raw mode
         self.agent = agent
         self.desires = desires
@@ -235,31 +234,30 @@ class FamiliarApp(App):
     def on_mount(self) -> None:
         import signal as _signal
 
-        if not self._serve_mode:
-            # Re-enable ISIG so Ctrl+C generates SIGINT, independent of Textual's event loop.
-            # Textual disables ISIG in raw mode, making Ctrl+C send 0x03 through Textual's key
-            # dispatch. If the event loop or key dispatch is stuck, Ctrl+C is silently dropped.
-            # Re-enabling ISIG ensures Ctrl+C → SIGINT → _restore_term + os._exit(0).
-            try:
-                import termios
+        # Re-enable ISIG so Ctrl+C generates SIGINT, independent of Textual's event loop.
+        # Textual disables ISIG in raw mode, making Ctrl+C send 0x03 through Textual's key
+        # dispatch. If the event loop or key dispatch is stuck, Ctrl+C is silently dropped.
+        # Re-enabling ISIG ensures Ctrl+C → SIGINT → _restore_term + os._exit(0).
+        try:
+            import termios
 
-                fd = sys.stdin.fileno()
-                attrs = termios.tcgetattr(fd)
-                attrs[3] |= termios.ISIG  # re-enable signal generation (VINTR/VQUIT/VSUSP)
-                termios.tcsetattr(fd, termios.TCSANOW, attrs)
-            except Exception:
-                pass
+            fd = sys.stdin.fileno()
+            attrs = termios.tcgetattr(fd)
+            attrs[3] |= termios.ISIG  # re-enable signal generation (VINTR/VQUIT/VSUSP)
+            termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        except Exception:
+            pass
 
-            def _hard_exit(*_: object) -> None:
-                self._restore_term()
-                os._exit(0)
+        def _hard_exit(*_: object) -> None:
+            self._restore_term()
+            os._exit(0)
 
-            try:
-                _signal.signal(_signal.SIGINT, _hard_exit)
-                _signal.signal(_signal.SIGQUIT, _hard_exit)  # Ctrl+\
-                _signal.signal(_signal.SIGTSTP, _signal.SIG_IGN)  # Ctrl+Z (ignore suspend)
-            except (OSError, ValueError, AttributeError):
-                pass  # Not in main thread or signal not available on this OS (e.g. Windows)
+        try:
+            _signal.signal(_signal.SIGINT, _hard_exit)
+            _signal.signal(_signal.SIGQUIT, _hard_exit)  # Ctrl+\
+            _signal.signal(_signal.SIGTSTP, _signal.SIG_IGN)  # Ctrl+Z (ignore suspend)
+        except (OSError, ValueError, AttributeError):
+            pass  # Not in main thread or signal not available on this OS (e.g. Windows)
 
         self.query_one("#input-bar", Input).focus()
         # Show startup banner
@@ -788,8 +786,5 @@ class FamiliarApp(App):
         except BaseException:
             pass
         finally:
-            # In serve mode, os._exit() would kill the server process for all clients.
-            # Let Textual's self.exit() handle the session teardown instead.
-            if not self._serve_mode:
-                self._restore_term()
-                os._exit(0)
+            self._restore_term()
+            os._exit(0)

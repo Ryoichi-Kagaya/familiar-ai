@@ -566,7 +566,6 @@ def main() -> None:
         return
 
     use_gui = "--gui" in sys.argv
-    use_serve = "--serve" in sys.argv
     use_voice_server = "--voice-server" in sys.argv
     use_telegram = "--telegram" in sys.argv
     use_tui = (
@@ -576,17 +575,12 @@ def main() -> None:
         and not use_telegram
     )
 
-    serve_port = 8080
+    voice_port = 8090
     if "--port" in sys.argv:
         port_idx = sys.argv.index("--port")
         with contextlib.suppress(IndexError, ValueError):
-            serve_port = int(sys.argv[port_idx + 1])
+            voice_port = int(sys.argv[port_idx + 1])
 
-    serve_host = "0.0.0.0"
-    if "--host" in sys.argv:
-        host_idx = sys.argv.index("--host")
-        with contextlib.suppress(IndexError):
-            serve_host = sys.argv[host_idx + 1]
     bootstrap = load_app_bootstrap()
 
     if bootstrap.migrated:
@@ -617,7 +611,6 @@ def main() -> None:
     if use_voice_server:
         from .voice_server import run_voice_server
 
-        voice_port = serve_port if "--port" in sys.argv else 8090
         asyncio.run(run_voice_server(host="0.0.0.0", port=voice_port))
     elif use_gui:
         from .gui import run_gui
@@ -671,22 +664,16 @@ def main() -> None:
         except KeyboardInterrupt:
             pass
     elif use_tui:
-        if use_serve:
-            from .serve import serve_dual as _serve_tui
+        agent = EmbodiedAgent(config)
+        desires = DesireSystem(companion_name=config.companion_name)
+        from .tui import FamiliarApp
 
-            _serve_tui(host=serve_host, port=serve_port)
-        else:
-            agent = EmbodiedAgent(config)
-            desires = DesireSystem(companion_name=config.companion_name)
-            from .tui import FamiliarApp
-
-            in_serve_child = os.environ.get("FAMILIAR_IN_SERVE") == "1"
-            import termios as _termios
-            try:
-                _saved_term = _termios.tcgetattr(sys.stdin.fileno())
-            except Exception:
-                _saved_term = None
-            FamiliarApp(agent, desires, serve_mode=in_serve_child, term_attrs=_saved_term).run(mouse=True)
+        import termios as _termios
+        try:
+            _saved_term = _termios.tcgetattr(sys.stdin.fileno())
+        except Exception:
+            _saved_term = None
+        FamiliarApp(agent, desires, term_attrs=_saved_term).run(mouse=True)
     else:
         agent = EmbodiedAgent(config)
         desires = DesireSystem(companion_name=config.companion_name)
