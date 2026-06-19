@@ -112,11 +112,27 @@ _BORDER = "#49483E"
 _BUBBLE_USER_BG = "#3E3D32"
 _BUBBLE_AGENT_BG = "#2D2E27"
 _BUBBLE_TOOL_BG = "#1E1F1C"
+_BUBBLE_ERROR_BG = "#3E1F24"
 _UI_FONT_STACK = (
     "'Noto Sans CJK JP', 'Yu Gothic UI', 'Hiragino Sans', 'Meiryo', 'Segoe UI', sans-serif"
 )
 _MONO_FONT_STACK = "'Cascadia Mono', 'Consolas', 'Courier New', monospace"
 _FONT_SCALE = 1.5
+
+# Semantic accent colors not in the Monokai base palette
+_ACCENT_MIC = "#7C3AED"
+
+# Translucent surface tokens — rgba() because hex cannot encode alpha
+_DISABLED_BG = "rgba(127,115,148,0.12)"
+_DISABLED_BORDER = "rgba(127,115,148,0.20)"
+_PROGRESS_TRACK = "rgba(127,115,148,0.16)"
+_STOP_BG = "rgba(255,107,115,0.20)"
+_STOP_BORDER = "rgba(255,107,115,0.52)"
+_STOP_TEXT = "#e34f5d"
+_STOP_HOVER_BG = "rgba(255,107,115,0.30)"
+_STOP_HOVER_TEXT = "#c13f4d"
+_SEND_HOVER_STOP0 = "#FF5F96"
+_SEND_HOVER_STOP1 = "#FF9FBC"
 
 _DESIRE_COLORS: dict[str, str] = {
     "look_around": "#57b8ff",
@@ -258,7 +274,7 @@ def _apply_global_style(app: QApplication) -> None:
         }}
         QPushButton:pressed {{
             background: {_ACCENT_DEEP};
-            color: #272822;
+            color: {_BG_BASE};
         }}
         QPushButton:disabled {{
             background: {_BG_SURFACE};
@@ -302,7 +318,7 @@ def _apply_global_style(app: QApplication) -> None:
 
         QTabBar::tab:selected {{
             background: {_ACCENT};
-            color: #272822;
+            color: {_BG_BASE};
             border-color: {_ACCENT};
         }}
 
@@ -415,8 +431,8 @@ class ChatLog(QScrollArea):
         if text.startswith("[error]"):
             self._add_bubble(
                 f"⚠ {text[7:].strip()}",
-                bg="#3E1F24",
-                text_color="#F92672",
+                bg=_BUBBLE_ERROR_BG,
+                text_color=_ACCENT_DEEP,
                 ml=20,
                 mr=20,
                 small=True,
@@ -680,7 +696,7 @@ class DesireBar(QWidget):
         self._bar.setTextVisible(False)
         self._bar.setFixedHeight(_px(4))
         self._bar.setStyleSheet(
-            f"QProgressBar {{ background: rgba(127,115,148,0.16); border-radius: 3px; border: none; }}"
+            f"QProgressBar {{ background: {_PROGRESS_TRACK}; border-radius: 3px; border: none; }}"
             f"QProgressBar::chunk {{"
             f" background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
             f" stop:0 rgba(0,0,0,0), stop:0.3 {color}55, stop:1 {color});"
@@ -1197,7 +1213,7 @@ class FamiliarWindow(QMainWindow):
             f" border: 1px solid {_BORDER};"
             f" padding: 0 {_px(12)}px; font-size: {_px(12)}px; color: {_TEXT_SECONDARY}; }}"
             f"QPushButton:hover {{ background: {_BG_HOVER}; color: {_TEXT_PRIMARY}; }}"
-            f"QPushButton:disabled {{ background: rgba(127,115,148,0.12); color: {_TEXT_SECONDARY}; }}"
+            f"QPushButton:disabled {{ background: {_DISABLED_BG}; color: {_TEXT_SECONDARY}; }}"
         )
         self._restart_stt_btn.setEnabled(self._realtime_stt is not None)
         self._restart_stt_btn.clicked.connect(self._on_restart_stt_clicked)
@@ -1212,8 +1228,8 @@ class FamiliarWindow(QMainWindow):
             f" border: 1px solid {_BORDER};"
             f" padding: 0 {_px(12)}px; font-size: {_px(12)}px; color: {_TEXT_SECONDARY}; }}"
             f"QPushButton:hover {{ background: {_BG_HOVER}; color: {_TEXT_PRIMARY}; }}"
-            f"QPushButton:checked {{ background: #7c3aed; color: #fff; border-color: #7c3aed; }}"
-            f"QPushButton:disabled {{ background: rgba(127,115,148,0.12); color: {_TEXT_SECONDARY}; }}"
+            f"QPushButton:checked {{ background: {_ACCENT_MIC}; color: white; border-color: {_ACCENT_MIC}; }}"
+            f"QPushButton:disabled {{ background: {_DISABLED_BG}; color: {_TEXT_SECONDARY}; }}"
         )
         self._mic_btn.setCheckable(True)
         self._mic_btn.setEnabled(False)  # enabled after agent init if stt is configured
@@ -1297,10 +1313,10 @@ class FamiliarWindow(QMainWindow):
             f"}}"
             f"QPushButton#sendBtn:hover {{"
             f" background: qlineargradient(x1:0,y1:0,x2:1,y2:1,"
-            f" stop:0 #ff5f96, stop:1 #ff9fbc);"
+            f" stop:0 {_SEND_HOVER_STOP0}, stop:1 {_SEND_HOVER_STOP1});"
             f"}}"
             f"QPushButton#sendBtn:disabled {{"
-            f" background: rgba(127,115,148,0.15); color: {_TEXT_SECONDARY};"
+            f" background: {_DISABLED_BG}; color: {_TEXT_SECONDARY};"
             f"}}"
         )
         self._send_btn.clicked.connect(self._on_send)
@@ -1312,16 +1328,16 @@ class FamiliarWindow(QMainWindow):
         self._stop_btn.setToolTip(_t("gui_cancel_turn_tooltip"))
         self._stop_btn.setStyleSheet(
             f"QPushButton#stopBtn {{"
-            f" background: rgba(255,107,115,0.20);"
-            f" border-radius: {_px(20)}px; border: 1px solid rgba(255,107,115,0.52);"
-            f" font-size: {_px(12)}px; color: #e34f5d;"
+            f" background: {_STOP_BG};"
+            f" border-radius: {_px(20)}px; border: 1px solid {_STOP_BORDER};"
+            f" font-size: {_px(12)}px; color: {_STOP_TEXT};"
             f"}}"
             f"QPushButton#stopBtn:hover {{"
-            f" background: rgba(255,107,115,0.30); color: #c13f4d;"
+            f" background: {_STOP_HOVER_BG}; color: {_STOP_HOVER_TEXT};"
             f"}}"
             f"QPushButton#stopBtn:disabled {{"
-            f" background: rgba(127,115,148,0.12); color: {_TEXT_SECONDARY};"
-            f" border-color: rgba(127,115,148,0.20);"
+            f" background: {_DISABLED_BG}; color: {_TEXT_SECONDARY};"
+            f" border-color: {_DISABLED_BORDER};"
             f"}}"
         )
         self._stop_btn.setEnabled(False)
