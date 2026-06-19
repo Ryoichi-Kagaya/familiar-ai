@@ -74,8 +74,34 @@ _GO2RTC_BIN = _GO2RTC_CACHE / ("go2rtc.exe" if sys.platform == "win32" else "go2
 _GO2RTC_CONFIG = _GO2RTC_CACHE / "go2rtc.yaml"
 
 
-def _ensure_go2rtc(api_url: str) -> None:
+def _write_go2rtc_config(stream_name: str) -> None:
+    """Generate go2rtc.yaml from .env CAMERA_* vars if CAMERA_HOST is set."""
+    host = os.environ.get("CAMERA_HOST", "").strip()
+    if not host or host == "localhost":
+        return
+    user = os.environ.get("CAMERA_USERNAME", "")
+    password = os.environ.get("CAMERA_PASSWORD", "")
+    rtsp_path = os.environ.get("CAMERA_RTSP_PATH", "stream1")
+    tapo_hash = os.environ.get("CAMERA_TAPO_HASH", "")
+
+    entries: list[str] = []
+    if user and password:
+        entries.append(f"    - rtsp://{user}:{password}@{host}/{rtsp_path}")
+    if tapo_hash:
+        entries.append(f"    - tapo://{tapo_hash}@{host}")
+    if not entries:
+        return
+
+    yaml_text = f"streams:\n  {stream_name}:\n" + "\n".join(entries) + "\n"
+    _GO2RTC_CACHE.mkdir(parents=True, exist_ok=True)
+    _GO2RTC_CONFIG.write_text(yaml_text)
+    logger.info("go2rtc config auto-generated from .env (host=%s)", host)
+
+
+def _ensure_go2rtc(api_url: str, stream_name: str = "tapo_cam") -> None:
     """Start go2rtc if it's not already running."""
+    _write_go2rtc_config(stream_name)
+
     try:
         urllib.request.urlopen(f"{api_url}/api", timeout=2)
         return  # already running
@@ -132,7 +158,7 @@ class TTSTool:
         # Serialize concurrent say() calls so audio never overlaps
         self._lock = asyncio.Lock()
         # Ensure go2rtc is running at startup
-        _ensure_go2rtc(self.go2rtc_url)
+        _ensure_go2rtc(self.go2rtc_url, self.go2rtc_stream)
 
     async def say(self, text: str, output: str | None = None) -> str:
         """Speak text aloud via ElevenLabs.
