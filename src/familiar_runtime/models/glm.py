@@ -50,12 +50,13 @@ class GLMBackend:
         tool_calls: list[ToolCall],
         results: Sequence[tuple[str, str | list[str] | None]],
     ) -> list[dict]:
-        msgs: list[dict] = []
+        tool_msgs: list[dict] = []
+        image_msgs: list[dict] = []
         for tc, (text, image) in zip(tool_calls, results):
-            msgs.append({"role": "tool", "tool_call_id": tc.id, "content": text})
+            tool_msgs.append({"role": "tool", "tool_call_id": tc.id, "content": text or ""})
             imgs: list[str] = image if isinstance(image, list) else ([image] if image else [])
             for img in imgs:
-                msgs.append(
+                image_msgs.append(
                     {
                         "role": "user",
                         "content": [
@@ -66,7 +67,7 @@ class GLMBackend:
                         ],
                     }
                 )
-        return msgs
+        return tool_msgs + image_msgs
 
     def make_system_message(self, content: str) -> dict:
         return {"role": "system", "content": content}

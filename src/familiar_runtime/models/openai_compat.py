@@ -50,15 +50,17 @@ class OpenAICompatibleBackend:
         tool_calls: list[ToolCall],
         results: Sequence[tuple[str, str | list[str] | None]],
     ) -> list[dict]:
-        # Tool result messages: text only.
-        # Images go in a separate user message — Gemini (and many APIs) reject
-        # image_url inside "role: tool" messages.
-        msgs: list[dict[str, Any]] = []
+        # Tool messages must be consecutive immediately after the assistant tool_call
+        # message — interleaving user/image messages between them causes a 400 when
+        # multiple tools are called in the same iteration.  Collect all tool messages
+        # first, then append image user messages.
+        tool_msgs: list[dict[str, Any]] = []
+        image_msgs: list[dict[str, Any]] = []
         for tc, (text, image) in zip(tool_calls, results):
-            msgs.append({"role": "tool", "tool_call_id": tc.id, "content": text})
+            tool_msgs.append({"role": "tool", "tool_call_id": tc.id, "content": text or ""})
             imgs: list[str] = image if isinstance(image, list) else ([image] if image else [])
             for img in imgs:
-                msgs.append(
+                image_msgs.append(
                     {
                         "role": "user",
                         "content": [
@@ -70,7 +72,7 @@ class OpenAICompatibleBackend:
                         ],
                     }
                 )
-        return msgs
+        return tool_msgs + image_msgs
 
     def _make_prompt_tool_results(
         self,

@@ -55,12 +55,18 @@ class KimiBackend:
         tool_calls: list[ToolCall],
         results: Sequence[tuple[str, str | list[str] | None]],
     ) -> list[dict]:
-        msgs: list[dict] = []
+        # Tool messages must be consecutive immediately after the assistant tool_call
+        # message — interleaving user/image messages between them causes a 400
+        # ("tool_call_id did not have response messages") when multiple tools are
+        # called in the same iteration.  Collect all tool messages first, then
+        # append any image user messages.
+        tool_msgs: list[dict] = []
+        image_msgs: list[dict] = []
         for tc, (text, image) in zip(tool_calls, results):
-            msgs.append({"role": "tool", "tool_call_id": tc.id, "content": text})
+            tool_msgs.append({"role": "tool", "tool_call_id": tc.id, "content": text or ""})
             imgs: list[str] = image if isinstance(image, list) else ([image] if image else [])
             for img in imgs:
-                msgs.append(
+                image_msgs.append(
                     {
                         "role": "user",
                         "content": [
@@ -71,7 +77,7 @@ class KimiBackend:
                         ],
                     }
                 )
-        return msgs
+        return tool_msgs + image_msgs
 
     def make_system_message(self, content: str) -> dict:
         return {"role": "system", "content": content}
