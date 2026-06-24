@@ -2607,6 +2607,19 @@ class EmbodiedAgent:
             inner_voice=inner_voice,
         )
 
+        # Inject user-supplied images (e.g. from Telegram) into the user message
+        # just appended by prepare_turn.
+        if user_images and self.messages:
+            last = self.messages[-1]
+            if isinstance(last, dict) and last.get("role") == "user":
+                content = last["content"]
+                blocks: list[Any] = (
+                    [{"type": "text", "text": content}] if isinstance(content, str) else list(content)
+                )
+                for b64 in user_images:
+                    blocks.append(self.backend.make_image_block(b64))
+                last["content"] = blocks
+
         try:
             interrupt_source = (
                 _InterruptQueueSource(self, interrupt_queue)
