@@ -612,7 +612,6 @@ class EmbodiedAgent:
         self._scene: SceneTracker | None = None  # initialized after DB ready in _init_tools
 
         self._mcp: MCPClientManager | None = None
-        self._mcp_start_task: asyncio.Future[Any] | None = None
         self._user_registry = UserRegistry()
         self._current_user = self._user_registry.get_active()
         config.companion_name = self._current_user.name

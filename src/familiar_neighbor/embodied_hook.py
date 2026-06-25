@@ -256,8 +256,12 @@ class EmbodiedAgentHook(RuntimeHookBase):
             on_phase("startup" if startup_phase else "thinking")
 
         # ── Background tasks (MCP connections, memory worker) ──
+        # MCP is awaited so tools are registered before _tool_defs_for_turn builds
+        # the turn's tool list.  ensure_future (fire-and-forget) was a regression
+        # from the original fix in 6333cd9 that was lost when this block moved to
+        # embodied_hook during the EmbodiedAgentHook refactor.
         if agent._mcp and not agent._mcp.is_started:
-            agent._mcp_start_task = asyncio.ensure_future(agent._mcp.start())
+            await agent._mcp.start()
         if memory_worker and not memory_worker.is_running:
             await memory_worker.start()
 
