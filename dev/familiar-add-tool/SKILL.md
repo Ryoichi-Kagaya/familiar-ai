@@ -1,6 +1,9 @@
 ---
 name: familiar-add-tool
 description: Scaffold a new sensor/actuator tool for familiar-ai. Generates the tool file and registers it in all required places in agent.py.
+type: prompt
+whenToUse: When the user asks to add a new sensor, actuator, external service, or tool to familiar-ai
+disableModelInvocation: false
 ---
 
 # familiar-add-tool

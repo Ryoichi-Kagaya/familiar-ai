@@ -12,6 +12,10 @@ Claude Code skills for contributors and power users of familiar-ai.
 
 ## Installation
 
+The skills work with both Claude Code and Kimi Code CLI.
+
+### Claude Code
+
 Copy or symlink the skills into your Claude Code skills directory:
 
 ```bash
@@ -25,3 +29,16 @@ done
 ```
 
 Then invoke from Claude Code with e.g. `/familiar-add-tool`.
+
+### Kimi Code CLI
+
+Symlink the same directories into Kimi's user skills directory:
+
+```bash
+mkdir -p ~/.kimi-code/skills
+for d in dev/familiar-*/; do
+  ln -sf "$(pwd)/$d" ~/.kimi-code/skills/
+done
+```
+
+Then invoke from Kimi with e.g. `/skill:familiar-add-tool`.

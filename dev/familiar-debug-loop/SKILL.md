@@ -1,6 +1,9 @@
 ---
 name: familiar-debug-loop
 description: Debug a stuck or misbehaving familiar-ai ReAct loop. Diagnoses tool-call failures, model output issues, prompt-mode parsing errors, and silent tool skips.
+type: prompt
+whenToUse: When the familiar-ai agent is stuck, looping, ignoring tools, failing silently, or producing unexpected behavior
+disableModelInvocation: false
 ---
 
 # familiar-debug-loop

@@ -1,6 +1,9 @@
 ---
 name: familiar-check-env
 description: Validate the .env configuration for familiar-ai. Detects common misconfigurations like wrong ports, missing MODEL, or TOOLS_MODE issues that cause silent failures or timeouts.
+type: prompt
+whenToUse: When the user reports startup issues, timeouts, silent failures, or asks to validate the familiar-ai environment configuration
+disableModelInvocation: false
 ---
 
 # familiar-check-env
