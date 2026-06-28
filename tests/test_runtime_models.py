@@ -131,6 +131,25 @@ def test_kimi_backend_emits_reasoning_is_true() -> None:
     assert backend.emits_reasoning is True
 
 
+@pytest.mark.parametrize(
+    "base_url,expected",
+    [
+        ("https://api.kimi.com/coding/v1", True),
+        ("https://API.KIMI.COM/v1", True),
+        ("https://api.moonshot.ai/v1", True),
+        ("https://api.moonshot.cn/v1", True),
+        ("https://api.openai.com/v1", False),
+        ("http://localhost:11434/v1", False),
+    ],
+)
+def test_openai_compat_backend_detects_kimi_reasoning(base_url: str, expected: bool) -> None:
+    pytest.importorskip("openai")
+    from familiar_runtime.models import OpenAICompatibleBackend
+
+    backend = OpenAICompatibleBackend(api_key="k", model="m", base_url=base_url)
+    assert backend.emits_reasoning is expected
+
+
 def test_kimi_backend_make_tool_results_includes_image_block() -> None:
     pytest.importorskip("openai")
     from familiar_runtime.models import KimiBackend, ToolCall

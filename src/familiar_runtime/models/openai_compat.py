@@ -23,6 +23,14 @@ class OpenAICompatibleBackend:
         self.model = model
         self.tools_mode = tools_mode  # "native" | "prompt"
         self._use_completion_tokens = "api.openai.com" in base_url
+        # Kimi endpoints (including the Kimi Code CLI compatible API) emit
+        # reasoning_content before visible content.  Without this flag the
+        # agent caps brief replies at 120 tokens and the model runs out of
+        # budget before producing any visible text, leaving the GUI empty.
+        lowered = base_url.lower()
+        self.emits_reasoning = any(
+            host in lowered for host in ("api.kimi.com", "api.moonshot.ai", "moonshot.cn")
+        )
 
     # ── message factories ─────────────────────────────────────────
 

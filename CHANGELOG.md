@@ -63,6 +63,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - `EmbodiedAgent.run()` is now a thin wrapper around the substrate `ReActLoop`: TAPE replan, coherence retry, interrupt drain, and say() reminders ride `EmbodiedAgentHook` lifecycle methods; finalisation and the forced final response stay in the wrapper, and the public `run()` signature is unchanged
 
 ### Fixed
+- `OpenAICompatibleBackend` now detects Kimi endpoints (`api.kimi.com`, `api.moonshot.ai`, `moonshot.cn`) and sets `emits_reasoning=True`, so brief-reply turns allocate 800 tokens instead of 120.  This prevents `kimi-for-coding` (and other reasoning-enabled Kimi models accessed via OpenAI-compatible endpoints) from consuming the entire small budget with internal reasoning tokens and returning an empty response in the GUI
 - Commitment store no longer pins its SQLite connection to the creating thread: in the GUI the agent (and store) are built inside `asyncio.to_thread`, so every commitment write from the event-loop thread (add/complete/snooze tools, reminder bookkeeping, delegated-task follow-ups) raised `ProgrammingError` and was silently swallowed
 - Kansai past-tense "〜やった" (e.g. 「散々やった」) no longer classifies as delight; only exclamatory forms (やったー/やった！/やったぜ) celebrate
 - `scripts/new_migration.sh` now accepts Windows-style `--dir` paths in Git Bash so cross-platform CI migration tests pass on `windows-latest`
