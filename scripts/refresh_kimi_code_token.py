@@ -88,7 +88,7 @@ def _update_env(env_path: Path, access_token: str) -> None:
 
     text = env_path.read_text()
     text = re.sub(
-        r"^[ \t]*#?[ \t]*API_KEY\s*=\s*.*$",
+        r"^[ \t]*API_KEY\s*=\s*.*$",
         f"API_KEY={access_token}",
         text,
         flags=re.MULTILINE,
