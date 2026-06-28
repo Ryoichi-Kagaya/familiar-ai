@@ -158,6 +158,11 @@ class OpenAICompatibleBackend:
         augmented_system = self._build_tools_system(system, tools)
         flat = self._flatten_messages(augmented_system, messages)
 
+        logger.debug(
+            "OpenAICompatibleBackend request messages: %s",
+            json.dumps(flat, ensure_ascii=False, default=str),
+        )
+
         tokens_key = "max_completion_tokens" if self._use_completion_tokens else "max_tokens"
         stream = await self.client.chat.completions.create(  # type: ignore[call-overload]
             model=self.model,
@@ -168,6 +173,8 @@ class OpenAICompatibleBackend:
 
         text_chunks: list[str] = []
         async for chunk in stream:
+            if not chunk.choices:
+                continue
             if chunk.choices[0].delta.content:
                 chunk_text = chunk.choices[0].delta.content
                 text_chunks.append(chunk_text)
@@ -180,7 +187,7 @@ class OpenAICompatibleBackend:
         clean_text = _TOOL_CALL_RE.sub("", text).strip()
 
         stop = "tool_use" if tool_calls else "end_turn"
-        raw_assistant = {"role": "assistant", "content": text or ""}
+        raw_assistant: dict[str, Any] = {"role": "assistant", "content": clean_text or None}
         return (
             ModelTurnResult(stop_reason=stop, text=clean_text, tool_calls=tool_calls),
             raw_assistant,
@@ -208,9 +215,15 @@ class OpenAICompatibleBackend:
         if oai_tools:
             kwargs["tools"] = oai_tools
 
+        logger.debug(
+            "OpenAICompatibleBackend request messages: %s",
+            json.dumps(flat, ensure_ascii=False, default=str),
+        )
+
         stream = await self.client.chat.completions.create(**kwargs)
 
         text_chunks: list[str] = []
+        reasoning_chunks: list[str] = []
         raw_tcs: dict[int, dict] = {}
         finish_reason: str | None = None
         # Filter Gemini thinking tokens: buffer until thinking block ends.
@@ -218,9 +231,16 @@ class OpenAICompatibleBackend:
         _in_thinking: bool | None = None
 
         async for chunk in stream:
+            if not chunk.choices:
+                continue
             choice = chunk.choices[0]
             delta = choice.delta
             finish_reason = choice.finish_reason or finish_reason
+
+            # Capture reasoning_content (thinking tokens) for round-trip.
+            rc = getattr(delta, "reasoning_content", None)
+            if rc:
+                reasoning_chunks.append(rc)
 
             if delta.content:
                 chunk_text = delta.content
@@ -274,7 +294,10 @@ class OpenAICompatibleBackend:
             tool_calls.append(ToolCall(id=tc["id"], name=tc["name"], input=input_data))
 
         stop = "tool_use" if finish_reason == "tool_calls" else "end_turn"
-        raw_assistant: dict[str, Any] = {"role": "assistant", "content": text or ""}
+        raw_assistant: dict[str, Any] = {"role": "assistant", "content": text or None}
+        reasoning_str = "".join(reasoning_chunks)
+        if reasoning_str or (stop == "tool_use" and tool_calls):
+            raw_assistant["reasoning_content"] = reasoning_str
         # Only include tool_calls when finish_reason is "tool_calls" to avoid
         # sending orphaned tool_calls without matching tool-result messages.
         if stop == "tool_use" and tool_calls:
