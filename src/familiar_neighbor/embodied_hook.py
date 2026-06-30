@@ -436,6 +436,10 @@ class EmbodiedAgentHook(RuntimeHookBase):
                 identity_threat=identity_threat_level,
             )
         )
+        # Expose the turn's appraised affect on the agent so downstream
+        # consumers (voice_server emotion mapping, device face injection)
+        # can read it without re-running appraisal.
+        agent._last_affect = affect
 
         # ── Social policy + provisional relationship update ──
         # Relational-hurt tokens only — bare "hurt" turned "My back hurts"

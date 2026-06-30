@@ -222,3 +222,40 @@ async def test_execute_tool_unknown_without_mcp_returns_error():
     result, img = await agent._execute_tool("nonexistent_tool", {})
     assert "not available" in result.lower() or "nonexistent_tool" in result
     assert img == []
+
+
+# ---------------------------------------------------------------------------
+# Tests: device speak() emotion injection (StackChan gateway face)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_speak_injects_emotion_from_affect():
+    """speak() gets an appraisal-derived emotion so the device face follows it."""
+    from familiar_agent.mental_state import AffectiveState
+
+    agent = _make_agent(with_mcp=True)
+    agent._last_affect = AffectiveState(valence=0.4, arousal=0.2)  # → happy
+    result, _ = await agent._execute_tool("speak", {"text": "おはよう"})
+    assert result == "mcp result"
+    agent._mcp.call.assert_awaited_once_with("speak", {"text": "おはよう", "emotion": "happy"})
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_speak_keeps_explicit_emotion():
+    """An emotion the model already chose is not overwritten."""
+    from familiar_agent.mental_state import AffectiveState
+
+    agent = _make_agent(with_mcp=True)
+    agent._last_affect = AffectiveState(valence=-0.5, arousal=0.6)  # → angry
+    await agent._execute_tool("speak", {"text": "hi", "emotion": "sad"})
+    agent._mcp.call.assert_awaited_once_with("speak", {"text": "hi", "emotion": "sad"})
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_speak_without_affect_is_unchanged():
+    """No affect available → no emotion injected (byte-stable args)."""
+    agent = _make_agent(with_mcp=True)
+    agent._last_affect = None
+    await agent._execute_tool("speak", {"text": "hi"})
+    agent._mcp.call.assert_awaited_once_with("speak", {"text": "hi"})

@@ -21,7 +21,7 @@ import signal
 
 from aiohttp import web
 
-from .agent import EmbodiedAgent
+from .agent import EmbodiedAgent, affect_to_emotion
 from .config import AgentConfig
 from .desires import DesireSystem
 from .mental_state import AffectiveState
@@ -83,31 +83,6 @@ async def _release_port(port: int) -> bool:
     return _find_pid_using_port(port) is None
 
 
-def _affect_to_emotion(affect: AffectiveState | None) -> str:
-    """Map familiar-ai appraisal state to a xiaozhi emotion string.
-
-    Valence drives the positive/negative split; arousal separates angry from sad.
-    Arousal from joy alone peaks around 0.14 per pattern match, so the old 0.5
-    threshold made "happy" unreachable in practice.
-
-      valence > 0.1              → happy
-      valence < -0.1, arousal >= 0.35 → angry
-      valence < -0.1, arousal  < 0.35 → sad
-      otherwise                  → neutral
-    """
-    if affect is None:
-        return "neutral"
-    v: float = affect.valence
-    a: float = affect.arousal
-    if v > 0.1:
-        return "happy"
-    if v < -0.1 and a >= 0.35:
-        return "angry"
-    if v < -0.1:
-        return "sad"
-    return "neutral"
-
-
 class VoiceServer:
     """aiohttp server wrapping an :class:`EmbodiedAgent` turn loop."""
 
@@ -162,7 +137,7 @@ class VoiceServer:
                 reply = ""
 
             affect: AffectiveState | None = getattr(self._agent, "_last_affect", None)
-            emotion = _affect_to_emotion(affect)
+            emotion = affect_to_emotion(affect)
 
         logger.info("voice_turn: text=%r reply=%r emotion=%s", text[:60], reply[:60], emotion)
         return web.json_response({"text": reply, "emotion": emotion})

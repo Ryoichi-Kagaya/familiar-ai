@@ -7,34 +7,40 @@ from unittest.mock import AsyncMock, MagicMock
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from familiar_agent.voice_server import VoiceServer, _affect_to_emotion
+from familiar_agent.voice_server import VoiceServer
+from familiar_agent.agent import affect_to_emotion
 from familiar_agent.mental_state import AffectiveState
 
 
-# ── _affect_to_emotion ────────────────────────────────────────────────────────
+# ── affect_to_emotion ────────────────────────────────────────────────────────
+
 
 def test_emotion_none_returns_neutral():
-    assert _affect_to_emotion(None) == "neutral"
+    assert affect_to_emotion(None) == "neutral"
 
 
-@pytest.mark.parametrize("valence,arousal,expected", [
-    (0.5,  0.1,  "happy"),   # positive valence → happy regardless of arousal
-    (0.15, 0.6,  "happy"),
-    (0.11, 0.0,  "happy"),
-    (0.05, 0.8,  "neutral"), # within neutral band
-    (0.0,  0.5,  "neutral"),
-    (-0.05, 0.2, "neutral"),
-    (-0.5,  0.6, "angry"),   # negative + high arousal
-    (-0.2,  0.35,"angry"),   # boundary: a == 0.35 → angry
-    (-0.5,  0.3, "sad"),     # negative + low arousal
-    (-0.15, 0.0, "sad"),
-])
+@pytest.mark.parametrize(
+    "valence,arousal,expected",
+    [
+        (0.5, 0.1, "happy"),  # positive valence → happy regardless of arousal
+        (0.15, 0.6, "happy"),
+        (0.11, 0.0, "happy"),
+        (0.05, 0.8, "neutral"),  # within neutral band
+        (0.0, 0.5, "neutral"),
+        (-0.05, 0.2, "neutral"),
+        (-0.5, 0.6, "angry"),  # negative + high arousal
+        (-0.2, 0.35, "angry"),  # boundary: a == 0.35 → angry
+        (-0.5, 0.3, "sad"),  # negative + low arousal
+        (-0.15, 0.0, "sad"),
+    ],
+)
 def test_emotion_mapping(valence: float, arousal: float, expected: str):
     affect = AffectiveState(valence=valence, arousal=arousal)
-    assert _affect_to_emotion(affect) == expected
+    assert affect_to_emotion(affect) == expected
 
 
 # ── VoiceServer.handle_voice_turn ─────────────────────────────────────────────
+
 
 def _make_server(valence: float = 0.3, use_say_tool: bool = False) -> VoiceServer:
     agent = MagicMock()

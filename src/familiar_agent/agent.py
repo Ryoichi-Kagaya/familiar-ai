@@ -20,7 +20,7 @@ from ._runtime_helpers import (
     _noop_str,
 )
 from .backend import create_backend, create_scene_backend, create_utility_backend
-from .appraisal import AppraisalEngine
+from .appraisal import AffectiveState, AppraisalEngine
 from .config import AgentConfig
 from .desires import DesireSystem, detect_worry_signal
 from .heartbeat import HeartbeatRuntime
@@ -108,6 +108,27 @@ logger = logging.getLogger(__name__)
 
 # How far ahead to surface upcoming commitments in the turn context.
 COMMITMENT_UPCOMING_HORIZON_SECONDS = 6 * 3600
+
+
+def affect_to_emotion(affect: AffectiveState | None) -> str:
+    """Map appraised affect to a device emotion string (happy/neutral/sad/angry).
+
+    Valence drives the positive/negative split; arousal separates angry from
+    sad. Arousal from joy alone peaks low, so the negative split uses a modest
+    arousal threshold. Shared by the voice server's HTTP response and the
+    device face-emotion injection on the speak() path.
+    """
+    if affect is None:
+        return "neutral"
+    v: float = affect.valence
+    a: float = affect.arousal
+    if v > 0.1:
+        return "happy"
+    if v < -0.1 and a >= 0.35:
+        return "angry"
+    if v < -0.1:
+        return "sad"
+    return "neutral"
 
 
 _DEFAULT_TOOL_TIMEOUT = 20.0
@@ -635,6 +656,10 @@ class EmbodiedAgent:
         )
         self._last_tool_error: str | None = None
         self._tool_failure_streak: int = 0
+        # Appraised affect for the current/most-recent turn; set by the
+        # embodied hook each turn and read by the voice server and the
+        # device face-emotion injection.
+        self._last_affect: AffectiveState | None = None
         # Deterministic ToM cooldown bookkeeping (see embodied_hook._should_auto_tom)
         self._last_auto_tom_turn: int | None = None
         self._last_auto_tom_act: str | None = None
@@ -956,7 +981,9 @@ class EmbodiedAgent:
             rtsp_url = (
                 f"rtsp://{cam.username}:{cam.password}@{cam.host}:554/stream1" if cam.host else ""
             )
-            self._stt = STTTool(stt_cfg.elevenlabs_api_key, stt_cfg.language, rtsp_url, stt_cfg.input)
+            self._stt = STTTool(
+                stt_cfg.elevenlabs_api_key, stt_cfg.language, rtsp_url, stt_cfg.input
+            )
 
         # World model: persistent scene entity tracker (Phase 1)
         # Reuses the same SQLite DB as ObservationMemory via a separate connection.
@@ -987,7 +1014,13 @@ class EmbodiedAgent:
                 )
 
         if self._camera:
-            registry.register(CameraCapability(self._camera, before_call=_record_embodied_action, gui_priority=self._camera_gui_priority))
+            registry.register(
+                CameraCapability(
+                    self._camera,
+                    before_call=_record_embodied_action,
+                    gui_priority=self._camera_gui_priority,
+                )
+            )
         if self._mobility:
             registry.register(MobilityCapability(self._mobility))
         if self._tts:
@@ -1020,6 +1053,14 @@ class EmbodiedAgent:
 
     async def _execute_tool(self, name: str, tool_input: dict) -> tuple[str, list[str]]:
         """Route tool call to the right handler. Returns (text, images_b64)."""
+        # Drive the device avatar face from the turn's appraised affect: when
+        # the agent speaks through the StackChan gateway ("speak"), attach the
+        # mapped emotion so the gateway switches the face before the first
+        # audio frame. No-op when the model already chose an emotion, when no
+        # affect is available, or for any other tool / speech path.
+        last_affect = getattr(self, "_last_affect", None)
+        if name == "speak" and last_affect is not None and "emotion" not in tool_input:
+            tool_input = {**tool_input, "emotion": affect_to_emotion(last_affect)}
         registry = self._build_tool_registry()
         result = await registry.call(name, tool_input)
         raw = result.image_b64
@@ -1079,7 +1120,9 @@ class EmbodiedAgent:
             "silence_or_low_presence",
         }
 
-    def _tool_defs_for_turn(self, *, brief_reply_mode: bool, excluded_tools: frozenset[str] | None = None) -> list[dict]:
+    def _tool_defs_for_turn(
+        self, *, brief_reply_mode: bool, excluded_tools: frozenset[str] | None = None
+    ) -> list[dict]:
         tool_defs = self._all_tool_defs
         if brief_reply_mode:
             tool_defs = [tool for tool in tool_defs if tool.get("name") in _BRIEF_REPLY_TOOL_NAMES]
@@ -2569,7 +2612,10 @@ class EmbodiedAgent:
                 wait = backoffs[min(attempt, len(backoffs) - 1)]
                 logger.warning(
                     "Rate limit (attempt %d/%d), retrying in %.0fs: %s",
-                    attempt + 1, max_retries, wait, e,
+                    attempt + 1,
+                    max_retries,
+                    wait,
+                    e,
                 )
                 await asyncio.sleep(wait)
         raise RuntimeError("unreachable")
@@ -2613,7 +2659,9 @@ class EmbodiedAgent:
             if isinstance(last, dict) and last.get("role") == "user":
                 content = last["content"]
                 blocks: list[Any] = (
-                    [{"type": "text", "text": content}] if isinstance(content, str) else list(content)
+                    [{"type": "text", "text": content}]
+                    if isinstance(content, str)
+                    else list(content)
                 )
                 for b64 in user_images:
                     blocks.append(self.backend.make_image_block(b64))
