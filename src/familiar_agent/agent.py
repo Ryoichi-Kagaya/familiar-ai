@@ -684,6 +684,14 @@ class EmbodiedAgent:
         self._concerns = ConcernEngine()
         self._workspace = GlobalWorkspace()
         self._workspace.register_broadcast_listener(self._self_state.on_broadcast)
+        # Dense recurrence (FAMILIAR_INNER_DENSE): idle broadcasts re-enter
+        # more modules. Registration itself is gated — listeners also fire on
+        # the turn path, so an unconditional registration would change
+        # default turn behavior.
+        self._pending_drive_nudges: dict[str, float] = {}
+        if getattr(self.config, "inner_dense", False):
+            self._self_state.defer_saves()
+            self._workspace.register_broadcast_listener(self._on_broadcast_drive_nudge)
         self._prediction = PredictionEngine()
         # Self-ledger: attention history and the previous session's
         # metacognitive summary survive restarts (JSON state files, same
@@ -987,6 +995,17 @@ class EmbodiedAgent:
 
         except Exception as exc:  # noqa: BLE001
             logger.warning("Post-response pipeline failed: %s", exc)
+        finally:
+            # Dense recurrence defers self-state writes; the turn's own affect
+            # deltas (apply_turn_context above) must be durable once the
+            # post-response pipeline ends — this is what makes the
+            # defer_saves docstring ("never a real turn's state") true.
+            self_state = getattr(self, "_self_state", None)
+            if self_state is not None and hasattr(self_state, "flush"):
+                try:
+                    self_state.flush()
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _init_tools(self) -> None:
         cam = self.config.camera
@@ -1789,15 +1808,43 @@ class EmbodiedAgent:
         result = await self._compete_once(
             cheap=cheap, desires=self._desires, extra_coalitions=extra_coalitions
         )
+        if self._turn_active:
+            # A real turn started while the competition awaited — yield.
+            # Without this re-check, the dense block below would inject an
+            # idle broadcast into the live turn's self-state and attention.
+            return
         if getattr(self.config, "consciousness_profile", False):
             # Winnerless ticks are informative too (low access), so the
             # profile updates before the early return below.
             self._update_consciousness_profile(origin="tick")
+        # Dense recurrence: accumulated drive nudges flush once per full
+        # cycle — up to one desires.json write per mapped drive per cycle,
+        # instead of one per broadcast.
+        pending = getattr(self, "_pending_drive_nudges", None)
+        if not cheap and pending and self._desires is not None:
+            self._pending_drive_nudges = {}
+            for drive, amount in pending.items():
+                try:
+                    self._desires.boost(drive, amount)
+                except Exception:  # noqa: BLE001
+                    pass
         winner = result.winner
         if winner is None:
             return
 
         self._train_of_thought.observe(winner)
+        if getattr(self.config, "inner_dense", False):
+            # Idle broadcast re-entry: the winner shapes attention history and
+            # the broadcast listeners (self-state, drive nudges) between
+            # turns, not only on them. Persistence is batched in each module.
+            try:
+                self._attention_schema.note_focus(winner)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                await self._workspace.notify_listeners(winner)
+            except Exception:  # noqa: BLE001
+                pass
         streak = self._train_of_thought.streak
         # Recurrence sources never re-crystallize — the monologue echoing its
         # own contents back into itself would be a feedback loop, not thought.
@@ -1915,11 +1962,33 @@ class EmbodiedAgent:
             self._last_intero_signal = signal  # cached for the tick-path profile
             base = float(self.config.inner_loop_interval)
             factor = 1.6 - 0.8 * float(signal.energy)  # energy 1.0 → 0.8x; 0.0 → 1.6x
+            # Configurable floor (FAMILIAR_INNER_MIN_INTERVAL, default = the
+            # historical 5 s): dense setups may push toward ~1 Hz. The cheap
+            # tick costs ~3.4 ms, so even 1 Hz is ~0.3% of one core.
+            floor = max(
+                1.0,
+                float(getattr(self.config, "inner_min_interval", _INNER_CADENCE_MIN_SEC)),
+            )
             self._inner_loop_config.interval_sec = min(
-                _INNER_CADENCE_MAX_SEC, max(_INNER_CADENCE_MIN_SEC, base * factor)
+                _INNER_CADENCE_MAX_SEC, max(floor, base * factor)
             )
         except Exception:  # noqa: BLE001
             pass
+
+    async def _on_broadcast_drive_nudge(self, winner) -> None:
+        """Dense-recurrence listener: a broadcast gently presses its drive.
+
+        Accumulates in memory (capped) and is flushed into
+        ``DesireSystem.boost`` once per full inner-loop cycle — batching the
+        per-boost desires.json write. Registered only when
+        ``FAMILIAR_INNER_DENSE`` is on; no-op while desires are unbound.
+        """
+        drive = _INNER_SOURCE_TO_DRIVE.get(getattr(winner, "source", ""))
+        if drive is None:
+            return
+        current = self._pending_drive_nudges.get(drive, 0.0)
+        bump = 0.02 * max(0.0, float(getattr(winner, "activation", 0.0)))
+        self._pending_drive_nudges[drive] = min(0.15, current + bump)
 
     async def _compete_once(
         self,
@@ -2934,6 +3003,16 @@ class EmbodiedAgent:
                 await asyncio.wait_for(inner_loop.stop(), timeout=1.5)
             except (asyncio.TimeoutError, Exception):
                 pass
+        # Dense recurrence defers disk writes — persist any backlog AFTER all
+        # producers (background pipelines, inner-loop ticks) have stopped, or
+        # a late nudge would re-dirty the stores past the flush and be lost.
+        for store_name in ("_self_state", "_attention_schema"):
+            store = getattr(self, store_name, None)
+            if store is not None and hasattr(store, "flush"):
+                try:
+                    store.flush()
+                except Exception:  # noqa: BLE001
+                    pass
         if self._mcp:
             try:
                 await asyncio.wait_for(self._mcp.stop(), timeout=2.0)
