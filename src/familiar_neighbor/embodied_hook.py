@@ -41,6 +41,7 @@ from familiar_neighbor.mind.appraisal import AppraisalContext, AppraisalEngine
 from familiar_neighbor.mind.deferral import DEFERRAL_PREFIX, detect_deferral
 from familiar_neighbor.mind.desires import DesireSystem
 from familiar_neighbor.mind.mental_state import MentalStateBus, MentalStateSnapshot
+from familiar_neighbor.mind.reality import looks_like_fresh_perception_claim
 from familiar_neighbor.mind.social_policy import (
     SPEECH_ACT_VOCABULARY,
     SocialPolicyDecision,
@@ -227,6 +228,8 @@ class PreparedTurn:
     non_say_streak: int = 0
     identity_retried: bool = False
     voice_retried: bool = False
+    reality_retried: bool = False
+    see_succeeded: bool = False
     observation_action_name: str | None = None
     observation_action_input: dict | None = None
     pending_view_action_name: str | None = None
@@ -763,6 +766,16 @@ class EmbodiedAgentHook(RuntimeHookBase):
         if not final_text or final_text == "(no response)":
             return
         agent = self._agent
+        # Grounding record: did this turn actually touch the world? A failed
+        # see() does not count, and self-initiated reflection turns are not
+        # reality-testing-relevant (the gate exempts them for the same
+        # reason), so they neither raise nor sink the ratio.
+        grounding = getattr(agent, "_grounding", None)
+        if grounding is not None and not is_desire_turn:
+            try:
+                grounding.note_turn(prep.see_succeeded)
+            except Exception:  # noqa: BLE001
+                pass
         try:
             agent._mental_state_bus.append(prep.mental_snapshot)
         except Exception as exc:  # noqa: BLE001
@@ -880,6 +893,39 @@ class EmbodiedAgentHook(RuntimeHookBase):
                     ),
                 )
 
+        # Reality gate: a reply that claims present-tense perception without
+        # having looked this turn is generation outrunning error correction —
+        # dreaming out loud. One re-ask lets the model either actually call
+        # see() or honestly reframe as memory/uncertainty. Runs BEFORE the
+        # voice gate: the re-ask may change what there is to say. Only fires
+        # when a see-capable tool is on this turn's surface (camera-less
+        # installs stay covered by the prompt constraint). Deterministic
+        # pattern checks only; memory-framed sentences are exempt (the safe
+        # failure direction is a missed claim, not a false re-ask).
+        if (
+            getattr(agent.config, "reality_gate", False)
+            and not prep.reality_retried
+            and not prep.is_desire_turn
+            and not prep.brief_reply_turn
+            and not prep.see_succeeded
+            and any(t.get("name") == "see" for t in prep.turn_tools)
+        ):
+            if looks_like_fresh_perception_claim(result.text or ""):
+                prep.reality_retried = True
+                prep.say_used = False
+                logger.info("[REALITY] gate fired: perception claim without see() this turn")
+                from familiar_runtime.runtime import RetryDecision
+
+                return RetryDecision(
+                    retry=True,
+                    inject_user_message=(
+                        "[REALITY] You describe seeing something, but you did not "
+                        "look this turn. Either call see() now and describe what is "
+                        "actually there, or rephrase honestly as memory ('I "
+                        "remember…') or uncertainty."
+                    ),
+                )
+
         # Voice gate: written text is silent — a conversational reply that
         # never called say() gets ONE re-ask so the model itself picks the
         # line to speak aloud. Unlike auto_say (which would pipe the whole
@@ -948,6 +994,12 @@ class EmbodiedAgentHook(RuntimeHookBase):
 
         if call.name == "see":
             prep.camera_used = True
+            # camera_used means "a capture was attempted" (the observation
+            # pipeline keys on it); the reality gate and grounding need
+            # "a capture actually landed" — a failed see() must not license
+            # perception claims.
+            if result.success:
+                prep.see_succeeded = True
             if prep.pending_view_action_name is not None:
                 prep.observation_action_name = prep.pending_view_action_name
                 prep.observation_action_input = dict(prep.pending_view_action_input or {})
