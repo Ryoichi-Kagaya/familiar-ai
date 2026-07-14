@@ -1218,6 +1218,30 @@ async def test_say_reminder_injected_after_two_silent_tools():
 
 
 @pytest.mark.asyncio
+async def test_brief_reply_ends_turn_after_say():
+    """Brief-reply turns must stop after say(); do not loop on the same phrase."""
+    agent = _make_agent(with_tts=True)
+    tc = ToolCall(id="t1", name="say", input={"text": "hello"})
+    agent.backend.stream_turn = AsyncMock(
+        side_effect=[
+            (_turn("tool_use", tool_calls=[tc]), None),
+            (_turn("end_turn", text=""), "done"),
+        ]
+    )
+
+    ps = _patch_heavy()
+    for p in ps:
+        p.start()
+    try:
+        await agent.run("おはよう")
+    finally:
+        for p in ps:
+            p.stop()
+
+    assert any("You already spoke" in t for t in _user_texts(agent))
+
+
+@pytest.mark.asyncio
 async def test_interrupt_queue_drained_with_embodied_format():
     """Queued interrupts surface with the [User interrupted xN] say() directive."""
     agent = _make_agent()

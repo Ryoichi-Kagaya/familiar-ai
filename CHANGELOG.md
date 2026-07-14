@@ -74,6 +74,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - `voice_server` now applies the shared `VoiceLoopGuard` to incoming `/voice_turn` transcripts, suppressing TTS -> realtime STT self-echo (e.g. the agent's own "test" leaking back into the loop) before it reaches the agent
 - `TTSTool` now updates the shared `VoiceLoopGuard` even when local volume is muted (remote device handles playback), so echo suppression works correctly in `voice_server` mode
 - Brief-reply mode now explicitly instructs the model not to echo the user's words back, reducing accidental parroting on very short inputs
+- Brief-reply turns now inject a hard "You already spoke. End your turn now." reminder as soon as `say()` is used, preventing the same short utterance from looping until `max_iterations`
 
 ## [0.1.0] - 2026-02-22
 

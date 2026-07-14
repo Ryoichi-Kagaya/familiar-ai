@@ -914,6 +914,10 @@ class EmbodiedAgentHook(RuntimeHookBase):
             if callable(arm):
                 arm()
             return []
+        if prep.brief_reply_turn and prep.say_used:
+            # Brief-reply turns have only the say() tool; once spoken, stop.
+            prep.non_say_streak = 0
+            return ["You already spoke. End your turn now."]
         if prep.non_say_streak >= 2 and not prep.say_used:
             prep.non_say_streak = 0
             return [
