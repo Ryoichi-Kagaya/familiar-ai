@@ -174,6 +174,13 @@ class TTSTool:
             output = self.output
         if self.volume == 0.0:
             snippet = text[:50] + ("..." if len(text) > 50 else "")
+            # Volume is muted locally because the remote device handles playback,
+            # but the shared voice guard still needs a fingerprint so that any
+            # realtime STT echo of this speech can be suppressed.
+            voice_guard = getattr(self, "_voice_guard", None) or get_shared_voice_guard()
+            self._voice_guard = voice_guard
+            voice_guard.on_tts_start(text)
+            voice_guard.on_tts_end(text, played=True)
             return f"Said: {snippet} (audio handled by device)"
         if len(text) > 200:
             text = text[:197] + "..."
@@ -410,7 +417,8 @@ async def _play_local(tmp_path: str, volume: float = 1.0) -> bool:
             try:
                 proc = await asyncio.create_subprocess_exec(
                     afplay,
-                    "-v", str(volume),
+                    "-v",
+                    str(volume),
                     tmp_path,
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.PIPE,

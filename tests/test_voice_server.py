@@ -10,6 +10,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from familiar_agent.voice_server import VoiceServer
 from familiar_agent.agent import affect_to_emotion
 from familiar_agent.mental_state import AffectiveState
+from familiar_agent.voice_guard import VoiceLoopGuard
 
 
 # ── affect_to_emotion ────────────────────────────────────────────────────────
@@ -129,4 +130,26 @@ async def test_health_endpoint_returns_ok_without_agent_call():
         assert resp.status == 200
         data = await resp.json()
         assert data == {"status": "ok"}
+    vs._agent.run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_voice_turn_suppresses_self_echo(monkeypatch):
+    """Recent agent speech echoed back by realtime STT should be dropped."""
+    guard = VoiceLoopGuard(suppression_window_secs=1.0)
+    guard.on_tts_start("test")
+    guard.on_tts_end("test", played=True)
+
+    monkeypatch.setattr(
+        "familiar_agent.voice_server.get_shared_voice_guard",
+        lambda: guard,
+    )
+
+    vs = _make_server()
+    async with TestClient(TestServer(vs.build_app())) as client:
+        resp = await client.post("/voice_turn", json={"text": "test"})
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["text"] == ""
+        assert data["emotion"] == "neutral"
     vs._agent.run.assert_not_called()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 
-from familiar_agent.agent import MAX_ITERATIONS, _interoception
+from familiar_agent.agent import MAX_ITERATIONS, EmbodiedAgent, _interoception
 from familiar_neighbor.prompts import assemble_neighbor_system_prompt
 
 FORMATTED = assemble_neighbor_system_prompt(max_steps=MAX_ITERATIONS)
@@ -39,6 +39,13 @@ def test_system_prompt_voice_constraint_present() -> None:
     # Should be inside a constraint form
     idx = FORMATTED.index("(constraint")
     assert "say()" in FORMATTED[idx:]
+
+
+def test_brief_reply_prompt_forbids_echoing_user_words() -> None:
+    """Brief turns should not parrot the user's exact words back."""
+    prompt = EmbodiedAgent._brief_reply_prompt()
+    assert "echo" in prompt.lower()
+    assert "user's words" in prompt.lower()
 
 
 def test_system_prompt_camera_legs_constraint_present() -> None:

@@ -1136,6 +1136,7 @@ class EmbodiedAgent:
             "[Lightweight turn]\n"
             "- This is a short conversational turn.\n"
             "- Reply directly in 1-2 short sentences.\n"
+            "- Do not echo the user's words back; answer in your own words.\n"
             "- Do not infer plans, facts, or feelings the user did not say.\n"
             "- Do not use observation, memory, or ToM tools unless explicitly asked."
         )

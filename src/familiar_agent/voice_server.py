@@ -25,6 +25,7 @@ from .agent import EmbodiedAgent, affect_to_emotion
 from .config import AgentConfig
 from .desires import DesireSystem
 from .mental_state import AffectiveState
+from .voice_guard import get_shared_voice_guard
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,19 @@ class VoiceServer:
         text: str = body.get("text", "")
         if not isinstance(text, str) or not text.strip():
             return web.json_response({"error": "'text' must be a non-empty string"}, status=400)
+
+        # Suppress TTS -> realtime STT self-echo that leaks through the gateway.
+        # The shared guard is updated by TTSTool in this process, so recent agent
+        # speech can be recognised and dropped before it re-enters the agent loop.
+        guard = get_shared_voice_guard()
+        decision = guard.check_transcript(text)
+        if decision.blocked:
+            logger.info(
+                "voice_turn: suppressed self-echo (%s): %r",
+                decision.reason,
+                text[:60],
+            )
+            return web.json_response({"text": "", "emotion": "neutral"})
 
         # Serialize concurrent requests so the agent state machine
         # doesn't interleave two turns.
