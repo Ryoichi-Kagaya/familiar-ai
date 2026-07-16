@@ -8,6 +8,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Claude Code print-mode support as the default `cli` backend command, isolated with safe mode,
+  disabled built-in tools, and no session persistence; CLI subprocesses now also report startup
+  and exit failures, time out, and terminate cleanly when a turn is cancelled
 - Inner-loop scaffolding (phase 2, part 1): the workspace competition body is factored into a reusable `_compete_once` (with a `cheap` mode that skips both embedding-backed sources), `_gather_workspace_context` becomes a thin byte-stable wrapper, and an `InnerLoop` background driver + `TrainOfThought` / `InnerThought` dataclasses land behind a default-off `FAMILIAR_INNER_LOOP` flag. Nothing runs yet — the tick is a no-op stub; the idle workspace cycle arrives in the next part
 - Identity self-authorship (phase 1, part 3): an `identity_commit` tool lets the agent record values and self-commitments it has come to hold, and `identity_review` lists what it holds — but agent-authored assertions can never be non-negotiable and never gain a hard-veto checker (those stay operator/seed-only, a prompt-injection guard). A background honor-check (one bounded utility call per implicated value, off the hot path, only with a dedicated utility backend) nudges value conviction up when a reply honored it and down when it strained it, with revision-audited evidence
 - Identity loop wiring (phase 1, part 2): the identity layer now participates in every turn — `assess()` feeds an `identity_dissonance` affect dimension and the mental-state snapshot, a two-tier veto guards boundaries in the final-reply channel (an in-loop `[IDENTITY]` retry lets the model refuse in its own words; the meta-gate replaces a still-violating reply with the assertion's repair text), violations raise a new boost-only `identity_coherence` drive that fires a self-initiated reflection turn through the existing idle machinery, and that reflection relieves the dissonance with a revision-audited reaffirmation; everything stays byte-identical when no identity is held. Like the coherence gate, this guards the `end_turn` reply, not text already spoken via the `say` tool mid-turn
@@ -63,6 +66,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - `EmbodiedAgent.run()` is now a thin wrapper around the substrate `ReActLoop`: TAPE replan, coherence retry, interrupt drain, and say() reminders ride `EmbodiedAgentHook` lifecycle methods; finalisation and the forced final response stay in the wrapper, and the public `run()` signature is unchanged
 
 ### Fixed
+- CLI backends no longer trigger first-run setup solely because `API_KEY` is absent; CLI
+  authentication is owned by the configured command instead
 - `OpenAICompatibleBackend` now detects Kimi endpoints (`api.kimi.com`, `api.moonshot.ai`, `moonshot.cn`) and sets `emits_reasoning=True`, so brief-reply turns allocate 800 tokens instead of 120.  This prevents `kimi-for-coding` (and other reasoning-enabled Kimi models accessed via OpenAI-compatible endpoints) from consuming the entire small budget with internal reasoning tokens and returning an empty response in the GUI
 - Commitment store no longer pins its SQLite connection to the creating thread: in the GUI the agent (and store) are built inside `asyncio.to_thread`, so every commitment write from the event-loop thread (add/complete/snooze tools, reminder bookkeeping, delegated-task follow-ups) raised `ProgrammingError` and was silently swallowed
 - Kansai past-tense "〜やった" (e.g. 「散々やった」) no longer classifies as delight; only exclamatory forms (やったー/やった！/やったぜ) celebrate

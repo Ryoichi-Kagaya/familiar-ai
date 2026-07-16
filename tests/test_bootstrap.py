@@ -21,6 +21,17 @@ def test_load_app_bootstrap_needs_setup_when_env_missing(tmp_path: Path, monkeyp
     assert state.legacy_config_detected is False
 
 
+def test_load_app_bootstrap_accepts_cli_without_api_key(tmp_path: Path, monkeypatch) -> None:
+    _clear_runtime_env(monkeypatch)
+    env_path = tmp_path / ".env"
+    env_path.write_text("PLATFORM=cli\n", encoding="utf-8")
+
+    state = load_app_bootstrap(env_path)
+
+    assert state.configured is True
+    assert state.needs_setup is False
+
+
 def test_load_app_bootstrap_migrates_legacy_anthropic_env(tmp_path: Path, monkeypatch) -> None:
     _clear_runtime_env(monkeypatch)
     env_path = tmp_path / ".env"

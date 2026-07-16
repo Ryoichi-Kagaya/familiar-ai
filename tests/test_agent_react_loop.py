@@ -181,6 +181,10 @@ _HEAVY_PATCHES = {
     "familiar_agent.agent.EmbodiedAgent._infer_emotion": AsyncMock(return_value="neutral"),
     "familiar_agent.agent.EmbodiedAgent._summarize_exchange": AsyncMock(return_value="summary"),
     "familiar_agent.agent.EmbodiedAgent._online_temporal_context": AsyncMock(return_value=None),
+    # These run() unit tests exercise turn behavior, not workspace competition.
+    # Avoid real asyncio.to_thread calls so repeated turns stay isolated from
+    # executor scheduling and teardown behavior in constrained test runners.
+    "familiar_agent.agent.EmbodiedAgent._gather_workspace_context": AsyncMock(return_value=""),
     "familiar_agent.agent.EmbodiedAgent._run_post_response_pipeline": AsyncMock(),
     "familiar_agent.agent.EmbodiedAgent._update_self_model": AsyncMock(),
     "familiar_agent.agent.EmbodiedAgent._maybe_update_self_narrative": AsyncMock(),
@@ -857,6 +861,7 @@ async def test_post_response_pipeline_updates_self_continuity_state():
     agent._maybe_update_self_narrative = AsyncMock()
     agent._maybe_adapt_values = AsyncMock()
     agent.extract_curiosity = AsyncMock(return_value="The window light still feels important.")
+    agent._gather_workspace_context = AsyncMock(return_value="")
 
     desires = MagicMock()
     desires.boost = MagicMock()
@@ -1131,6 +1136,7 @@ async def test_pipeline_captures_companion_thread_on_conversational_turn():
     agent._maybe_update_self_narrative = AsyncMock()
     agent._maybe_adapt_values = AsyncMock()
     agent._capture_companion_thread = AsyncMock()
+    agent._gather_workspace_context = AsyncMock(return_value="")
 
     await EmbodiedAgent._run_post_response_pipeline(
         agent,
@@ -1159,6 +1165,7 @@ async def test_pipeline_skips_thread_capture_on_desire_turn():
     agent._maybe_update_self_narrative = AsyncMock()
     agent._maybe_adapt_values = AsyncMock()
     agent._capture_companion_thread = AsyncMock()
+    agent._gather_workspace_context = AsyncMock(return_value="")
 
     await EmbodiedAgent._run_post_response_pipeline(
         agent,

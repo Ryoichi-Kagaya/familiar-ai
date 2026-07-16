@@ -64,7 +64,8 @@ def load_app_bootstrap(env_path: Path | None = None) -> AppBootstrap:  # noqa: C
     _migrate_legacy_user_files()
 
     api_key = (os.environ.get("API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or "").strip()
-    configured = bool(api_key)
+    platform = os.environ.get("PLATFORM", "anthropic").strip().lower()
+    configured = platform == "cli" or bool(api_key)
     return AppBootstrap(
         env_path=path,
         configured=configured,

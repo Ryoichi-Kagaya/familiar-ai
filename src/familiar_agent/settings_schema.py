@@ -500,7 +500,7 @@ def setup_config_to_env_values(config: SetupConfig) -> dict[str, str]:
 def validate_setup_config(config: SetupConfig, *, setup_mode: bool = False) -> list[str]:
     """Return validation errors for schema-managed fields."""
     errors: list[str] = []
-    if setup_mode and not config.api_key.strip():
+    if setup_mode and config.platform.strip().lower() != "cli" and not config.api_key.strip():
         errors.append("API_KEY is required to continue.")
     for field in SETTINGS_FIELDS:
         if setup_mode and not field.setup_visible:

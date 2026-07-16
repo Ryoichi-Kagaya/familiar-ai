@@ -17,6 +17,7 @@ from familiar_agent.setup import (
     generate_env_file,
     is_first_run,
     migrate_legacy_env_file,
+    run_cli_setup_wizard,
     save_setup_config,
     validate_anthropic_key,
     validate_camera_connection,
@@ -153,6 +154,17 @@ def test_generate_env_includes_custom_model(tmp_path: Path):
     generate_env_file(config, path=env_path)
     content = env_path.read_text()
     assert "MODEL=claude-sonnet-4-6" in content
+
+
+def test_cli_setup_wizard_allows_cli_without_api_key(tmp_path: Path, monkeypatch):
+    answers = iter(["cli", "", ""])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    env_path = tmp_path / ".env"
+
+    assert run_cli_setup_wizard(env_path) is True
+    content = env_path.read_text(encoding="utf-8")
+    assert "PLATFORM=cli" in content
+    assert "API_KEY" not in content
 
 
 def test_save_setup_config_preserves_blank_sensitive_fields(tmp_path: Path):

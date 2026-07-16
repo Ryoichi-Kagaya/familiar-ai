@@ -7,6 +7,9 @@ deferred inside the test so a missing optional SDK fails that test only.
 
 from __future__ import annotations
 
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 
@@ -254,3 +257,103 @@ def test_create_backend_dispatches_by_platform(monkeypatch: pytest.MonkeyPatch) 
     assert isinstance(create_backend(FakeConfig("glm")), GLMBackend)
     cli_backend = create_backend(FakeConfig("cli", model="echo {}"))
     assert isinstance(cli_backend, CLIBackend)
+
+
+def test_create_backend_uses_safe_claude_default_for_cli() -> None:
+    from familiar_agent.backend import create_backend
+
+    config = MagicMock(platform="cli", model="")
+
+    backend = create_backend(config)
+
+    assert backend._cmd == [
+        "claude",
+        "-p",
+        "--safe-mode",
+        "--tools",
+        "",
+        "--no-session-persistence",
+        "--system-prompt",
+        "",
+        "{}",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cli_backend_injects_prompt_and_strips_claudecode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from familiar_runtime.models import CLIBackend
+
+    proc = MagicMock(returncode=0)
+    proc.communicate = AsyncMock(return_value=(b"reply\n", b""))
+    monkeypatch.setenv("CLAUDECODE", "nested")
+
+    with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)) as spawn:
+        reply = await CLIBackend(["claude", "-p", "{}"])._run("hello")
+
+    assert reply == "reply"
+    assert spawn.call_args.args == ("claude", "-p", "hello")
+    assert "CLAUDECODE" not in spawn.call_args.kwargs["env"]
+    proc.communicate.assert_awaited_once_with(None)
+
+
+@pytest.mark.asyncio
+async def test_cli_backend_raises_on_nonzero_exit() -> None:
+    from familiar_runtime.models import CLIBackend
+
+    proc = MagicMock(returncode=2)
+    proc.communicate = AsyncMock(return_value=(b"", b"authentication failed"))
+
+    with (
+        patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
+        pytest.raises(RuntimeError, match="code 2: authentication failed"),
+    ):
+        await CLIBackend(["claude", "-p", "{}"])._run("hello")
+
+
+@pytest.mark.asyncio
+async def test_cli_backend_terminates_process_on_timeout() -> None:
+    from familiar_runtime.models import CLIBackend
+
+    async def communicate(_stdin):
+        await asyncio.Future()
+
+    proc = MagicMock(returncode=None)
+    proc.communicate = communicate
+    proc.wait = AsyncMock(return_value=0)
+
+    with (
+        patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
+        pytest.raises(RuntimeError, match="timed out after 0.01 seconds"),
+    ):
+        await CLIBackend(["claude", "-p", "{}"], timeout_seconds=0.01)._run("hello")
+
+    proc.terminate.assert_called_once_with()
+    proc.wait.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_cli_backend_terminates_process_when_cancelled() -> None:
+    from familiar_runtime.models import CLIBackend
+
+    started = asyncio.Event()
+    never_finishes = asyncio.Future()
+
+    async def communicate(_stdin):
+        started.set()
+        return await never_finishes
+
+    proc = MagicMock(returncode=None)
+    proc.communicate = communicate
+    proc.wait = AsyncMock(return_value=0)
+
+    with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+        task = asyncio.create_task(CLIBackend(["claude", "-p", "{}"])._run("hello"))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    proc.terminate.assert_called_once_with()
+    proc.wait.assert_awaited_once_with()

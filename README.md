@@ -226,9 +226,17 @@ AGENT_NAME=Yukine
 **CLI tool `.env` example:**
 ```env
 PLATFORM=cli
-MODEL=llm -m gemma3 {}        # llm CLI (https://llm.datasette.io) — {} = prompt arg
-# MODEL=ollama run gemma3:27b  # Ollama — no {}, prompt goes via stdin
+# MODEL may be omitted to use Claude Code in isolated print mode:
+# claude -p --safe-mode --tools "" --no-session-persistence --system-prompt "" {}
+# MODEL=llm -m gemma3 {}        # llm CLI (https://llm.datasette.io) — {} = prompt arg
+# MODEL=ollama run gemma3:27b   # Ollama — no {}, prompt goes via stdin
 ```
+
+The CLI backend does not require `API_KEY`; it uses the CLI tool's own authentication. For
+Claude Code, run `claude -p "Reply with OK"` once before starting familiar-ai to confirm that
+the CLI is installed and authenticated. Claude Code's built-in tools, project customizations,
+and session persistence are disabled by the default command so familiar-ai remains the only
+tool executor and conversation owner. Set `MODEL` explicitly to override this command.
 
 ---
 

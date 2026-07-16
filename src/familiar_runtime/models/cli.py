@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from collections.abc import Callable, Sequence
@@ -33,8 +34,9 @@ class CLIBackend:
     Otherwise the prompt is written to **stdin** (good for ``ollama run``).
     """
 
-    def __init__(self, command: list[str]) -> None:
+    def __init__(self, command: list[str], *, timeout_seconds: float = 120.0) -> None:
         self._cmd = command
+        self._timeout_seconds = timeout_seconds
 
     # ── message factories ─────────────────────────────────────────
 
@@ -98,6 +100,20 @@ class CLIBackend:
 
     # ── subprocess I/O ────────────────────────────────────────────
 
+    @staticmethod
+    async def _stop_process(proc: asyncio.subprocess.Process) -> None:
+        """Terminate a child process, escalating to kill if it does not exit."""
+        if proc.returncode is not None:
+            return
+        with contextlib.suppress(ProcessLookupError):
+            proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
+
     async def _run(self, prompt: str) -> str:
         """Run the CLI command with the prompt.
 
@@ -126,16 +142,33 @@ class CLIBackend:
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
             )
-            stdout, stderr = await proc.communicate(stdin_data)
-            if proc.returncode != 0:
-                logger.warning(
-                    "CLI backend stderr: %s",
-                    stderr.decode("utf-8", errors="replace")[:300],
-                )
-            return stdout.decode("utf-8", errors="replace").strip()
-        except Exception as e:
-            logger.error("CLI backend failed: %s", e)
-            return f"[CLI backend error: {e}]"
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"CLI command not found: {cmd[0]}") from exc
+        except OSError as exc:
+            raise RuntimeError(f"Failed to start CLI command {cmd[0]}: {exc}") from exc
+
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(stdin_data), timeout=self._timeout_seconds
+            )
+        except asyncio.TimeoutError as exc:
+            await asyncio.shield(self._stop_process(proc))
+            raise RuntimeError(
+                f"CLI backend timed out after {self._timeout_seconds:g} seconds."
+            ) from exc
+        except asyncio.CancelledError:
+            await asyncio.shield(self._stop_process(proc))
+            raise
+
+        stdout_text = stdout.decode("utf-8", errors="replace").strip()
+        stderr_text = stderr.decode("utf-8", errors="replace").strip()
+        if proc.returncode != 0:
+            detail = stderr_text or stdout_text or "no error output"
+            logger.warning("CLI backend failed (%d): %s", proc.returncode, detail[:300])
+            raise RuntimeError(f"CLI backend exited with code {proc.returncode}: {detail[:300]}")
+        if not stdout_text:
+            raise RuntimeError("CLI backend returned an empty response.")
+        return stdout_text
 
     # ── backend interface ─────────────────────────────────────────
 

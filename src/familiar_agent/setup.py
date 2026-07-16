@@ -148,15 +148,17 @@ def run_cli_setup_wizard(env_path: Path) -> bool:
     print("Press Enter to keep the default value shown in brackets.")
 
     platform = input("Platform [anthropic/gemini/openai/kimi/glm/cli] (anthropic): ").strip()
-    api_key = input("API key: ").strip()
+    selected_platform = (platform or "anthropic").lower()
+    key_label = "API key [optional for CLI]: " if selected_platform == "cli" else "API key: "
+    api_key = input(key_label).strip()
     model = input("Model [optional]: ").strip()
 
-    if not api_key:
+    if not api_key and selected_platform != "cli":
         print("Setup aborted: API key is required.")
         return False
 
     config = SetupConfig(
-        platform=platform or "anthropic",
+        platform=selected_platform,
         api_key=api_key,
         model=model,
     )

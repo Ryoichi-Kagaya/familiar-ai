@@ -49,3 +49,9 @@ def test_validate_setup_config_requires_api_key_only_in_setup_mode() -> None:
 
     assert any("API_KEY is required" in error for error in setup_errors)
     assert any("Port must be an integer" in error for error in full_errors)
+
+
+def test_validate_setup_config_allows_cli_without_api_key() -> None:
+    config = SetupConfig(platform="cli", api_key="")
+
+    assert validate_setup_config(config, setup_mode=True) == []
