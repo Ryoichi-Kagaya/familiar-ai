@@ -75,6 +75,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - `TTSTool` now updates the shared `VoiceLoopGuard` even when local volume is muted (remote device handles playback), so echo suppression works correctly in `voice_server` mode
 - Brief-reply mode now explicitly instructs the model not to echo the user's words back, reducing accidental parroting on very short inputs
 - Brief-reply turns now inject a hard "You already spoke. End your turn now." reminder as soon as `say()` is used, preventing the same short utterance from looping until `max_iterations`
+- Normal (non-brief) turns now inject the same "You already spoke. End your turn now." reminder after two consecutive `say()` calls, closing the remaining utterance-loop path where `say()` resets `non_say_streak` and never trips the existing reminders
 
 ## [0.1.0] - 2026-02-22
 

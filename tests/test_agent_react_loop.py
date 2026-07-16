@@ -1242,6 +1242,44 @@ async def test_brief_reply_ends_turn_after_say():
 
 
 @pytest.mark.asyncio
+async def test_normal_turn_stops_after_repeated_say():
+    """Two consecutive say() calls in a normal turn must inject the end reminder.
+
+    Guards the utterance loop where the model keeps re-speaking (e.g. padding
+    with "test") until max_iterations because say() resets non_say_streak.
+    """
+    agent = _make_agent(with_tts=True)
+    # Long input (>80 chars) forces a normal, non-brief-reply turn so all tools
+    # stay available and say() alone does not end the turn.
+    long_input = (
+        "ラズパイで使える7インチ以下のUSB-C一本で電源と映像の両方いけるディスプレイを"
+        "いくつか調べて、できれば安いやつを教えてくれへんかな？予算は五千円くらいで考えてるんやけど、"
+        "タッチ機能はなくてもええし、解像度もそこそこで十分やと思ってるわ。"
+    )
+    assert len(long_input) > 80
+    say1 = ToolCall(id="t1", name="say", input={"text": "調べてみるわ"})
+    say2 = ToolCall(id="t2", name="say", input={"text": "test"})
+    agent.backend.stream_turn = AsyncMock(
+        side_effect=[
+            (_turn("tool_use", tool_calls=[say1]), None),
+            (_turn("tool_use", tool_calls=[say2]), None),
+            (_turn("end_turn", text=""), "done"),
+        ]
+    )
+
+    ps = _patch_heavy()
+    for p in ps:
+        p.start()
+    try:
+        await agent.run(long_input)
+    finally:
+        for p in ps:
+            p.stop()
+
+    assert any("You already spoke. End your turn now." in t for t in _user_texts(agent))
+
+
+@pytest.mark.asyncio
 async def test_interrupt_queue_drained_with_embodied_format():
     """Queued interrupts surface with the [User interrupted xN] say() directive."""
     agent = _make_agent()

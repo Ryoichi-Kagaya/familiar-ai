@@ -177,6 +177,7 @@ class PreparedTurn:
     say_used: bool = False
     final_text: str = "(no response)"
     non_say_streak: int = 0
+    say_streak: int = 0
     identity_retried: bool = False
     observation_action_name: str | None = None
     observation_action_input: dict | None = None
@@ -793,6 +794,7 @@ class EmbodiedAgentHook(RuntimeHookBase):
                 top = violations[0]
                 prep.identity_retried = True
                 prep.say_used = False
+                prep.say_streak = 0
                 from familiar_runtime.runtime import RetryDecision
 
                 strength = (
@@ -824,6 +826,7 @@ class EmbodiedAgentHook(RuntimeHookBase):
             return None
         agent._coherence_retried = True
         prep.say_used = False
+        prep.say_streak = 0
         from familiar_runtime.runtime import RetryDecision
 
         return RetryDecision(
@@ -862,8 +865,10 @@ class EmbodiedAgentHook(RuntimeHookBase):
         if call.name == "say":
             prep.say_used = True
             prep.non_say_streak = 0
+            prep.say_streak += 1
         else:
             prep.non_say_streak += 1
+            prep.say_streak = 0
 
         if result.success:
             agent._last_tool_error = None
@@ -918,6 +923,13 @@ class EmbodiedAgentHook(RuntimeHookBase):
             # Brief-reply turns have only the say() tool; once spoken, stop.
             prep.non_say_streak = 0
             return ["You already spoke. End your turn now."]
+        if prep.say_streak >= 2:
+            # Normal turns keep say(); two consecutive say() calls with no work
+            # between them is an utterance loop (e.g. repeating "test" until
+            # max_iterations). Speaking again is not doing more — stop.
+            prep.non_say_streak = 0
+            prep.say_streak = 0
+            return ["You already spoke. End your turn now."]
         if prep.non_say_streak >= 2 and not prep.say_used:
             prep.non_say_streak = 0
             return [
@@ -938,6 +950,7 @@ class EmbodiedAgentHook(RuntimeHookBase):
         prep = self._prep_from(ctx)
         if prep is not None:
             prep.non_say_streak = 0
+            prep.say_streak = 0
         head = " / ".join(interrupts[:3])
         if len(interrupts) > 3:
             head += f" (+{len(interrupts) - 3} more)"
