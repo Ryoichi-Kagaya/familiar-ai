@@ -232,6 +232,26 @@ def test_cli_backend_serialises_messages_and_tool_results() -> None:
     assert serialised.endswith("Assistant:")
 
 
+@pytest.mark.asyncio
+async def test_cli_backend_estimates_multilingual_token_usage() -> None:
+    from familiar_runtime.models import CLIBackend
+
+    backend = CLIBackend(["model"])
+    japanese = "あ" * 60_001
+
+    with patch.object(backend, "_run", new=AsyncMock(return_value="了解したで")):
+        result, _ = await backend.stream_turn(
+            "system",
+            [backend.make_user_message(japanese)],
+            [],
+            100,
+            None,
+        )
+
+    assert result.input_tokens > 60_000
+    assert result.output_tokens >= len("了解したで")
+
+
 def test_provider_backends_serialize_user_turn_images() -> None:
     pytest.importorskip("anthropic")
     from familiar_runtime.models import AnthropicBackend, ImageAttachment, UserTurn
@@ -325,7 +345,6 @@ def test_create_backend_uses_safe_claude_default_for_cli() -> None:
         "--no-session-persistence",
         "--system-prompt",
         "",
-        "{}",
     ]
 
 
@@ -418,6 +437,22 @@ async def test_cli_backend_injects_prompt_and_strips_claudecode(
     assert spawn.call_args.args == ("claude", "-p", "hello")
     assert "CLAUDECODE" not in spawn.call_args.kwargs["env"]
     proc.communicate.assert_awaited_once_with(None)
+
+
+@pytest.mark.asyncio
+async def test_claude_cli_backend_sends_legacy_placeholder_prompt_via_stdin() -> None:
+    from familiar_runtime.models import ClaudeCodeCLIBackend
+
+    proc = MagicMock(returncode=0)
+    proc.communicate = AsyncMock(return_value=(b"reply\n", b""))
+
+    with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)) as spawn:
+        reply = await ClaudeCodeCLIBackend(["claude", "-p", "{}"])._run("x" * 300_000)
+
+    assert reply == "reply"
+    assert spawn.call_args.args == ("claude", "-p")
+    assert spawn.call_args.kwargs["stdin"] is asyncio.subprocess.PIPE
+    proc.communicate.assert_awaited_once_with(b"x" * 300_000)
 
 
 @pytest.mark.asyncio

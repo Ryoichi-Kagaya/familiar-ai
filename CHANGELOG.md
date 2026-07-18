@@ -76,6 +76,10 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - `EmbodiedAgent.run()` is now a thin wrapper around the substrate `ReActLoop`: TAPE replan, coherence retry, interrupt drain, and say() reminders ride `EmbodiedAgentHook` lifecycle methods; finalisation and the forced final response stay in the wrapper. The existing text and legacy `user_images` calls remain compatible, while the input now also accepts a typed multimodal `UserTurn`
 
 ### Fixed
+- Claude Code CLI turns now send prompts through stdin (also honoring legacy commands with a
+  `{}` placeholder), preventing long conversations from failing with `Argument list too long`;
+  CLI turns also estimate multilingual token usage so the existing 60k-token history compaction
+  actually triggers instead of seeing every CLI request as zero tokens
 - Prompt-driven CLI backends now see connected MCP capabilities as familiar-ai-managed external
   tools, including their source server and exact input schema; short MCP/tool capability questions
   also retain the full tool catalog instead of entering lightweight reply mode

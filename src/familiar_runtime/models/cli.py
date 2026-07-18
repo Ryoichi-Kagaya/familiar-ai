@@ -19,6 +19,21 @@ from .content import UserTurn, compact_image_blocks
 logger = logging.getLogger(__name__)
 
 
+def _estimate_cli_tokens(text: str) -> int:
+    """Estimate tokens for CLI backends that do not report model usage.
+
+    Latin text averages roughly four characters per token, while Japanese and
+    other non-ASCII scripts are commonly much denser. Counting each non-ASCII
+    code point as one token keeps the compaction trigger deliberately
+    conservative without adding a provider-specific tokenizer dependency.
+    """
+    if not text:
+        return 0
+    ascii_chars = sum(1 for char in text if ord(char) < 128)
+    non_ascii_chars = len(text) - ascii_chars
+    return (ascii_chars + 3) // 4 + non_ascii_chars
+
+
 class CLIBackend:
     """Backend that shells out to any CLI LLM tool via stdin/stdout.
 
@@ -30,13 +45,14 @@ class CLIBackend:
     Config::
 
         PLATFORM=cli
-        MODEL=claude -p {}            # Claude Code — {} is replaced with the prompt
+        MODEL=claude -p               # Claude Code — prompt goes via stdin
         MODEL=ollama run gemma3:27b   # stdin-based (no {} needed)
         MODEL=llm -m gpt-4o {}        # Simon Willison's llm CLI
 
     If the command contains ``{}``, the serialised prompt is injected there as a
-    positional argument (good for ``claude -p`` which doesn't read stdin).
-    Otherwise the prompt is written to **stdin** (good for ``ollama run``).
+    positional argument. Otherwise the prompt is written to **stdin**. Claude Code
+    is handled specially and always receives prompts via stdin so large conversations
+    cannot exceed the operating system's command-line size limit.
     """
 
     def __init__(self, command: list[str], *, timeout_seconds: float = 120.0) -> None:
@@ -205,7 +221,16 @@ class CLIBackend:
         clean_text = _TOOL_CALL_RE.sub("", text).strip()
         stop = "tool_use" if tool_calls else "end_turn"
         raw: dict[str, Any] = {"role": "assistant", "content": text}
-        return ModelTurnResult(stop_reason=stop, text=clean_text, tool_calls=tool_calls), raw
+        return (
+            ModelTurnResult(
+                stop_reason=stop,
+                text=clean_text,
+                tool_calls=tool_calls,
+                input_tokens=_estimate_cli_tokens(prompt),
+                output_tokens=_estimate_cli_tokens(text),
+            ),
+            raw,
+        )
 
     async def complete(self, prompt: str, max_tokens: int) -> str:  # noqa: ARG002
         return await self._run(prompt)
@@ -217,7 +242,8 @@ class ClaudeCodeCLIBackend(CLIBackend):
     Claude Code's text/JSON input transport does not expose a stable binary
     image channel.  For image turns we stage validated bytes in an isolated
     temporary working directory, enable only ``Read``, and tell Claude to read
-    those paths.  Text-only calls retain the configured command byte-for-byte.
+    those paths. Prompts always travel over stdin; a legacy ``{}`` placeholder in
+    the configured command is removed before spawning the process.
     """
 
     _MEDIA_SUFFIXES = {
@@ -225,6 +251,18 @@ class ClaudeCodeCLIBackend(CLIBackend):
         "image/png": ".png",
         "image/webp": ".webp",
     }
+
+    async def _run(
+        self,
+        prompt: str,
+        *,
+        command: list[str] | None = None,
+        cwd: Path | None = None,
+    ) -> str:
+        """Send Claude prompts over stdin to avoid argv size limits."""
+        selected_command = command or self._cmd
+        stdin_command = [token for token in selected_command if token != "{}"]
+        return await super()._run(prompt, command=stdin_command, cwd=cwd)
 
     def make_user_message(self, content: str | list | UserTurn) -> dict:
         if isinstance(content, UserTurn):
@@ -392,4 +430,13 @@ class ClaudeCodeCLIBackend(CLIBackend):
         clean_text = _TOOL_CALL_RE.sub("", text).strip()
         stop = "tool_use" if tool_calls else "end_turn"
         raw: dict[str, Any] = {"role": "assistant", "content": text}
-        return ModelTurnResult(stop_reason=stop, text=clean_text, tool_calls=tool_calls), raw
+        return (
+            ModelTurnResult(
+                stop_reason=stop,
+                text=clean_text,
+                tool_calls=tool_calls,
+                input_tokens=_estimate_cli_tokens(prompt),
+                output_tokens=_estimate_cli_tokens(text),
+            ),
+            raw,
+        )

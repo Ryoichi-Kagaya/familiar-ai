@@ -2444,6 +2444,11 @@ class EmbodiedAgent:
         if len(self.messages) <= keep_last:
             return
 
+        logger.info(
+            "Compacting conversation history at approximately %d input tokens",
+            self._last_context_tokens,
+        )
+
         # Find a safe cut boundary: a user-message dict at or after the nominal
         # cut point.  Cutting before a user message guarantees that no
         # tool_calls/tool-results pair is split across to_summarise / recent,
@@ -2489,6 +2494,9 @@ class EmbodiedAgent:
         )
 
         self.messages = [summary_marker] + list(recent)
+        # Avoid immediately compacting the new summary again if this turn fails
+        # before the backend can report the reduced context size.
+        self._last_context_tokens = 0
         self._post_compact = True
 
     @property

@@ -171,10 +171,15 @@ AGENT_NAME=ユキネ
 ```env
 PLATFORM=cli
 # MODELは省略可能。省略時は安全モードの claude -p を使用
-# claude -p --safe-mode --tools "" --no-session-persistence --system-prompt "" {}
+# claude -p --safe-mode --tools "" --no-session-persistence --system-prompt ""
 # MODEL=llm -m gemma3 {}       # llm CLI（https://llm.datasette.io）— {} = プロンプト引数
 # MODEL=ollama run gemma3:27b  # Ollama — {} なし、stdinでプロンプトを渡す
 ```
+
+Claude Codeへのプロンプトは、従来の`{}`を含む`MODEL`設定でもstdin経由で渡されます。
+そのため、長くなった会話履歴がOSのコマンドライン引数サイズ上限に当たることはありません。
+CLIツールは正確なtoken usageを返さないため、familiar-aiが多言語promptから概算し、
+入力約60k tokensを超えると古い会話を要約へ圧縮します。
 
 ### 画像を送る
 

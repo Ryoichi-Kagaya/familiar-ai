@@ -193,6 +193,17 @@ class TestCompactMessages:
 
         assert agent._post_compact is True
 
+    def test_resets_stale_context_count_after_compaction(self):
+        """A failed next call must not immediately re-summarise the summary."""
+        agent = _make_agent()
+        agent._last_context_tokens = 60_001
+        for i in range(10):
+            agent.messages.append(_make_msg("user" if i % 2 == 0 else "assistant", f"m{i}"))
+
+        asyncio.run(agent._compact_messages(keep_last=4))
+
+        assert agent._last_context_tokens == 0
+
 
 # ── post-compaction recall boost ───────────────────────────────────────────
 
