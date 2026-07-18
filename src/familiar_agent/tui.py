@@ -19,6 +19,8 @@ from textual.binding import Binding
 from textual.widgets import Footer, Input, RichLog, Static
 from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 
+from familiar_runtime.models import UserTurn
+
 from ._i18n import _make_banner, _t
 from ._ui_helpers import (
     ACTION_ICONS,
@@ -32,6 +34,7 @@ from ._ui_helpers import (
     should_fire_idle_desire,
 )
 from .realtime_stt_session import create_realtime_stt_controller, RealtimeSttController
+from .image_input import ImageInputError, parse_image_command
 
 if TYPE_CHECKING:
     from .agent import EmbodiedAgent
@@ -102,6 +105,7 @@ def _format_tokens(n: int) -> str:
 
 # Slash commands shown in the autocomplete dropdown
 _SLASH_COMMANDS: list[tuple[str, str]] = [
+    ("/image", "🖼  Send an image (e.g. /image path caption)"),
     ("/btw", "💬  Quick one-shot question (no memory / tools)"),
     ("/transcribe", "🎙  Start / stop voice input (STT)"),
     ("/cost", "💰  Show token usage and cost for this session"),
@@ -175,14 +179,16 @@ class FamiliarApp(App):
         Binding("pagedown", "scroll_log_down", "↓ Scroll", show=False, priority=True),
     ]
 
-    def __init__(self, agent: "EmbodiedAgent", desires: "DesireSystem", *, term_attrs: object = None) -> None:
+    def __init__(
+        self, agent: "EmbodiedAgent", desires: "DesireSystem", *, term_attrs: object = None
+    ) -> None:
         super().__init__()
         self._term_attrs = term_attrs  # saved before Textual changes raw mode
         self.agent = agent
         self.desires = desires
         self._agent_name = agent.config.agent_name
         self._companion_name = agent.config.companion_name
-        self._input_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        self._input_queue: asyncio.Queue[str | UserTurn | None] = asyncio.Queue()
         self._last_interaction = time.time()
         self._agent_running = False
         self._current_text_buf = ""  # buffer for streaming text
@@ -229,6 +235,7 @@ class FamiliarApp(App):
             return
         with contextlib.suppress(Exception):
             import termios as _termios
+
             _termios.tcsetattr(sys.stdin.fileno(), _termios.TCSAFLUSH, self._term_attrs)  # type: ignore[arg-type]
 
     def on_mount(self) -> None:
@@ -351,7 +358,7 @@ class FamiliarApp(App):
             self._write_log(f"{name_tag} {answer}")
             return
         if text.startswith("/switch"):
-            user_id = text[len("/switch"):].strip()
+            user_id = text[len("/switch") :].strip()
             if not user_id:
                 users = self.agent.list_users()
                 lines = "\n".join(f"  /switch {u.id}  ({u.name})" for u in users)
@@ -361,9 +368,18 @@ class FamiliarApp(App):
             self._log_system(f"── {name} に切り替わりました ──")
             return
 
-        self._log_user(text)
+        try:
+            user_input = parse_image_command(text) or text
+        except ImageInputError as exc:
+            self._log_system(f"⚠ {exc}")
+            return
+
+        display_text = user_input.text if isinstance(user_input, UserTurn) else user_input
+        if isinstance(user_input, UserTurn) and user_input.images:
+            display_text = f"🖼 {display_text}"
+        self._log_user(display_text)
         self._last_interaction = time.time()
-        await self._input_queue.put(text)
+        await self._input_queue.put(user_input)
 
     # ── agent loop ─────────────────────────────────────────────────
 
@@ -412,7 +428,7 @@ class FamiliarApp(App):
             await asyncio.sleep(0.08)
         stream.remove_class("thinking")
 
-    async def _run_agent(self, user_input: str, inner_voice: str = "") -> None:
+    async def _run_agent(self, user_input: str | UserTurn, inner_voice: str = "") -> None:
         self._agent_running = True
         self._cancel_event.clear()
         self._current_text_buf = ""

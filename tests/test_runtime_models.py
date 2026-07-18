@@ -8,6 +8,7 @@ deferred inside the test so a missing optional SDK fails that test only.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -224,6 +225,46 @@ def test_cli_backend_serialises_messages_and_tool_results() -> None:
     assert serialised.endswith("Assistant:")
 
 
+def test_provider_backends_serialize_user_turn_images() -> None:
+    pytest.importorskip("anthropic")
+    from familiar_runtime.models import AnthropicBackend, ImageAttachment, UserTurn
+
+    backend = AnthropicBackend(api_key="k", model="test")
+    message = backend.make_user_message(
+        UserTurn(
+            text="look",
+            images=(ImageAttachment(b"png", "image/png", "sample.png"),),
+        )
+    )
+
+    assert message["content"][0] == {"type": "text", "text": "look"}
+    assert message["content"][1]["source"]["media_type"] == "image/png"
+
+
+def test_gemini_serializes_user_turn_without_content_key_assumption() -> None:
+    pytest.importorskip("google.genai")
+    from familiar_runtime.models import GeminiBackend, ImageAttachment, UserTurn
+
+    backend = GeminiBackend(api_key="k", model="test")
+    message = backend.make_user_message(
+        UserTurn(text="look", images=(ImageAttachment(b"png", "image/png"),))
+    )
+
+    assert message["parts"][0] == {"text": "look"}
+    assert message["parts"][1]["inline_data"]["mime_type"] == "image/png"
+
+
+def test_generic_cli_backend_rejects_images_explicitly() -> None:
+    from familiar_runtime.models import CLIBackend, ImageAttachment, UserTurn
+
+    backend = CLIBackend(["ollama", "run", "model"])
+
+    with pytest.raises(RuntimeError, match="does not support image input"):
+        backend.make_user_message(
+            UserTurn(text="look", images=(ImageAttachment(b"image", "image/jpeg"),))
+        )
+
+
 def test_create_backend_dispatches_by_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     """create_backend should return the right provider for each PLATFORM value."""
     pytest.importorskip("anthropic")
@@ -261,11 +302,13 @@ def test_create_backend_dispatches_by_platform(monkeypatch: pytest.MonkeyPatch) 
 
 def test_create_backend_uses_safe_claude_default_for_cli() -> None:
     from familiar_agent.backend import create_backend
+    from familiar_runtime.models import ClaudeCodeCLIBackend
 
     config = MagicMock(platform="cli", model="")
 
     backend = create_backend(config)
 
+    assert isinstance(backend, ClaudeCodeCLIBackend)
     assert backend._cmd == [
         "claude",
         "-p",
@@ -277,6 +320,78 @@ def test_create_backend_uses_safe_claude_default_for_cli() -> None:
         "",
         "{}",
     ]
+
+
+def test_claude_cli_command_enables_only_read_for_image_turns() -> None:
+    from familiar_runtime.models import ClaudeCodeCLIBackend
+
+    command = ["claude", "-p", "--safe-mode", "--tools", "", "{}"]
+
+    assert ClaudeCodeCLIBackend._command_with_read(command) == [
+        "claude",
+        "-p",
+        "--safe-mode",
+        "--tools",
+        "Read",
+        "--allowedTools",
+        "Read",
+        "{}",
+    ]
+    assert command[4] == ""
+
+
+@pytest.mark.asyncio
+async def test_claude_cli_stages_images_for_read_and_cleans_them_up() -> None:
+    from familiar_runtime.models import ClaudeCodeCLIBackend, ImageAttachment, UserTurn
+
+    backend = ClaudeCodeCLIBackend(["claude", "-p", "--tools", "", "{}"])
+    messages = [
+        backend.make_user_message(
+            UserTurn(
+                text="what is this?",
+                images=(ImageAttachment(b"image-bytes", "image/png"),),
+            )
+        )
+    ]
+    captured_path: Path | None = None
+
+    async def fake_run(prompt: str, *, command=None, cwd=None) -> str:
+        nonlocal captured_path
+        assert command == [
+            "claude",
+            "-p",
+            "--tools",
+            "Read",
+            "--allowedTools",
+            "Read",
+            "{}",
+        ]
+        assert cwd is not None
+        captured_path = Path(cwd) / "image-1.png"
+        assert captured_path.read_bytes() == b"image-bytes"
+        assert str(captured_path) in prompt
+        assert "Use the Read tool" in prompt
+        return "seen"
+
+    with patch.object(backend, "_run", side_effect=fake_run):
+        result, _ = await backend.stream_turn("system", messages, [], 100, None)
+
+    assert result.text == "seen"
+    assert captured_path is not None
+    assert not captured_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_claude_cli_text_turn_keeps_original_command_path() -> None:
+    from familiar_runtime.models import ClaudeCodeCLIBackend
+
+    backend = ClaudeCodeCLIBackend(["claude", "-p", "--tools", "", "{}"])
+
+    with patch.object(backend, "_run", new=AsyncMock(return_value="reply")) as run:
+        await backend.stream_turn("system", [backend.make_user_message("hello")], [], 100, None)
+
+    run.assert_awaited_once()
+    assert run.call_args.kwargs == {}
 
 
 @pytest.mark.asyncio

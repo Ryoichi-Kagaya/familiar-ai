@@ -8,6 +8,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from .base import ModelTurnResult, ToolCall
+from .content import UserTurn, compact_image_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +33,20 @@ class GeminiBackend:
     # ── message factories ─────────────────────────────────────────
 
     def make_image_block(self, b64: str, media_type: str = "image/jpeg") -> dict:
-        return {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}}
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": b64},
+        }
 
-    def make_user_message(self, content: str | list) -> dict:
+    def make_user_message(self, content: str | list | UserTurn) -> dict:
+        if isinstance(content, UserTurn):
+            content = [
+                {"type": "text", "text": content.text},
+                *[
+                    self.make_image_block(image.base64_data, image.media_type)
+                    for image in content.images
+                ],
+            ]
         if isinstance(content, str):
             return {"role": "user", "parts": [{"text": content}]}
         parts: list[dict[str, Any]] = []
@@ -98,6 +110,7 @@ class GeminiBackend:
         max_tokens: int,
         on_text: Callable[[str], None] | None,
     ) -> tuple[ModelTurnResult, Any]:
+        messages = compact_image_blocks(messages)
         if isinstance(system, tuple):
             system = "\n\n---\n\n".join(s for s in system if s)
         types = self._types

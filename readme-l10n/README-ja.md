@@ -170,9 +170,23 @@ AGENT_NAME=ユキネ
 **CLIツールの `.env` 例：**
 ```env
 PLATFORM=cli
-MODEL=llm -m gemma3 {}        # llm CLI（https://llm.datasette.io）— {} = プロンプト引数
+# MODELは省略可能。省略時は安全モードの claude -p を使用
+# claude -p --safe-mode --tools "" --no-session-persistence --system-prompt "" {}
+# MODEL=llm -m gemma3 {}       # llm CLI（https://llm.datasette.io）— {} = プロンプト引数
 # MODEL=ollama run gemma3:27b  # Ollama — {} なし、stdinでプロンプトを渡す
 ```
+
+### 画像を送る
+
+- デスクトップGUI：入力欄横の `＋` から画像を選び、プレビューを確認して送信します。
+- TUI / plain REPL：`/image "画像のパス" [任意の説明]` を入力します。
+- Telegram：写真または画像ドキュメントを、必要ならcaption付きで送信します。
+
+JPEG、PNG、WebPに対応し、1ターン最大3枚まで添付できます。画像は検証・必要に応じた
+縮小を行い、古い生画像はcaptionを残して会話履歴から除去します。既定の `claude -p`
+では、画像ターンだけ隔離された一時ディレクトリへ画像を置き、Claude Codeの読み取り専用
+`Read` ツールを有効にします。その他の任意CLIコマンドは、専用adapterがない限り
+テキスト専用です。
 
 ---
 

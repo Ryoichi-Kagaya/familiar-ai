@@ -22,7 +22,7 @@ import os
 import re
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .voice_guard import VoiceLoopGuard, get_shared_voice_guard
 
@@ -106,7 +106,7 @@ class RealtimeSttSession:
         self._partial_task: asyncio.Task | None = None
         self._monitor_task: asyncio.Task | None = None
         self._restart_task: asyncio.Task[bool] | None = None
-        self._committed_queue: asyncio.Queue[str | None] | None = None
+        self._committed_queue: asyncio.Queue[Any] | None = None
         self._incoming_committed: asyncio.Queue[str] = asyncio.Queue()
         self._incoming_partial: asyncio.Queue[str] = asyncio.Queue()
         self._connect_lock = asyncio.Lock()
@@ -141,7 +141,7 @@ class RealtimeSttSession:
     async def start(
         self,
         loop: asyncio.AbstractEventLoop,
-        committed_queue: asyncio.Queue[str | None],
+        committed_queue: asyncio.Queue[Any],
     ) -> None:
         """Connect the STT WebSocket and start microphone capture."""
         from .tools.mic import MicCapture  # noqa: PLC0415
@@ -323,7 +323,7 @@ class RealtimeSttController:
     def __init__(self, session: RealtimeSttSession) -> None:
         self._session = session
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._committed_queue: asyncio.Queue[str | None] | None = None
+        self._committed_queue: asyncio.Queue[Any] | None = None
         self.on_partial: Callable[[str], None] | None = None
         self.on_committed: Callable[[str], None] | None = None
         self.on_restart: Callable[[str], None] | None = None
@@ -343,7 +343,7 @@ class RealtimeSttController:
     async def start(
         self,
         loop: asyncio.AbstractEventLoop,
-        committed_queue: asyncio.Queue[str | None],
+        committed_queue: asyncio.Queue[Any],
     ) -> None:
         self._loop = loop
         self._committed_queue = committed_queue

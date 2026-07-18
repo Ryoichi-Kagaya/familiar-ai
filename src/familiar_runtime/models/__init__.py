@@ -10,7 +10,8 @@ from ._shared import (
 )
 from .anthropic import AnthropicBackend
 from .base import ModelBackend, ModelTurnResult, ToolCall
-from .cli import CLIBackend
+from .cli import CLIBackend, ClaudeCodeCLIBackend
+from .content import ImageAttachment, UserTurn, coerce_user_turn
 from .gemini import GeminiBackend
 from .glm import GLMBackend
 from .kimi import KimiBackend
@@ -21,6 +22,9 @@ __all__ = [
     "ModelBackend",
     "ModelTurnResult",
     "ToolCall",
+    "ImageAttachment",
+    "UserTurn",
+    "coerce_user_turn",
     # providers
     "AnthropicBackend",
     "OpenAICompatibleBackend",
@@ -28,6 +32,7 @@ __all__ = [
     "GLMBackend",
     "GeminiBackend",
     "CLIBackend",
+    "ClaudeCodeCLIBackend",
     # private helpers re-exported for legacy tests
     "_ADAPTIVE_THINKING_MODELS",
     "_TOOL_CALL_RE",

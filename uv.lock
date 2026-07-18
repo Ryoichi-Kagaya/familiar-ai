@@ -686,6 +686,7 @@ dependencies = [
     { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "onvif-zeep" },
     { name = "openai" },
+    { name = "pillow" },
     { name = "python-dotenv" },
     { name = "sentence-transformers" },
     { name = "textual" },
@@ -700,7 +701,6 @@ all = [
     { name = "onvif-zeep-async" },
     { name = "openai-whisper" },
     { name = "opencv-python" },
-    { name = "pillow" },
     { name = "pyside6" },
     { name = "python-telegram-bot" },
     { name = "qasync" },
@@ -711,7 +711,6 @@ all = [
 camera = [
     { name = "onvif-zeep-async" },
     { name = "opencv-python" },
-    { name = "pillow" },
     { name = "zeroconf" },
 ]
 gui = [
@@ -767,7 +766,7 @@ requires-dist = [
     { name = "openai", specifier = ">=1.0.0" },
     { name = "openai-whisper", marker = "extra == 'voice'" },
     { name = "opencv-python", marker = "extra == 'camera'", specifier = ">=4.0" },
-    { name = "pillow", marker = "extra == 'camera'", specifier = ">=10.0.0" },
+    { name = "pillow", specifier = ">=10.0.0" },
     { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.7.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-telegram-bot", marker = "extra == 'telegram'", specifier = ">=20.0" },

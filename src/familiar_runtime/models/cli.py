@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import base64
 import logging
 import os
+import tempfile
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any
 
 from ._shared import _TOOL_CALL_RE, _build_tools_system, _parse_tool_calls_from_text
 from .base import ModelTurnResult, ToolCall
+from .content import UserTurn, compact_image_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +23,9 @@ class CLIBackend:
     """Backend that shells out to any CLI LLM tool via stdin/stdout.
 
     Tool calling uses prompt injection + <tool_call> tag parsing (same mechanism
-    as OpenAICompatibleBackend with tools_mode="prompt").  Images are text-only
-    — binary data from camera tools is dropped silently.
+    as OpenAICompatibleBackend with tools_mode="prompt"). Generic commands are
+    text-only and reject image turns explicitly; Claude Code image transport is
+    implemented by :class:`ClaudeCodeCLIBackend` below.
 
     Config::
 
@@ -43,7 +48,11 @@ class CLIBackend:
     def make_image_block(self, b64: str, media_type: str = "image/jpeg") -> dict:  # noqa: ARG002
         return {"type": "text", "text": "[image]"}
 
-    def make_user_message(self, content: str | list) -> dict:
+    def make_user_message(self, content: str | list | UserTurn) -> dict:
+        if isinstance(content, UserTurn):
+            if content.images:
+                raise RuntimeError("This CLI model command does not support image input.")
+            content = content.text
         if isinstance(content, list):
             text = "\n".join(
                 item["text"]
@@ -114,7 +123,13 @@ class CLIBackend:
                 proc.kill()
             await proc.wait()
 
-    async def _run(self, prompt: str) -> str:
+    async def _run(
+        self,
+        prompt: str,
+        *,
+        command: list[str] | None = None,
+        cwd: Path | None = None,
+    ) -> str:
         """Run the CLI command with the prompt.
 
         If ``{}`` appears anywhere in the command, the prompt is injected
@@ -124,12 +139,13 @@ class CLIBackend:
         # Strip CLAUDECODE so nested `claude -p` invocations are allowed
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
-        use_arg = "{}" in self._cmd
+        selected_command = command or self._cmd
+        use_arg = "{}" in selected_command
         if use_arg:
-            cmd = [prompt if tok == "{}" else tok for tok in self._cmd]
+            cmd = [prompt if tok == "{}" else tok for tok in selected_command]
             stdin_data: bytes | None = None
         else:
-            cmd = self._cmd
+            cmd = selected_command
             stdin_data = prompt.encode("utf-8")
 
         try:
@@ -141,6 +157,7 @@ class CLIBackend:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
+                cwd=str(cwd) if cwd is not None else None,
             )
         except FileNotFoundError as exc:
             raise RuntimeError(f"CLI command not found: {cmd[0]}") from exc
@@ -192,3 +209,187 @@ class CLIBackend:
 
     async def complete(self, prompt: str, max_tokens: int) -> str:  # noqa: ARG002
         return await self._run(prompt)
+
+
+class ClaudeCodeCLIBackend(CLIBackend):
+    """Claude Code print-mode adapter with image input via its ``Read`` tool.
+
+    Claude Code's text/JSON input transport does not expose a stable binary
+    image channel.  For image turns we stage validated bytes in an isolated
+    temporary working directory, enable only ``Read``, and tell Claude to read
+    those paths.  Text-only calls retain the configured command byte-for-byte.
+    """
+
+    _MEDIA_SUFFIXES = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+    }
+
+    def make_user_message(self, content: str | list | UserTurn) -> dict:
+        if isinstance(content, UserTurn):
+            blocks: list[dict[str, Any]] = [{"type": "text", "text": content.text}]
+            blocks.extend(
+                self.make_image_block(image.base64_data, image.media_type)
+                for image in content.images
+            )
+            return {"role": "user", "content": blocks}
+        return super().make_user_message(content)
+
+    def make_image_block(self, b64: str, media_type: str = "image/jpeg") -> dict:
+        if media_type not in self._MEDIA_SUFFIXES:
+            raise RuntimeError(f"Unsupported Claude Code image type: {media_type}")
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": b64},
+        }
+
+    @staticmethod
+    def _merge_tool_name(value: str, tool_name: str) -> str:
+        if value == "default":
+            return value
+        names = [name.strip() for name in value.split(",") if name.strip()]
+        if tool_name not in names:
+            names.append(tool_name)
+        return ",".join(names)
+
+    @classmethod
+    def _command_with_read(cls, command: list[str]) -> list[str]:
+        """Enable and pre-approve Read while preserving other configured tools."""
+
+        result = list(command)
+        found_tools = False
+        found_allowed = False
+        index = 0
+        while index < len(result):
+            token = result[index]
+            if token in {"--tools"} and index + 1 < len(result):
+                result[index + 1] = cls._merge_tool_name(result[index + 1], "Read")
+                found_tools = True
+                index += 2
+                continue
+            if token.startswith("--tools="):
+                result[index] = "--tools=" + cls._merge_tool_name(token.partition("=")[2], "Read")
+                found_tools = True
+            if token in {"--allowedTools", "--allowed-tools"} and index + 1 < len(result):
+                result[index + 1] = cls._merge_tool_name(result[index + 1], "Read")
+                found_allowed = True
+                index += 2
+                continue
+            if token.startswith(("--allowedTools=", "--allowed-tools=")):
+                flag, _, value = token.partition("=")
+                result[index] = f"{flag}={cls._merge_tool_name(value, 'Read')}"
+                found_allowed = True
+            index += 1
+
+        insert_at = result.index("{}") if "{}" in result else len(result)
+        additions: list[str] = []
+        if not found_tools:
+            additions.extend(["--tools", "Read"])
+        if not found_allowed:
+            additions.extend(["--allowedTools", "Read"])
+        result[insert_at:insert_at] = additions
+        return result
+
+    @classmethod
+    def _stage_image(cls, block: dict[str, Any], directory: Path, index: int) -> Path:
+        source = block.get("source", {})
+        media_type = str(source.get("media_type", ""))
+        suffix = cls._MEDIA_SUFFIXES.get(media_type)
+        if suffix is None:
+            raise RuntimeError(f"Unsupported Claude Code image type: {media_type}")
+        try:
+            raw = base64.b64decode(str(source.get("data", "")), validate=True)
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError("Invalid image data for Claude Code.") from exc
+        path = directory / f"image-{index}{suffix}"
+        path.write_bytes(raw)
+        return path
+
+    def _fmt_msg_with_images(
+        self,
+        msg: dict[str, Any],
+        directory: Path,
+        next_index: int,
+    ) -> tuple[str, int]:
+        role = msg.get("role", "user")
+        content = msg.get("content") or ""
+        if not isinstance(content, list):
+            return self._fmt_msg(msg), next_index
+
+        lines: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "text":
+                lines.append(str(item.get("text", "")))
+            elif item.get("type") == "image":
+                path = self._stage_image(item, directory, next_index)
+                lines.append(
+                    f"[Attached image {next_index}: {path}\n"
+                    "Use the Read tool on this exact path before answering.]"
+                )
+                next_index += 1
+        prefix = "User" if role == "user" else "Assistant"
+        return f"{prefix}:\n" + "\n".join(lines), next_index
+
+    def _serialize_with_images(
+        self,
+        system: str | tuple[str, str],
+        messages: list,
+        tools: list[dict],
+        directory: Path,
+    ) -> str:
+        if isinstance(system, tuple):
+            system = "\n\n---\n\n".join(part for part in system if part)
+        parts: list[str] = []
+        augmented = _build_tools_system(system, tools)
+        if augmented:
+            parts.append(f"<system>\n{augmented}\n</system>")
+
+        image_index = 1
+        for msg in messages:
+            batch = msg if isinstance(msg, list) else [msg]
+            for item in batch:
+                if not isinstance(item, dict):
+                    continue
+                rendered, image_index = self._fmt_msg_with_images(item, directory, image_index)
+                parts.append(rendered)
+        parts.append("Assistant:")
+        return "\n\n".join(parts)
+
+    async def stream_turn(
+        self,
+        system: str | tuple[str, str],
+        messages: list,
+        tools: list[dict],
+        max_tokens: int,  # noqa: ARG002
+        on_text: Callable[[str], None] | None,
+    ) -> tuple[ModelTurnResult, Any]:
+        messages = compact_image_blocks(messages)
+        has_images = any(
+            isinstance(message, dict)
+            and isinstance(message.get("content"), list)
+            and any(
+                isinstance(block, dict) and block.get("type") == "image"
+                for block in message["content"]
+            )
+            for entry in messages
+            for message in (entry if isinstance(entry, list) else [entry])
+        )
+        if not has_images:
+            return await super().stream_turn(system, messages, tools, max_tokens, on_text)
+
+        with tempfile.TemporaryDirectory(prefix="familiar-ai-images-") as temp_dir:
+            directory = Path(temp_dir)
+            prompt = self._serialize_with_images(system, messages, tools, directory)
+            command = self._command_with_read(self._cmd)
+            text = await self._run(prompt, command=command, cwd=directory)
+
+        if on_text:
+            on_text(text)
+        tool_calls = _parse_tool_calls_from_text(text)
+        clean_text = _TOOL_CALL_RE.sub("", text).strip()
+        stop = "tool_use" if tool_calls else "end_turn"
+        raw: dict[str, Any] = {"role": "assistant", "content": text}
+        return ModelTurnResult(stop_reason=stop, text=clean_text, tool_calls=tool_calls), raw

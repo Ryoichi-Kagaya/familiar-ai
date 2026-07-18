@@ -9,6 +9,7 @@ from typing import Any
 
 from ._shared import _TOOL_CALL_RE, _build_tools_system, _parse_tool_calls_from_text
 from .base import ModelTurnResult, ToolCall
+from .content import UserTurn, compact_image_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,14 @@ class OpenAICompatibleBackend:
 
     # ── message factories ─────────────────────────────────────────
 
-    def make_user_message(self, content: str | list) -> dict:
+    def make_user_message(self, content: str | list | UserTurn) -> dict:
+        if isinstance(content, UserTurn):
+            blocks: list[dict[str, Any]] = [{"type": "text", "text": content.text}]
+            blocks.extend(
+                self.make_image_block(image.base64_data, image.media_type)
+                for image in content.images
+            )
+            content = blocks
         return {"role": "user", "content": content}
 
     def make_image_block(self, b64: str, media_type: str = "image/jpeg") -> dict:
@@ -141,6 +149,7 @@ class OpenAICompatibleBackend:
         max_tokens: int,
         on_text: Callable[[str], None] | None,
     ) -> tuple[ModelTurnResult, Any]:
+        messages = compact_image_blocks(messages)
         sys_str: str = (
             "\n\n---\n\n".join(s for s in system if s) if isinstance(system, tuple) else system
         )

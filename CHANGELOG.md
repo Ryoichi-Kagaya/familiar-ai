@@ -8,6 +8,16 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Provider-neutral multimodal user turns with validated JPEG/PNG/WebP attachments shared by
+  Telegram, the desktop GUI, the Textual TUI, and the plain REPL; terminal users can send an
+  image with `/image "<path>" [caption]`, while the GUI supports previewing and removing up to
+  three pending images
+- Image input for the default `claude -p` backend: image turns are staged in an isolated
+  temporary directory and delivered through Claude Code's read-only `Read` tool, which is
+  enabled and pre-approved only for that invocation; text-only commands remain unchanged and
+  temporary files are removed after success, failure, timeout, or cancellation
+- Cross-provider image-history compaction that keeps only the three most recent raw image
+  blocks while preserving captions and replacing older pixels with `[image cleared]`
 - Claude Code print-mode support as the default `cli` backend command, isolated with safe mode,
   disabled built-in tools, and no session persistence; CLI subprocesses now also report startup
   and exit failures, time out, and terminate cleanly when a turn is cancelled
@@ -63,7 +73,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - Agent replies no longer wait on post-response memory/self-model updates, and TAPE planning is skipped when no separate utility backend is configured
 - System prompts now surface at most one active concern and one recent misaligned intention trace, while post-response updates carry those states forward without adding hot-path LLM calls
 - Embodied tool routing now goes through the generic ToolRegistry while preserving existing camera, voice, memory, coding, and MCP behavior
-- `EmbodiedAgent.run()` is now a thin wrapper around the substrate `ReActLoop`: TAPE replan, coherence retry, interrupt drain, and say() reminders ride `EmbodiedAgentHook` lifecycle methods; finalisation and the forced final response stay in the wrapper, and the public `run()` signature is unchanged
+- `EmbodiedAgent.run()` is now a thin wrapper around the substrate `ReActLoop`: TAPE replan, coherence retry, interrupt drain, and say() reminders ride `EmbodiedAgentHook` lifecycle methods; finalisation and the forced final response stay in the wrapper. The existing text and legacy `user_images` calls remain compatible, while the input now also accepts a typed multimodal `UserTurn`
 
 ### Fixed
 - CLI backends no longer trigger first-run setup solely because `API_KEY` is absent; CLI

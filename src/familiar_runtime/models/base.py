@@ -6,6 +6,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from .content import UserTurn
+
 
 @dataclass(slots=True)
 class ToolCall:
@@ -31,7 +33,7 @@ class ModelTurnResult:
 class ModelBackend(Protocol):
     """Protocol implemented by provider-specific model adapters."""
 
-    def make_user_message(self, content: str | list[Any]) -> dict[str, Any]:
+    def make_user_message(self, content: str | list[Any] | UserTurn) -> dict[str, Any]:
         """Serialize a user message for this provider."""
 
     def make_image_block(self, b64: str, media_type: str = "image/jpeg") -> dict[str, Any]:

@@ -232,6 +232,31 @@ class TestCompactImagesEdgeCases:
         assert result[0] == _user_msg("hello")
         assert result[1] == _assistant_msg("hi there")
 
+    def test_user_attached_images_are_compacted_too(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"caption {i}"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": f"IMG{i}",
+                        },
+                    },
+                ],
+            }
+            for i in range(4)
+        ]
+
+        result = AnthropicBackend.compact_images(messages, keep_last=3)
+
+        assert result[0]["content"][0]["text"] == "caption 0"
+        assert result[0]["content"][1] == {"type": "text", "text": "[image cleared]"}
+        assert result[1]["content"][1]["type"] == "image"
+
 
 class TestCompactImagesAppliedInStreamTurn:
     """compact_images() is actually called inside stream_turn()."""

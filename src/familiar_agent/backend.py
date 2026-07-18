@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import shlex
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from familiar_runtime.models import (
@@ -21,6 +22,7 @@ from familiar_runtime.models import (
     _TOOLS_PROMPT_HEADER,
     AnthropicBackend,
     CLIBackend,
+    ClaudeCodeCLIBackend,
     GeminiBackend,
     GLMBackend,
     KimiBackend,
@@ -53,6 +55,7 @@ __all__ = [
     "GLMBackend",
     "GeminiBackend",
     "CLIBackend",
+    "ClaudeCodeCLIBackend",
     # helpers exposed for legacy callers / tests
     "_ADAPTIVE_THINKING_MODELS",
     "_TOOL_CALL_RE",
@@ -127,7 +130,11 @@ def create_backend(
         raw_cmd = config.model.strip() if config.model else _DEFAULT_CLAUDE_CLI_COMMAND
         cmd = shlex.split(raw_cmd)
         logger.info("Using CLI backend: %s", " ".join(cmd))
-        return CLIBackend(cmd)
+        executable = Path(cmd[0]).name.lower() if cmd else ""
+        backend_type = (
+            ClaudeCodeCLIBackend if executable in {"claude", "claude.exe"} else CLIBackend
+        )
+        return backend_type(cmd)
     model = config.model or "claude-haiku-4-5-20251001"
     logger.info("Using Anthropic backend: %s", model)
     return AnthropicBackend(

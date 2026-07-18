@@ -8,6 +8,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from .base import ModelTurnResult, ToolCall
+from .content import UserTurn, compact_image_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,14 @@ class KimiBackend:
 
     # ── message factories (same as OpenAICompatibleBackend) ────────
 
-    def make_user_message(self, content: str | list) -> dict:
+    def make_user_message(self, content: str | list | UserTurn) -> dict:
+        if isinstance(content, UserTurn):
+            blocks: list[dict[str, Any]] = [{"type": "text", "text": content.text}]
+            blocks.extend(
+                self.make_image_block(image.base64_data, image.media_type)
+                for image in content.images
+            )
+            content = blocks
         return {"role": "user", "content": content}
 
     def make_image_block(self, b64: str, media_type: str = "image/jpeg") -> dict:
@@ -92,6 +100,7 @@ class KimiBackend:
         max_tokens: int,
         on_text: Callable[[str], None] | None = None,
     ) -> tuple[ModelTurnResult, Any]:
+        messages = compact_image_blocks(messages)
         if isinstance(system, tuple):
             system = "\n\n---\n\n".join(s for s in system if s)
         # Flatten nested lists (tool results are appended as lists by agent.py)

@@ -432,6 +432,24 @@ def test_gui_on_send_uses_companion_display_name() -> None:
     win._log.append_line.assert_called_once_with("[Kota] hello")
 
 
+def test_gui_on_send_queues_images_atomically_with_text() -> None:
+    from familiar_runtime.models import ImageAttachment, UserTurn
+
+    win = _make_window_stub()
+    win._input = MagicMock()
+    win._input.text.return_value = "look at this"
+    win._input.clear = MagicMock()
+    win._pending_images = [ImageAttachment(b"image", "image/png", "sample.png")]
+
+    FamiliarWindow._on_send(win)
+
+    queued = win._input_queue.get_nowait()
+    assert isinstance(queued, UserTurn)
+    assert queued.text == "look at this"
+    assert queued.images[0].filename == "sample.png"
+    assert win._pending_images == []
+
+
 def test_gui_thinking_status_text_uses_i18n_and_agent_display_name(monkeypatch) -> None:
     win = _make_window_stub()
     win._agent_display_name = "Yukine"

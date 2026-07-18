@@ -238,6 +238,19 @@ the CLI is installed and authenticated. Claude Code's built-in tools, project cu
 and session persistence are disabled by the default command so familiar-ai remains the only
 tool executor and conversation owner. Set `MODEL` explicitly to override this command.
 
+### Sending images
+
+- Desktop GUI: click the `＋` button, preview one or more images, then send them with a caption.
+- TUI or plain REPL: use `/image "path/to/image.png" [optional caption]`.
+- Telegram: send a photo or an image document, with an optional caption.
+
+JPEG, PNG, and WebP images are supported, with up to three attachments per turn. Images are
+validated, resized when necessary, and old raw image blocks are removed from conversation
+history while their captions remain. With the default `claude -p` command, familiar-ai writes
+attachments to an isolated temporary directory and enables Claude Code's read-only `Read` tool
+for that image invocation only. Other arbitrary CLI commands remain text-only unless their
+adapter explicitly supports images.
+
 ---
 
 ## MCP Servers

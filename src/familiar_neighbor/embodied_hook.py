@@ -49,6 +49,7 @@ from familiar_neighbor.mind.social_policy import (
     relationship_learning_inputs,
 )
 from familiar_runtime.runtime import RuntimeHookBase
+from familiar_runtime.models import ImageAttachment, UserTurn
 
 
 # Within a sustained distress conversation, re-running ToM every turn adds a
@@ -209,6 +210,7 @@ class EmbodiedAgentHook(RuntimeHookBase):
         self,
         *,
         user_input: str,
+        user_images: tuple[ImageAttachment, ...] = (),
         on_phase: Callable[[str], None] | None,
         desires: DesireSystem | None,
         inner_voice: str,
@@ -544,7 +546,12 @@ class EmbodiedAgentHook(RuntimeHookBase):
                 )
 
         # ── Append user message to history ──
-        agent.messages.append(agent.backend.make_user_message(user_input_with_ctx))
+        message_input: str | UserTurn = (
+            UserTurn(text=user_input_with_ctx, images=user_images)
+            if user_images
+            else user_input_with_ctx
+        )
+        agent.messages.append(agent.backend.make_user_message(message_input))
 
         # ── Plan + workspace + continuity context ──
         plan_ctx = "" if brief_reply_turn else agent._cached_plan_ctx

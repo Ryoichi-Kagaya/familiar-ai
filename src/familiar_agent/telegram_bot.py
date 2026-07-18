@@ -19,6 +19,9 @@ import io
 import logging
 import os
 
+from familiar_runtime.models import ImageAttachment, UserTurn
+
+from .image_input import ImageInputError, normalize_image_bytes
 from .user_profile import UserRegistry
 
 logger = logging.getLogger(__name__)
@@ -147,12 +150,12 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
     async def _run_turn(
         update: Update,
         user_input: str,
-        images_b64: list[str] | None = None,
+        images: tuple[ImageAttachment, ...] = (),
     ) -> None:
         """Execute one agent turn and send the response back."""
         tg_user = update.effective_user
         speaker_name, profile_id = _resolve_speaker(tg_user) if tg_user else ("unknown", None)
-        prefixed_input = f"[{speaker_name}]: {user_input}"
+        user_turn = UserTurn(text=f"[{speaker_name}]: {user_input}", images=images)
 
         await update.message.chat.send_action("typing")  # type: ignore[union-attr]
 
@@ -174,11 +177,10 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
             try:
                 final_text = (
                     await agent.run(
-                        prefixed_input,
+                        user_turn,
                         on_action=on_action,
                         on_image=on_image,
                         desires=desires,
-                        user_images=images_b64,
                     )
                     or ""
                 ).strip()
@@ -243,7 +245,10 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
         try:
             file = await context.bot.get_file(photo.file_id)
             raw = await file.download_as_bytearray()
-            b64 = base64.b64encode(raw).decode()
+            attachment = normalize_image_bytes(bytes(raw), filename="telegram-photo.jpg")
+        except ImageInputError as exc:
+            await update.message.reply_text(str(exc))
+            return
         except Exception:
             logger.exception("Failed to download Telegram photo")
             await update.message.reply_text("画像のダウンロードに失敗しました。")
@@ -252,7 +257,33 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
         caption = (update.message.caption or "").strip()
         user_input = caption if caption else "この画像を見て。"
 
-        await _run_turn(update, user_input, images_b64=[b64])
+        await _run_turn(update, user_input, images=(attachment,))
+
+    async def _handle_image_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.effective_user is None or not _is_allowed(update.effective_user.id):
+            logger.warning("Rejected image document from Telegram user %s", update.effective_user)
+            return
+        if update.message is None or update.message.document is None:
+            return
+
+        document = update.message.document
+        if not (document.mime_type or "").startswith("image/"):
+            return
+        try:
+            file = await context.bot.get_file(document.file_id)
+            raw = await file.download_as_bytearray()
+            attachment = normalize_image_bytes(bytes(raw), filename=document.file_name)
+        except ImageInputError as exc:
+            await update.message.reply_text(str(exc))
+            return
+        except Exception:
+            logger.exception("Failed to download Telegram image document")
+            await update.message.reply_text("画像のダウンロードに失敗しました。")
+            return
+
+        caption = (update.message.caption or "").strip()
+        user_input = caption if caption else "この画像を見て。"
+        await _run_turn(update, user_input, images=(attachment,))
 
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", _cmd_start))
@@ -262,6 +293,7 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
     app.add_handler(CommandHandler("whoami", _cmd_whoami))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, _handle_photo))
+    app.add_handler(MessageHandler(filters.Document.IMAGE, _handle_image_document))
 
     await app.initialize()
     await app.start()

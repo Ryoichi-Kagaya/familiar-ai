@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -53,6 +54,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from familiar_runtime.models import ImageAttachment, UserTurn, coerce_user_turn
 
 from ._i18n import _t
 from ._ui_helpers import (
@@ -75,6 +78,11 @@ from .diagnostics import (
     test_realtime_stt_connection_from_config,
 )
 from .realtime_stt_session import create_realtime_stt_controller
+from .image_input import (
+    ImageInputError,
+    load_image_attachment,
+    validate_image_count,
+)
 from .settings_schema import (
     SECTION_LABELS,
     SetupConfig,
@@ -927,7 +935,9 @@ def _set_combo(combo: QComboBox, value: str) -> None:
 class FamiliarWindow(QMainWindow):
     """Main application window."""
 
-    def __init__(self, config: "AgentConfig", desires: "DesireSystem", *, shared_camera: "Any | None" = None) -> None:
+    def __init__(
+        self, config: "AgentConfig", desires: "DesireSystem", *, shared_camera: "Any | None" = None
+    ) -> None:
         super().__init__()
         self._config = config
         self._shared_camera = shared_camera
@@ -938,7 +948,8 @@ class FamiliarWindow(QMainWindow):
         active_user = _init_registry.get_active()
         self._companion_display_name = active_user.name
         self._current_user_id = active_user.id
-        self._input_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        self._input_queue: asyncio.Queue[str | UserTurn | None] = asyncio.Queue()
+        self._pending_images: list[ImageAttachment] = []
         self._agent_running = False
         self._agent_ready = False
         self._agent_init_failed = False
@@ -1280,9 +1291,28 @@ class FamiliarWindow(QMainWindow):
         self._stream.setMinimumHeight(_px(70))
         left_layout.addWidget(self._stream, stretch=1)
 
-        # Input row — pill QLineEdit + circular send button
+        # Pending image attachments
+        self._attachment_bar = QWidget()
+        self._attachment_layout = QHBoxLayout(self._attachment_bar)
+        self._attachment_layout.setContentsMargins(4, 2, 4, 2)
+        self._attachment_layout.setSpacing(6)
+        self._attachment_bar.hide()
+        left_layout.addWidget(self._attachment_bar)
+
+        # Input row — attach button + pill QLineEdit + circular send button
         input_row = QHBoxLayout()
         input_row.setSpacing(8)
+
+        self._attach_btn = QPushButton("＋")
+        self._attach_btn.setFixedSize(_px(40), _px(40))
+        self._attach_btn.setToolTip("Attach images")
+        self._attach_btn.setStyleSheet(
+            f"QPushButton {{ background: {_BG_ELEVATED}; border: 1px solid {_BORDER};"
+            f" border-radius: {_px(20)}px; color: {_TEXT_PRIMARY}; font-size: {_px(18)}px; }}"
+            f"QPushButton:hover {{ background: {_BG_HOVER}; }}"
+        )
+        self._attach_btn.clicked.connect(self._on_attach_images)
+        input_row.addWidget(self._attach_btn)
 
         self._input = QLineEdit()
         self._input.setPlaceholderText(_t("gui_input_placeholder"))
@@ -1370,9 +1400,7 @@ class FamiliarWindow(QMainWindow):
         # Splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
-        splitter.setStyleSheet(
-            "QSplitter::handle { background: transparent; width: 2px; }"
-        )
+        splitter.setStyleSheet("QSplitter::handle { background: transparent; width: 2px; }")
         splitter.addWidget(left)
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 3)
@@ -1382,6 +1410,8 @@ class FamiliarWindow(QMainWindow):
     def _set_input_enabled(self, enabled: bool) -> None:
         self._input.setEnabled(enabled)
         self._send_btn.setEnabled(enabled)
+        if hasattr(self, "_attach_btn"):
+            self._attach_btn.setEnabled(enabled)
         if hasattr(self, "_user_combo"):
             self._user_combo.setEnabled(enabled)
 
@@ -1393,8 +1423,11 @@ class FamiliarWindow(QMainWindow):
             self._user_combo.addItem(f"👤 {user.name}", userData=user.id)
         active_id = self._current_user_id
         idx = next(
-            (i for i in range(self._user_combo.count())
-             if self._user_combo.itemData(i) == active_id),
+            (
+                i
+                for i in range(self._user_combo.count())
+                if self._user_combo.itemData(i) == active_id
+            ),
             0,
         )
         self._user_combo.setCurrentIndex(idx)
@@ -1513,18 +1546,95 @@ class FamiliarWindow(QMainWindow):
             self._stream.set_status(getattr(self, "_startup_status", "Initializing familiar-ai..."))
             return
         text = self._input.text().strip()
-        if not text:
+        pending_images = tuple(getattr(self, "_pending_images", ()))
+        if not text and not pending_images:
             return
+        if not text:
+            text = "この画像を見て。"
         self._input.clear()
+        user_input: str | UserTurn = (
+            UserTurn(text=text, images=pending_images) if pending_images else text
+        )
+        if pending_images:
+            self._pending_images.clear()
+            self._refresh_attachment_bar()
         self._stream.clear_status()
-        self._log.append_line(f"[{self._companion_display_name}] {text}")
-        self._append_log(f"{self._companion_display_name} ▶ {text}")
-        self._input_queue.put_nowait(text)
+        image_note = f" 🖼×{len(pending_images)}" if pending_images else ""
+        self._log.append_line(f"[{self._companion_display_name}] {text}{image_note}")
+        self._append_log(f"{self._companion_display_name} ▶ {text}{image_note}")
+        self._input_queue.put_nowait(user_input)
         qsize = self._input_queue.qsize()
         if qsize >= _GUI_QUEUE_WARN_SIZE:
             logger.warning("GUI input queue backlog: %d", qsize)
         else:
             logger.debug("GUI input queued (size=%d)", qsize)
+
+    def _on_attach_images(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Attach images",
+            "",
+            "Images (*.jpg *.jpeg *.png *.webp)",
+        )
+        if not paths:
+            return
+        try:
+            validate_image_count(len(self._pending_images) + len(paths))
+            attachments = [load_image_attachment(path) for path in paths]
+        except ImageInputError as exc:
+            QMessageBox.warning(self, "Image attachment", str(exc))
+            return
+        self._pending_images.extend(attachments)
+        self._refresh_attachment_bar()
+
+    def _remove_pending_image(self, index: int) -> None:
+        if 0 <= index < len(self._pending_images):
+            self._pending_images.pop(index)
+            self._refresh_attachment_bar()
+
+    def _refresh_attachment_bar(self) -> None:
+        layout = getattr(self, "_attachment_layout", None)
+        bar = getattr(self, "_attachment_bar", None)
+        if layout is None or bar is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        for index, attachment in enumerate(self._pending_images):
+            chip = QWidget()
+            chip.setStyleSheet(
+                f"background: {_BG_ELEVATED}; border: 1px solid {_BORDER};"
+                f" border-radius: {_px(8)}px;"
+            )
+            chip_layout = QHBoxLayout(chip)
+            chip_layout.setContentsMargins(4, 4, 4, 4)
+            preview = QLabel()
+            pixmap = QPixmap.fromImage(QImage.fromData(attachment.data))
+            preview.setPixmap(
+                pixmap.scaled(
+                    _px(48),
+                    _px(48),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+            chip_layout.addWidget(preview)
+            filename = QLabel(attachment.filename or f"image-{index + 1}")
+            filename.setStyleSheet(f"color: {_TEXT_PRIMARY}; border: none;")
+            chip_layout.addWidget(filename)
+            remove = QPushButton("×")
+            remove.setFixedSize(_px(24), _px(24))
+            remove.setStyleSheet("border: none; background: transparent;")
+            remove.clicked.connect(
+                lambda _checked=False, image_index=index: self._remove_pending_image(image_index)
+            )
+            chip_layout.addWidget(remove)
+            layout.addWidget(chip)
+        layout.addStretch(1)
+        bar.setVisible(bool(self._pending_images))
 
     def _on_realtime_stt_partial(self, text: str) -> None:
         """Display partial STT transcript while idle."""
@@ -1611,9 +1721,7 @@ class FamiliarWindow(QMainWindow):
             return
         try:
             self._stream.set_status("🎙 Recording… (click ⏹ Stop to finish)")
-            record_task = asyncio.create_task(
-                agent.stt.record_and_transcribe(self._batch_stt_stop)
-            )
+            record_task = asyncio.create_task(agent.stt.record_and_transcribe(self._batch_stt_stop))
             await self._batch_stt_stop.wait()
             self._stream.set_status("🔄 Transcribing…")
             text = await record_task
@@ -1768,10 +1876,11 @@ class FamiliarWindow(QMainWindow):
             )
             await self._run_agent(text)
 
-    async def _run_agent(self, user_input: str, inner_voice: str = "") -> None:
+    async def _run_agent(self, user_input: str | UserTurn, inner_voice: str = "") -> None:
         if self._agent is None:
             self._stream.set_status(self._startup_status)
             return
+        user_turn = coerce_user_turn(user_input)
         turn_started = time.perf_counter()
         self._agent_running = True
         self._cancel_requested = False
@@ -1779,7 +1888,7 @@ class FamiliarWindow(QMainWindow):
         self._refresh_status_card()
         logger.info(
             "GUI turn start (user_input=%d chars, inner_voice=%s, queue=%d)",
-            len(user_input),
+            len(user_turn.text),
             bool(inner_voice),
             self._input_queue.qsize(),
         )
@@ -1936,7 +2045,9 @@ class FamiliarWindow(QMainWindow):
             def _build_agent():
                 from .agent import EmbodiedAgent  # noqa: PLC0415
 
-                return EmbodiedAgent(config, shared_camera=self._shared_camera, camera_gui_priority=True)
+                return EmbodiedAgent(
+                    config, shared_camera=self._shared_camera, camera_gui_priority=True
+                )
 
             agent = await asyncio.to_thread(_build_agent)
             self._agent = agent

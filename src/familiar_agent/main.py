@@ -12,11 +12,14 @@ import time
 from pathlib import Path
 from typing import cast
 
+from familiar_runtime.models import UserTurn, coerce_user_turn
+
 from .agent import EmbodiedAgent
 from .bootstrap import load_app_bootstrap
 from .config import AgentConfig
 from .desires import DesireSystem
 from .drive_executor import DriveActionExecutor
+from .image_input import ImageInputError, parse_image_command
 from .realtime_stt_session import create_realtime_stt_session
 from .setup import run_cli_setup_wizard
 from ._i18n import BANNER, _t
@@ -90,7 +93,7 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
 
     # Persistent input queue — stdin reader runs as a background task
     # so user input is captured even while the agent is busy.
-    input_queue: asyncio.Queue[str | None] = asyncio.Queue()
+    input_queue: asyncio.Queue[str | UserTurn | None] = asyncio.Queue()
     last_interaction_time: float = time.time()
 
     async def _stdin_reader() -> None:
@@ -100,7 +103,11 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
             if not line:  # EOF
                 await input_queue.put(None)
                 return
-            await input_queue.put(line.strip())
+            text = line.strip()
+            try:
+                await input_queue.put(parse_image_command(text) or text)
+            except ImageInputError as exc:
+                print(f"\n  ⚠ {exc}")
 
     stdin_task = asyncio.create_task(_stdin_reader())
 
@@ -128,7 +135,7 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
     try:
         while True:
             # Drain any pending user input first (user spoke while agent was busy)
-            pending: list[str] = []
+            pending: list[str | UserTurn] = []
             while not input_queue.empty():
                 item = input_queue.get_nowait()
                 if item is None:
@@ -147,7 +154,7 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
 
             # No pending input — show prompt and wait briefly
             print("\n> ", end="", flush=True)
-            queued_input: str | None
+            queued_input: str | UserTurn | None
             try:
                 queued_input = await asyncio.wait_for(
                     input_queue.get(), timeout=IDLE_CHECK_INTERVAL
@@ -218,7 +225,7 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                     continue  # Still in post-conversation cooldown
 
                 # Peek at any pending input before firing desire
-                pending_items: list[str] = []
+                pending_items: list[str | UserTurn] = []
                 if not input_queue.empty():
                     item = input_queue.get_nowait()
                     if item is None:
@@ -253,7 +260,7 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                     continue
 
                     # Flush any input that arrived during agent.run()
-                    buffered: list[str] = []
+                    buffered: list[str | UserTurn] = []
                     while not input_queue.empty():
                         item = input_queue.get_nowait()
                         if item is None:
@@ -291,7 +298,7 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
 
 
 async def _handle_user(
-    user_input: str,
+    user_input: str | UserTurn,
     agent: EmbodiedAgent,
     desires: DesireSystem,
     on_action,
@@ -300,12 +307,14 @@ async def _handle_user(
     interrupt_queue=None,
 ) -> None:
     """Process a single user message."""
-    if user_input == "/quit":
+    user_turn = coerce_user_turn(user_input)
+    text = user_turn.text
+    if text == "/quit" and not user_turn.images:
         raise EOFError
-    elif user_input == "/clear":
+    elif text == "/clear" and not user_turn.images:
         agent.clear_history()
         print(_t("repl_history_cleared"))
-    elif user_input == "/desires":
+    elif text == "/desires" and not user_turn.images:
         if debug:
             desires.tick()
             print("\n[debug] desires:")
@@ -315,7 +324,7 @@ async def _handle_user(
     else:
         print()
         await agent.run(
-            user_input,
+            user_turn if user_turn.images else text,
             on_action=on_action,
             on_text=on_text,
             desires=desires,
@@ -569,10 +578,7 @@ def main() -> None:
     use_voice_server = "--voice-server" in sys.argv
     use_telegram = "--telegram" in sys.argv
     use_tui = (
-        "--no-tui" not in sys.argv
-        and not use_gui
-        and not use_voice_server
-        and not use_telegram
+        "--no-tui" not in sys.argv and not use_gui and not use_voice_server and not use_telegram
     )
 
     voice_port = 8090
@@ -620,7 +626,9 @@ def main() -> None:
         if use_telegram:
             token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
             if not token:
-                print("Warning: --telegram flag set but TELEGRAM_BOT_TOKEN is not set. Starting GUI only.")
+                print(
+                    "Warning: --telegram flag set but TELEGRAM_BOT_TOKEN is not set. Starting GUI only."
+                )
             else:
                 from .telegram_bot import run_telegram_bot
                 from .tools.camera import CameraTool, _PriorityPTZLock
@@ -628,12 +636,16 @@ def main() -> None:
                 # Both agents share one CameraTool to avoid dual RTSP connections.
                 # A shared _PriorityPTZLock serialises PTZ moves; GUI wins ties.
                 import dataclasses as _dc
+
                 shared_camera = None
                 if config.camera.host:
                     cam = config.camera
                     ptz_lock = _PriorityPTZLock()
                     shared_camera = CameraTool(
-                        cam.host, cam.username, cam.password, cam.port,
+                        cam.host,
+                        cam.username,
+                        cam.password,
+                        cam.port,
                         preview=cam.preview,
                         ptz_host=cam.ptz_host,
                         ptz_username=cam.ptz_username,
@@ -642,7 +654,9 @@ def main() -> None:
                         ptz_lock=ptz_lock,
                     )
                 tg_config = _dc.replace(config, tts=_dc.replace(config.tts, volume=0.0))
-                tg_agent = EmbodiedAgent(tg_config, shared_camera=shared_camera, camera_gui_priority=False)
+                tg_agent = EmbodiedAgent(
+                    tg_config, shared_camera=shared_camera, camera_gui_priority=False
+                )
                 tg_desires = DesireSystem(companion_name=config.companion_name)
                 bg.append(run_telegram_bot(token, tg_agent, tg_desires))
                 run_gui(config, desires, background_coros=bg, shared_camera=shared_camera)
@@ -656,6 +670,7 @@ def main() -> None:
         from .telegram_bot import run_telegram_bot
 
         import dataclasses as _dc
+
         tg_config = _dc.replace(config, tts=_dc.replace(config.tts, volume=0.0))
         agent = EmbodiedAgent(tg_config)
         desires = DesireSystem(companion_name=config.companion_name)
@@ -669,6 +684,7 @@ def main() -> None:
         from .tui import FamiliarApp
 
         import termios as _termios
+
         try:
             _saved_term = _termios.tcgetattr(sys.stdin.fileno())
         except Exception:

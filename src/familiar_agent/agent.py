@@ -99,6 +99,7 @@ from familiar_neighbor.mind.person_model import PersonModelTracker
 from familiar_neighbor.prompts import assemble_neighbor_system_prompt
 from familiar_runtime.commitments import SQLiteCommitmentStore
 from familiar_runtime.models.base import ModelBackend as RuntimeModelBackend
+from familiar_runtime.models import ImageAttachment, UserTurn, coerce_user_turn
 from familiar_runtime.react_loop import ReActLoop
 from familiar_runtime.runtime import TurnContext
 from familiar_runtime.tools.base import ToolExecutionResult
@@ -558,7 +559,7 @@ class _InterruptQueueSource:
     def empty(self) -> bool:
         return not self._armed or self._queue.empty()
 
-    async def drain(self) -> list[str]:
+    async def drain(self) -> list[UserTurn]:
         return self._agent._drain_interrupt_queue(self._queue)
 
 
@@ -1164,14 +1165,14 @@ class EmbodiedAgent:
 
     @staticmethod
     def _drain_interrupt_queue(
-        interrupt_queue: asyncio.Queue[str | None], max_items: int = 6
-    ) -> list[str]:
+        interrupt_queue: asyncio.Queue[str | UserTurn | None], max_items: int = 6
+    ) -> list[UserTurn]:
         """Drain pending user interrupts, preserving queue order."""
-        interrupts: list[str] = []
+        interrupts: list[UserTurn] = []
         while len(interrupts) < max_items and not interrupt_queue.empty():
             item = interrupt_queue.get_nowait()
             if item:
-                interrupts.append(item)
+                interrupts.append(coerce_user_turn(item))
         return interrupts
 
     def _memory_dedupe_key(
@@ -2623,7 +2624,7 @@ class EmbodiedAgent:
 
     async def run(
         self,
-        user_input: str,
+        user_input: str | UserTurn,
         on_action: Callable[[str, dict], None] | None = None,
         on_text: Callable[[str], None] | None = None,
         on_image: Callable[[str], None] | None = None,
@@ -2646,27 +2647,24 @@ class EmbodiedAgent:
         lifecycle methods; finalisation (meta-gate repair, continuation
         status, auto-say, commit) stays here.
         """
+        user_turn = coerce_user_turn(user_input)
+        if user_images:
+            legacy_images = tuple(
+                ImageAttachment.from_base64(image_data) for image_data in user_images
+            )
+            user_turn = UserTurn(
+                text=user_turn.text,
+                images=(*user_turn.images, *legacy_images),
+            )
+        user_input_text = user_turn.text
+
         prep = await self._hook.prepare_turn(
-            user_input=user_input,
+            user_input=user_input_text,
+            user_images=user_turn.images,
             on_phase=on_phase,
             desires=desires,
             inner_voice=inner_voice,
         )
-
-        # Inject user-supplied images (e.g. from Telegram) into the user message
-        # just appended by prepare_turn.
-        if user_images and self.messages:
-            last = self.messages[-1]
-            if isinstance(last, dict) and last.get("role") == "user":
-                content = last["content"]
-                blocks: list[Any] = (
-                    [{"type": "text", "text": content}]
-                    if isinstance(content, str)
-                    else list(content)
-                )
-                for b64 in user_images:
-                    blocks.append(self.backend.make_image_block(b64))
-                last["content"] = blocks
 
         try:
             interrupt_source = (
@@ -2674,7 +2672,7 @@ class EmbodiedAgent:
                 if interrupt_queue is not None
                 else None
             )
-            ctx = TurnContext(user_input=user_input, profile="neighbor")
+            ctx = TurnContext(user_input=user_input_text, profile="neighbor")
             ctx.metadata["prep"] = prep
             ctx.metadata["interrupt_source"] = interrupt_source
 
@@ -2727,7 +2725,7 @@ class EmbodiedAgent:
                 if identity is not None and final_text and final_text != "(no response)":
                     try:
                         identity_violations = identity.check_response(
-                            user_text=user_input,
+                            user_text=user_input_text,
                             candidate_response=final_text,
                         )
                     except Exception as exc:  # noqa: BLE001
@@ -2737,7 +2735,7 @@ class EmbodiedAgent:
                 gate: MetaGateDecision | None = None
                 if callable(gate_method):
                     maybe_gate = gate_method(
-                        user_text=user_input,
+                        user_text=user_input_text,
                         candidate_response=final_text,
                         social_policy=prep.social_policy,
                         last_error=self._last_tool_error,
@@ -2796,7 +2794,7 @@ class EmbodiedAgent:
 
                 await self._hook.commit_after_end_turn(
                     prep=prep,
-                    user_input=user_input,
+                    user_input=user_input_text,
                     final_text=final_text,
                     is_desire_turn=prep.is_desire_turn,
                     desires=desires,

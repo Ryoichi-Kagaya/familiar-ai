@@ -16,6 +16,7 @@ dependencies = [
     "textual-autocomplete>=4.0.6",
     "mcp>=1.0.0",
     "google-generativeai>=0.8.6",
+    "Pillow>=10.0.0",
     "uvloop>=0.22.1; sys_platform != 'win32'",
     "onvif-zeep>=0.2.12",
 ]
@@ -31,7 +32,6 @@ gui = [
 camera = [
     "opencv-python>=4.00",
     "onvif-zeep-async>=4.0.0",
-    "Pillow>=10.0.0",
     "zeroconf>=0.132.2",
 ]
 voice = [

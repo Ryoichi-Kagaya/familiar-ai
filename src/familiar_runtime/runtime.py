@@ -10,6 +10,7 @@ from typing import Any, Protocol
 from .context import ContextBlock, select_context_blocks
 from .events.bus import EventBus
 from .models.base import ModelBackend, ModelTurnResult, ToolCall
+from .models.content import UserTurn, coerce_user_turn
 from .react_loop import ReActLoop, RunTurnResult
 from .tools.base import ToolExecutionResult
 from .tools.registry import ToolRegistry
@@ -50,7 +51,7 @@ class InterruptSource(Protocol):
     the in-flight turn rather than dropped on the floor.
     """
 
-    async def drain(self) -> list[str]:
+    async def drain(self) -> list[UserTurn]:
         """Return all currently-queued user-side messages, removing them."""
         ...
 
@@ -179,7 +180,7 @@ class AgentRuntime:
 
     async def run_turn(
         self,
-        user_input: str,
+        user_input: str | UserTurn,
         *,
         profile: str = "task",
         task_id: str | None = None,
@@ -194,7 +195,8 @@ class AgentRuntime:
     ) -> RunTurnResult:
         # ``interrupt_source`` is polled by the ReAct loop between iterations so
         # async user input gets folded into the in-flight turn (see ReActLoop.run).
-        ctx = TurnContext(user_input=user_input, profile=profile, task_id=task_id)
+        user_turn = coerce_user_turn(user_input)
+        ctx = TurnContext(user_input=user_turn.text, profile=profile, task_id=task_id)
         for hook in self._hooks:
             await hook.before_turn(ctx)
 
@@ -215,12 +217,14 @@ class AgentRuntime:
             system = f"{system_prompt}\n\n{context_text}".strip()
 
         turn_messages = messages if messages is not None else []
-        turn_messages.append(self._backend.make_user_message(user_input))
+        turn_messages.append(
+            self._backend.make_user_message(user_turn if user_turn.images else user_turn.text)
+        )
         if self._event_bus is not None:
             self._event_bus.emit_simple(
                 source="user",
                 type="message",
-                payload={"text": user_input},
+                payload={"text": user_turn.text, "image_count": len(user_turn.images)},
                 task_id=task_id,
             )
         loop = ReActLoop(

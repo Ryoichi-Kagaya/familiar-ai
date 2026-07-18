@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from .events.bus import EventBus
 from .models.base import ModelBackend, ToolCall
+from .models.content import UserTurn, coerce_user_turn, compact_image_blocks
 from .tools.base import ToolExecutionResult
 from .tools.registry import ToolRegistry
 
@@ -113,27 +114,41 @@ class ReActLoop:
         emit("system", "turn_start", {})
 
         for iteration in range(self._max_iterations):
+            compacted_messages = compact_image_blocks(messages)
+            if compacted_messages is not messages:
+                messages[:] = compacted_messages
+
             # Surface any async user input queued since the last model call so
             # an unprompted remark gets folded into the in-flight turn instead
             # of being dropped.
             if interrupt_source is not None and not interrupt_source.empty():
-                drained = await interrupt_source.drain()
-                if drained:
-                    joined = " / ".join(drained)
+                drained_raw = await interrupt_source.drain()
+                if drained_raw:
+                    drained = [coerce_user_turn(turn) for turn in drained_raw]
+                    drained_text = [turn.text for turn in drained]
+                    joined = " / ".join(drained_text)
                     # A hook may reshape the spliced interrupt line (e.g. add a
                     # respond-with-say directive); first non-None wins.
                     formatted: str | None = None
                     if context is not None:
                         for hook in self._hooks:
-                            formatted = await hook.format_interrupt_message(context, drained)
+                            formatted = await hook.format_interrupt_message(context, drained_text)
                             if formatted is not None:
                                 break
+                    images = tuple(image for turn in drained for image in turn.images)
+                    interrupt_text = formatted or f"[User interrupted]: {joined}"
                     messages.append(
                         self._backend.make_user_message(
-                            formatted or f"[User interrupted]: {joined}"
+                            UserTurn(text=interrupt_text, images=images)
+                            if images
+                            else interrupt_text
                         )
                     )
-                    emit("user", "interrupt", {"count": len(drained), "text": joined})
+                    emit(
+                        "user",
+                        "interrupt",
+                        {"count": len(drained), "text": joined, "image_count": len(images)},
+                    )
 
             # Let hooks inject per-iteration context (inner-voice notes, gentle
             # reminders). Blocks are spliced into this iteration's system prompt

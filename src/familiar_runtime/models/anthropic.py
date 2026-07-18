@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from ._shared import _supports_adaptive_thinking
 from .base import ModelTurnResult, ToolCall
+from .content import UserTurn, compact_image_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -81,11 +82,21 @@ class AnthropicBackend:
 
     # ── message factories ─────────────────────────────────────────
 
-    def make_user_message(self, content: str | list) -> dict:
+    def make_user_message(self, content: str | list | UserTurn) -> dict:
+        if isinstance(content, UserTurn):
+            blocks: list[dict[str, Any]] = [{"type": "text", "text": content.text}]
+            blocks.extend(
+                self.make_image_block(image.base64_data, image.media_type)
+                for image in content.images
+            )
+            content = blocks
         return {"role": "user", "content": content}
 
     def make_image_block(self, b64: str, media_type: str = "image/jpeg") -> dict:
-        return {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}}
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": b64},
+        }
 
     def make_assistant_message(self, result: ModelTurnResult, raw_content: Any) -> dict:  # noqa: ARG002
         return {"role": "assistant", "content": raw_content}
@@ -139,34 +150,7 @@ class AnthropicBackend:
 
         Inspired by Claude Code's Dk() microcompact (KEEP_LAST=3).
         """
-        import copy
-
-        positions: list[tuple[int, int, int]] = []
-        for i, msg in enumerate(messages):
-            if not isinstance(msg, dict) or msg.get("role") != "user":
-                continue
-            content = msg.get("content", [])
-            if not isinstance(content, list):
-                continue
-            for j, item in enumerate(content):
-                if not isinstance(item, dict) or item.get("type") != "tool_result":
-                    continue
-                for k, sub in enumerate(item.get("content", [])):
-                    if isinstance(sub, dict) and sub.get("type") == "image":
-                        positions.append((i, j, k))
-
-        n_clear = max(0, len(positions) - keep_last)
-        to_clear = positions[:n_clear]
-        if not to_clear:
-            return messages
-
-        messages = copy.deepcopy(messages)
-        for msg_i, item_j, sub_k in to_clear:
-            messages[msg_i]["content"][item_j]["content"][sub_k] = {
-                "type": "text",
-                "text": "[image cleared]",
-            }
-        return messages
+        return compact_image_blocks(messages, keep_last=keep_last)
 
     @staticmethod
     def _build_system_param(system: str | tuple[str, str]) -> str | list[dict]:
