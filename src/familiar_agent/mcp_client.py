@@ -68,6 +68,7 @@ def _load_image_b64(path: str, max_dim: int = 640) -> tuple[str, str | None]:
     b64 = base64.b64encode(data).decode()
     return f"Image: {p.name} ({len(data):,} bytes)", b64
 
+
 _DEFAULT_CONFIG = Path.home() / ".familiar-ai.json"
 
 
@@ -129,10 +130,12 @@ class MCPClientManager:
                 continue
 
             self._tool_router[tool_name] = name
+            description = (tool.description or "").strip()
+            origin = f'[Connected MCP via familiar-ai: server "{name}"]'
             self._tool_defs.append(
                 {
                     "name": tool_name,
-                    "description": tool.description or "",
+                    "description": f"{origin} {description}" if description else origin,
                     "input_schema": (
                         tool.inputSchema
                         if isinstance(tool.inputSchema, dict)

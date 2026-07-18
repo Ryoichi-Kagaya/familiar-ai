@@ -303,6 +303,19 @@ async def test_brief_reply_uses_normal_token_cap_for_non_reasoning_backend():
     assert stream_kwargs["max_tokens"] == 120
 
 
+@pytest.mark.parametrize("user_input", ["MCP見える？", "使えるツールを教えて", "Which tools work?"])
+def test_tool_capability_question_is_not_treated_as_brief_reply(user_input: str):
+    """Capability questions must retain the complete outer tool catalog."""
+    agent = _make_agent()
+    social_policy = SimpleNamespace(primary_act="clarification")
+
+    assert not agent._should_use_brief_reply_mode(
+        user_input=user_input,
+        social_policy=social_policy,
+        is_desire_turn=False,
+    )
+
+
 @pytest.mark.asyncio
 async def test_run_increments_turn_count():
     """run() increments _turn_count on each invocation."""

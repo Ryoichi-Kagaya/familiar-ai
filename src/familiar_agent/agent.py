@@ -1112,6 +1112,15 @@ class EmbodiedAgent:
         text = user_input.strip()
         if not text or len(text) > 80 or "\n" in text:
             return False
+        if re.search(
+            r"(?i)(?:(?<![a-z0-9_])mcp(?![a-z0-9_])|"
+            r"(?<![a-z0-9_])tools?(?![a-z0-9_])|ツール|利用可能な機能|使える機能)",
+            text,
+        ):
+            # Capability questions need the complete familiar-ai tool catalog.  In
+            # particular, prompt-driven CLI backends cannot discover outer MCP
+            # connections from their own process.
+            return False
         return social_policy.primary_act in {
             "greeting",
             "acknowledgement",

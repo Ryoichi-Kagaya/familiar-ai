@@ -41,12 +41,19 @@ def test_shared_helpers_exposed() -> None:
             {
                 "name": "ping",
                 "description": "Reply pong.",
-                "input_schema": {"properties": {}, "required": []},
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"message": {"type": "string", "description": "Payload"}},
+                    "required": ["message"],
+                },
             }
         ],
     )
     assert "[USING TOOLS]" in augmented
     assert "ping" in augmented
+    assert "real tools made available to you by familiar-ai" in augmented
+    assert "CLI's own MCP inventory" in augmented
+    assert 'input_schema: {"type":"object","properties":{"message"' in augmented
 
     calls = _parse_tool_calls_from_text(
         'sure: <tool_call>{"name": "ping", "input": {"x": 1}}</tool_call>'

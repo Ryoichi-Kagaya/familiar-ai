@@ -144,6 +144,8 @@ async def test_stdio_server_registers_tools(tmp_path: Path) -> None:
     defs = mgr.get_tool_definitions()
     names = {d["name"] for d in defs}
     assert names == {"read_file", "write_file"}
+    read_file = next(d for d in defs if d["name"] == "read_file")
+    assert read_file["description"] == ('[Connected MCP via familiar-ai: server "fs"] Read a file')
 
 
 @pytest.mark.asyncio

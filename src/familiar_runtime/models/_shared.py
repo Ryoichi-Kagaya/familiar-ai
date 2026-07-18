@@ -30,6 +30,12 @@ _TOOLS_PROMPT_HEADER = """\
 
 ---
 [USING TOOLS]
+These are real tools made available to you by familiar-ai. They are not necessarily built into
+this model or CLI process: familiar-ai executes each <tool_call> outside the process and returns
+the result. Descriptions beginning with "[Connected MCP via familiar-ai: ...]" identify MCP tools
+that familiar-ai has already connected. They remain available even if they do not appear in the
+CLI's own MCP inventory. Do not claim that such a tool is unavailable without trying it.
+
 You MUST use tools by outputting a <tool_call> block. This is the ONLY way to take actions.
 
 RULE: When you want to use a tool, output EXACTLY this pattern and nothing after it:
@@ -40,7 +46,7 @@ Then STOP. Do not write anything after the closing tag. The result will be given
 CONCRETE EXAMPLES:
 {examples}
 
-Available tools:
+Available familiar-ai tools ({tool_count}); each entry includes its exact JSON input schema:
 {tools_desc}
 [/USING TOOLS]
 """
@@ -56,9 +62,13 @@ def _build_tools_system(system: str, tools: list[dict]) -> str:
     desc_lines = []
     example_lines = []
     for t in tools:
-        props = t.get("input_schema", {}).get("properties", {})
-        required = t.get("input_schema", {}).get("required", [])
-        desc_lines.append(f"- {t['name']}: {t['description']}")
+        input_schema = t.get("input_schema", {})
+        if not isinstance(input_schema, dict):
+            input_schema = {"type": "object", "properties": {}}
+        props = input_schema.get("properties", {})
+        required = input_schema.get("required", [])
+        schema_json = json.dumps(input_schema, ensure_ascii=False, separators=(",", ":"))
+        desc_lines.append(f"- {t['name']}: {t['description']}\n  input_schema: {schema_json}")
 
         example_input: dict = {}
         for k in required:
@@ -76,7 +86,9 @@ def _build_tools_system(system: str, tools: list[dict]) -> str:
 
     tools_desc = "\n".join(desc_lines)
     examples = "\n".join(example_lines)
-    return system + _TOOLS_PROMPT_HEADER.format(tools_desc=tools_desc, examples=examples)
+    return system + _TOOLS_PROMPT_HEADER.format(
+        tool_count=len(tools), tools_desc=tools_desc, examples=examples
+    )
 
 
 def _parse_tool_calls_from_text(text: str) -> list[ToolCall]:

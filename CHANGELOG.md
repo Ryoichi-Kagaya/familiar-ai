@@ -76,6 +76,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - `EmbodiedAgent.run()` is now a thin wrapper around the substrate `ReActLoop`: TAPE replan, coherence retry, interrupt drain, and say() reminders ride `EmbodiedAgentHook` lifecycle methods; finalisation and the forced final response stay in the wrapper. The existing text and legacy `user_images` calls remain compatible, while the input now also accepts a typed multimodal `UserTurn`
 
 ### Fixed
+- Prompt-driven CLI backends now see connected MCP capabilities as familiar-ai-managed external
+  tools, including their source server and exact input schema; short MCP/tool capability questions
+  also retain the full tool catalog instead of entering lightweight reply mode
 - CLI backends no longer trigger first-run setup solely because `API_KEY` is absent; CLI
   authentication is owned by the configured command instead
 - `OpenAICompatibleBackend` now detects Kimi endpoints (`api.kimi.com`, `api.moonshot.ai`, `moonshot.cn`) and sets `emits_reasoning=True`, so brief-reply turns allocate 800 tokens instead of 120.  This prevents `kimi-for-coding` (and other reasoning-enabled Kimi models accessed via OpenAI-compatible endpoints) from consuming the entire small budget with internal reasoning tokens and returning an empty response in the GUI
