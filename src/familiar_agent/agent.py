@@ -1114,7 +1114,10 @@ class EmbodiedAgent:
             return False
         if re.search(
             r"(?i)(?:(?<![a-z0-9_])mcp(?![a-z0-9_])|"
-            r"(?<![a-z0-9_])tools?(?![a-z0-9_])|ツール|利用可能な機能|使える機能)",
+            r"(?<![a-z0-9_])tools?(?![a-z0-9_])|"
+            r"(?<![a-z0-9_])(?:web|internet|search|brows(?:e|ing))(?![a-z0-9_])|"
+            r"ツール|利用可能な機能|使える機能|ウェブ|インターネット|ネット|検索|"
+            r"ブラウズ|ブラウジング|調べ(?:られ|れ|る))",
             text,
         ):
             # Capability questions need the complete familiar-ai tool catalog.  In

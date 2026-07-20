@@ -82,7 +82,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   actually triggers instead of seeing every CLI request as zero tokens
 - Prompt-driven CLI backends now see connected MCP capabilities as familiar-ai-managed external
   tools, including their source server and exact input schema; short MCP/tool capability questions
-  also retain the full tool catalog instead of entering lightweight reply mode
+  also retain the full tool catalog instead of entering lightweight reply mode, including questions
+  phrased in terms of web access, internet access, browsing, or search
 - CLI backends no longer trigger first-run setup solely because `API_KEY` is absent; CLI
   authentication is owned by the configured command instead
 - `OpenAICompatibleBackend` now detects Kimi endpoints (`api.kimi.com`, `api.moonshot.ai`, `moonshot.cn`) and sets `emits_reasoning=True`, so brief-reply turns allocate 800 tokens instead of 120.  This prevents `kimi-for-coding` (and other reasoning-enabled Kimi models accessed via OpenAI-compatible endpoints) from consuming the entire small budget with internal reasoning tokens and returning an empty response in the GUI

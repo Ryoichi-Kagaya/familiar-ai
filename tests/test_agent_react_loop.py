@@ -303,7 +303,18 @@ async def test_brief_reply_uses_normal_token_cap_for_non_reasoning_backend():
     assert stream_kwargs["max_tokens"] == 120
 
 
-@pytest.mark.parametrize("user_input", ["MCP見える？", "使えるツールを教えて", "Which tools work?"])
+@pytest.mark.parametrize(
+    "user_input",
+    [
+        "MCP見える？",
+        "使えるツールを教えて",
+        "Which tools work?",
+        "ウェブ検索できる？",
+        "インターネット見れる？",
+        "今日の天気を検索できる？",
+        "Can you search the web?",
+    ],
+)
 def test_tool_capability_question_is_not_treated_as_brief_reply(user_input: str):
     """Capability questions must retain the complete outer tool catalog."""
     agent = _make_agent()
