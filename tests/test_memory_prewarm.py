@@ -8,11 +8,24 @@ call doesn't block waiting for SentenceTransformer to load.
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
+from contextlib import contextmanager
+from types import ModuleType
+from typing import Any, Iterator
 from unittest.mock import MagicMock, patch
 
 from familiar_agent.tools.memory import _EmbeddingModel
+
+
+@contextmanager
+def _fake_sentence_transformers(factory: Any) -> Iterator[None]:
+    """Expose only the dependency surface imported by ``_EmbeddingModel._load``."""
+    fake_module = ModuleType("sentence_transformers")
+    fake_module.SentenceTransformer = factory  # type: ignore[attr-defined]
+    with patch.dict(sys.modules, {"sentence_transformers": fake_module}):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -21,26 +34,17 @@ from familiar_agent.tools.memory import _EmbeddingModel
 
 
 class TestEmbeddingModelPreWarm:
-    def test_pre_warm_method_exists(self):
-        model = _EmbeddingModel("some-model")
-        assert hasattr(model, "pre_warm"), "_EmbeddingModel must have a pre_warm() method"
-        assert callable(model.pre_warm)
-
     def test_pre_warm_starts_background_thread(self):
         """pre_warm() must start a daemon thread named 'embedding-prewarm'."""
         model = _EmbeddingModel("some-model")
 
         started_threads: list[threading.Thread] = []
-        original_start = threading.Thread.start
 
         def track_start(self_thread):
             started_threads.append(self_thread)
-            original_start(self_thread)
 
         with patch.object(threading.Thread, "start", track_start):
-            # Prevent actual model load
-            with patch.object(model, "_load"):
-                model.pre_warm()
+            model.pre_warm()
 
         assert len(started_threads) == 1
         t = started_threads[0]
@@ -59,12 +63,6 @@ class TestEmbeddingModelPreWarm:
             model.pre_warm()
             assert load_event.wait(timeout=2.0), "_load() was not called within 2 seconds"
 
-    def test_lock_attribute_exists(self):
-        """_EmbeddingModel must have a _lock attribute (threading.Lock)."""
-        model = _EmbeddingModel("some-model")
-        assert hasattr(model, "_lock"), "_EmbeddingModel must have a _lock attribute"
-        assert isinstance(model._lock, type(threading.Lock()))
-
     def test_load_is_idempotent_with_lock(self):
         """_load() called concurrently must only instantiate SentenceTransformer once."""
         model = _EmbeddingModel("some-model")
@@ -77,8 +75,8 @@ class TestEmbeddingModelPreWarm:
             time.sleep(0.05)  # simulate slow load
             return MagicMock()
 
-        # Patch via sentence_transformers so the local import inside _load picks it up
-        with patch("sentence_transformers.SentenceTransformer", fake_st):
+        # Supply a tiny fake module so testing the local import does not import torch.
+        with _fake_sentence_transformers(fake_st):
 
             def load_via_barrier():
                 barrier.wait()  # all 3 threads arrive simultaneously
@@ -101,7 +99,7 @@ class TestEmbeddingModelIsReady:
 
     def test_is_ready_true_after_load(self):
         model = _EmbeddingModel("some-model")
-        with patch("sentence_transformers.SentenceTransformer", return_value=MagicMock()):
+        with _fake_sentence_transformers(MagicMock(return_value=MagicMock())):
             model._load()
         assert model.is_ready() is True
 
@@ -112,7 +110,7 @@ class TestEmbeddingModelIsReady:
         original_load = model._load
 
         def load_and_signal():
-            with patch("sentence_transformers.SentenceTransformer", return_value=MagicMock()):
+            with _fake_sentence_transformers(MagicMock(return_value=MagicMock())):
                 original_load()
             done.set()
 

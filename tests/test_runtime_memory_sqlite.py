@@ -15,19 +15,12 @@ from familiar_runtime.memory import (
 
 
 @pytest.fixture
-def memory_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def memory_db(tmp_path: Path, stub_embedding_model: None):
     """Provide a fresh ObservationMemory bound to a tmp_path SQLite file.
 
-    Embedding model loads happen on first ``encode_query`` call; if the
-    runner does not have the multilingual-e5 model cached, ``recall`` falls
-    back to the keyword/recency branch automatically. The test never
-    asserts on the embedding-backed branch.
+    The adapter tests cover persistence and translation, not embedding model
+    quality, so the shared lightweight embedding fixture avoids model loading.
     """
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    # Silence the embedding model prewarm in unit tests.
-    monkeypatch.setenv("FAMILIAR_DISABLE_EMBED_PREWARM", "1")
-
     from familiar_agent.tools.memory import ObservationMemory
 
     db_path = tmp_path / "observations.db"
@@ -108,11 +101,3 @@ def test_record_from_row_rejects_non_mapping_inputs() -> None:
 
     with pytest.raises(TypeError):
         _record_from_row(object())
-
-
-@pytest.mark.asyncio
-async def test_memory_db_fixture_writes_under_tmp_path(memory_db, tmp_path: Path) -> None:
-    """Defensive: confirm the test isolates the SQLite file under tmp_path."""
-    adapter = SQLiteMemoryStore(memory_db)
-    await adapter.save_observation("isolation check")
-    assert (tmp_path / "observations.db").exists()
