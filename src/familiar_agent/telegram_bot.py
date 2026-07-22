@@ -18,6 +18,7 @@ import base64
 import io
 import logging
 import os
+import re
 
 from familiar_runtime.models import ImageAttachment, UserTurn
 
@@ -27,6 +28,47 @@ from .user_profile import UserRegistry
 logger = logging.getLogger(__name__)
 
 _MAX_MSG_LEN = 4096  # Telegram hard limit
+_TELEGRAM_CHANNEL_CONTEXT = """\
+[Telegram text chat]
+- Your final reply and any `say` text are delivered to this Telegram chat.
+- `speak` is a separate StackChan room-device action. Do not claim that a voice or reply tool is
+  unavailable unless you called that tool in this turn and its result explicitly failed.
+- Never include tool protocol, private stage directions, or turn-control messages in the reply.
+"""
+_AUDIO_DIRECTION_RE = re.compile(r"\[(?=[A-Za-z])[^\]\n]{1,40}\]")
+_TOOL_BLOCK_START_RE = re.compile(r"<tool_call\b", re.IGNORECASE)
+_TOOL_CONTROL_TAG_RE = re.compile(
+    r"</?(?:tool_call|parameter|invoke)>|<invoke\b[^>]*>|<parameter\b[^>]*>",
+    re.IGNORECASE,
+)
+_TURN_CONTROL_RE = re.compile(
+    r"^\s*[（(]?\s*(?:turn\s+complete|ターン完了)[.!。]?\s*[）)]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _telegram_user_text(speaker_name: str, user_input: str) -> str:
+    """Add channel semantics that distinguish chat replies from room speech."""
+    return f"{_TELEGRAM_CHANNEL_CONTEXT}\n[{speaker_name}]: {user_input}"
+
+
+def _sanitize_telegram_text(text: str) -> str:
+    """Remove model control syntax while preserving observable reply content."""
+    clean = _AUDIO_DIRECTION_RE.sub("", text).strip()
+
+    # A broken prompt-driven tool call must never become chat content. The
+    # runtime parser normally consumes it; this is the presentation boundary's
+    # final defence.
+    tool_start = _TOOL_BLOCK_START_RE.search(clean)
+    if tool_start:
+        clean = clean[: tool_start.start()]
+    clean = _TOOL_CONTROL_TAG_RE.sub("", clean).strip()
+
+    if _TURN_CONTROL_RE.fullmatch(clean):
+        return ""
+
+    clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
+    return "" if _TURN_CONTROL_RE.fullmatch(clean) else clean
 
 
 def _parse_allowed_ids() -> set[int]:
@@ -155,7 +197,7 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
         """Execute one agent turn and send the response back."""
         tg_user = update.effective_user
         speaker_name, profile_id = _resolve_speaker(tg_user) if tg_user else ("unknown", None)
-        user_turn = UserTurn(text=f"[{speaker_name}]: {user_input}", images=images)
+        user_turn = UserTurn(text=_telegram_user_text(speaker_name, user_input), images=images)
 
         await update.message.chat.send_action("typing")  # type: ignore[union-attr]
 
@@ -200,16 +242,43 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
             except Exception:
                 logger.exception("Failed to send camera capture to Telegram")
 
-        # Prefer say() calls (spoken output); fall back to the final text response.
-        if say_chunks:
-            response = " ".join(say_chunks).strip()
-        elif final_text and final_text != "(no response)":
-            response = final_text
+        # Prefer useful say() output; if it contained only internal narration,
+        # fall back to the final response instead of exposing the narration.
+        clean_say_chunks: list[str] = []
+        for chunk in say_chunks:
+            clean = _sanitize_telegram_text(chunk)
+            if clean != chunk.strip():
+                logger.info(
+                    "Telegram sanitized say output: raw=%r clean=%r", chunk[:500], clean[:500]
+                )
+            if clean:
+                clean_say_chunks.append(clean)
+        clean_final = _sanitize_telegram_text(final_text)
+        if clean_final != final_text.strip():
+            logger.info(
+                "Telegram sanitized final output: raw=%r clean=%r",
+                final_text[:500],
+                clean_final[:500],
+            )
+        if clean_say_chunks:
+            response = " ".join(clean_say_chunks).strip()
+            response_source = "say"
+        elif clean_final and clean_final != "(no response)":
+            response = clean_final
+            response_source = "final_text"
         else:
             response = ""
+            response_source = "empty"
 
         if not response:
+            logger.warning(
+                "Telegram reply suppressed after sanitization (say_chunks=%d, final=%r)",
+                len(say_chunks),
+                final_text[:300],
+            )
             return
+
+        logger.info("Telegram reply (%s): %r", response_source, response[:500])
 
         for i in range(0, len(response), _MAX_MSG_LEN):
             await update.message.reply_text(response[i : i + _MAX_MSG_LEN])  # type: ignore[union-attr]

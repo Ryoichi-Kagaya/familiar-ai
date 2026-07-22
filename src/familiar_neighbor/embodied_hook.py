@@ -214,6 +214,7 @@ class EmbodiedAgentHook(RuntimeHookBase):
         on_phase: Callable[[str], None] | None,
         desires: DesireSystem | None,
         inner_voice: str,
+        excluded_tools: frozenset[str] | None = None,
     ) -> PreparedTurn:
         """Run the deterministic pre-loop pipeline and produce a ``PreparedTurn``.
 
@@ -643,7 +644,10 @@ class EmbodiedAgentHook(RuntimeHookBase):
             on_phase("thinking")
 
         # ── Loop dispatch config ──
-        turn_tools = agent._tool_defs_for_turn(brief_reply_mode=brief_reply_turn)
+        turn_tools = agent._tool_defs_for_turn(
+            brief_reply_mode=brief_reply_turn,
+            excluded_tools=excluded_tools,
+        )
         _brief_cap = (
             _BRIEF_REPLY_MAX_TOKENS_THINKING
             if getattr(agent.backend, "emits_reasoning", False)

@@ -63,6 +63,26 @@ def test_shared_helpers_exposed() -> None:
     assert calls[0].input == {"x": 1}
 
 
+def test_prompt_tool_call_recovers_mixed_closing_protocol() -> None:
+    from familiar_runtime.models import (
+        _parse_tool_calls_from_text,
+        _strip_tool_calls_from_text,
+    )
+
+    text = '<tool_call>{"name": "get_status", "input": {}}</parameter>\n</invoke>'
+    calls = _parse_tool_calls_from_text(text)
+
+    assert [(call.name, call.input) for call in calls] == [("get_status", {})]
+    assert _strip_tool_calls_from_text(text) == ""
+
+
+def test_prompt_tool_call_fragments_never_become_visible_text() -> None:
+    from familiar_runtime.models import _strip_tool_calls_from_text
+
+    text = '先に確認するで。\n<tool_call>{"name": "get_status", "input": '
+    assert _strip_tool_calls_from_text(text) == "先に確認するで。"
+
+
 def test_backend_compat_aliases_match_runtime() -> None:
     """Legacy ``familiar_agent.backend`` imports must alias the runtime types."""
     from familiar_agent import backend as legacy
@@ -250,6 +270,24 @@ async def test_cli_backend_estimates_multilingual_token_usage() -> None:
 
     assert result.input_tokens > 60_000
     assert result.output_tokens >= len("了解したで")
+
+
+@pytest.mark.asyncio
+async def test_cli_backend_normalizes_recovered_tool_call() -> None:
+    from familiar_runtime.models import CLIBackend
+
+    backend = CLIBackend(["model"])
+    malformed = '<tool_call>{"name": "get_status", "input": {}}</parameter>\n</invoke>'
+    streamed: list[str] = []
+
+    with patch.object(backend, "_run", new=AsyncMock(return_value=malformed)):
+        result, raw = await backend.stream_turn("system", [], [], 100, streamed.append)
+
+    assert result.stop_reason == "tool_use"
+    assert [(call.name, call.input) for call in result.tool_calls] == [("get_status", {})]
+    assert result.text == ""
+    assert raw["content"] == '<tool_call>{"name": "get_status", "input": {}}</tool_call>'
+    assert streamed == []
 
 
 def test_provider_backends_serialize_user_turn_images() -> None:

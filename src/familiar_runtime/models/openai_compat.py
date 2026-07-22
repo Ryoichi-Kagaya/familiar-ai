@@ -7,7 +7,13 @@ import logging
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from ._shared import _TOOL_CALL_RE, _build_tools_system, _parse_tool_calls_from_text
+from ._shared import (
+    _canonical_tool_call_text,
+    _extract_tool_calls_from_text,
+    _strip_tool_calls_from_text,
+    _build_tools_system,
+    _parse_tool_calls_from_text,
+)
 from .base import ModelTurnResult, ToolCall
 from .content import UserTurn, compact_image_blocks
 
@@ -195,16 +201,16 @@ class OpenAICompatibleBackend:
             if chunk.choices[0].delta.content:
                 chunk_text = chunk.choices[0].delta.content
                 text_chunks.append(chunk_text)
-                if on_text:
-                    on_text(chunk_text)
 
         text = "".join(text_chunks)
-        tool_calls = self._parse_tool_calls_from_text(text)
-
-        clean_text = _TOOL_CALL_RE.sub("", text).strip()
+        tool_calls, spans = _extract_tool_calls_from_text(text)
+        clean_text = _strip_tool_calls_from_text(text, spans)
+        if on_text and clean_text:
+            on_text(clean_text)
 
         stop = "tool_use" if tool_calls else "end_turn"
-        raw_assistant: dict[str, Any] = {"role": "assistant", "content": clean_text or None}
+        raw_text = _canonical_tool_call_text(tool_calls) if tool_calls else clean_text
+        raw_assistant: dict[str, Any] = {"role": "assistant", "content": raw_text or None}
         return (
             ModelTurnResult(stop_reason=stop, text=clean_text, tool_calls=tool_calls),
             raw_assistant,

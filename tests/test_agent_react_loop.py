@@ -260,6 +260,28 @@ async def test_brief_greeting_turn_uses_only_say_and_skips_heavy_prep():
 
 
 @pytest.mark.asyncio
+async def test_run_excluded_tools_are_removed_from_turn_surface():
+    agent = _make_agent(with_tts=True, with_camera=True)
+    agent.backend.stream_turn = AsyncMock(
+        return_value=(_turn("end_turn", text="確認したで。"), "確認したで。")
+    )
+
+    ps = _patch_heavy()
+    for p in ps:
+        p.start()
+    try:
+        await agent.run("周りの様子を詳しく確認して", excluded_tools=frozenset({"look"}))
+    finally:
+        for p in ps:
+            p.stop()
+
+    tool_names = {tool["name"] for tool in agent.backend.stream_turn.await_args.kwargs["tools"]}
+    assert "look" not in tool_names
+    assert "see" in tool_names
+    assert "say" in tool_names
+
+
+@pytest.mark.asyncio
 async def test_brief_reply_uses_thinking_token_cap_for_reasoning_backend():
     """When backend.emits_reasoning is True, brief turns use the larger 800-token cap."""
     agent = _make_agent(with_tts=True)

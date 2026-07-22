@@ -3,7 +3,10 @@
 from ._shared import (
     _ADAPTIVE_THINKING_MODELS,
     _build_tools_system,
+    _canonical_tool_call_text,
+    _extract_tool_calls_from_text,
     _parse_tool_calls_from_text,
+    _strip_tool_calls_from_text,
     _supports_adaptive_thinking,
     _TOOL_CALL_RE,
     _TOOLS_PROMPT_HEADER,
@@ -38,6 +41,9 @@ __all__ = [
     "_TOOL_CALL_RE",
     "_TOOLS_PROMPT_HEADER",
     "_build_tools_system",
+    "_canonical_tool_call_text",
+    "_extract_tool_calls_from_text",
     "_parse_tool_calls_from_text",
+    "_strip_tool_calls_from_text",
     "_supports_adaptive_thinking",
 ]

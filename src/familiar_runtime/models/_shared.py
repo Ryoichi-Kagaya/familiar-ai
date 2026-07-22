@@ -52,6 +52,15 @@ Available familiar-ai tools ({tool_count}); each entry includes its exact JSON i
 """
 
 _TOOL_CALL_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
+_TOOL_CALL_START_RE = re.compile(r"<tool_call>\s*", re.IGNORECASE)
+_TOOL_CALL_CLOSE_RE = re.compile(
+    r"\s*(?:</tool_call>|</parameter>\s*</invoke>)",
+    re.IGNORECASE,
+)
+_TOOL_CONTROL_TAG_RE = re.compile(
+    r"</?(?:tool_call|parameter|invoke)>|<invoke\b[^>]*>|<parameter\b[^>]*>",
+    re.IGNORECASE,
+)
 
 
 def _build_tools_system(system: str, tools: list[dict]) -> str:
@@ -91,19 +100,79 @@ def _build_tools_system(system: str, tools: list[dict]) -> str:
     )
 
 
-def _parse_tool_calls_from_text(text: str) -> list[ToolCall]:
-    """Extract <tool_call> JSON blocks from model output."""
-    tool_calls = []
-    for match in _TOOL_CALL_RE.finditer(text):
+def _extract_tool_calls_from_text(text: str) -> tuple[list[ToolCall], list[tuple[int, int]]]:
+    """Extract tool-call JSON and its spans, tolerating malformed closing XML.
+
+    Some prompt-driven models correctly emit the JSON object but finish it with
+    another tool protocol's ``</parameter></invoke>`` tags (or omit a closing
+    tag entirely).  ``JSONDecoder.raw_decode`` lets the JSON object itself be
+    the authoritative boundary instead of trusting model-generated XML.
+    """
+    decoder = json.JSONDecoder()
+    tool_calls: list[ToolCall] = []
+    spans: list[tuple[int, int]] = []
+    for match in _TOOL_CALL_START_RE.finditer(text):
         try:
-            data = json.loads(match.group(1).strip())
+            data, json_end = decoder.raw_decode(text, match.end())
+            if not isinstance(data, dict):
+                raise ValueError("tool_call JSON must be an object")
+            name = data.get("name")
+            tool_input = data.get("input", {})
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("tool_call name must be a non-empty string")
+            if not isinstance(tool_input, dict):
+                raise ValueError("tool_call input must be an object")
+
+            close_match = _TOOL_CALL_CLOSE_RE.match(text, json_end)
+            block_end = close_match.end() if close_match else json_end
             tool_calls.append(
                 ToolCall(
                     id=f"call_{uuid.uuid4().hex[:8]}",
-                    name=data["name"],
-                    input=data.get("input", {}),
+                    name=name,
+                    input=tool_input,
                 )
             )
-        except (json.JSONDecodeError, KeyError):
-            logger.warning("Failed to parse tool_call: %s", match.group(1))
+            spans.append((match.start(), block_end))
+            if close_match and "</tool_call>" not in close_match.group(0).lower():
+                logger.warning("Recovered tool_call %s from malformed closing tags", name)
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning("Failed to parse tool_call near offset %d: %s", match.start(), exc)
+    return tool_calls, spans
+
+
+def _parse_tool_calls_from_text(text: str) -> list[ToolCall]:
+    """Extract prompt-driven tool calls from model output."""
+    tool_calls, _ = _extract_tool_calls_from_text(text)
     return tool_calls
+
+
+def _strip_tool_calls_from_text(text: str, spans: list[tuple[int, int]] | None = None) -> str:
+    """Remove parsed or malformed tool protocol fragments from visible text."""
+    if spans is None:
+        _, spans = _extract_tool_calls_from_text(text)
+
+    parts: list[str] = []
+    cursor = 0
+    for start, end in spans:
+        parts.append(text[cursor:start])
+        cursor = end
+    parts.append(text[cursor:])
+    clean = "".join(parts)
+
+    # Never expose an unparseable tool request. Preserve any useful prose that
+    # preceded it, but discard the broken control block from its opening tag.
+    broken_start = _TOOL_CALL_START_RE.search(clean)
+    if broken_start:
+        clean = clean[: broken_start.start()]
+    clean = _TOOL_CONTROL_TAG_RE.sub("", clean)
+    return clean.strip()
+
+
+def _canonical_tool_call_text(tool_calls: list[ToolCall]) -> str:
+    """Serialize parsed tool calls back into the one protocol we ask for."""
+    return "\n".join(
+        "<tool_call>"
+        + json.dumps({"name": call.name, "input": call.input}, ensure_ascii=False)
+        + "</tool_call>"
+        for call in tool_calls
+    )

@@ -76,6 +76,10 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - `EmbodiedAgent.run()` is now a thin wrapper around the substrate `ReActLoop`: TAPE replan, coherence retry, interrupt drain, and say() reminders ride `EmbodiedAgentHook` lifecycle methods; finalisation and the forced final response stay in the wrapper. The existing text and legacy `user_images` calls remain compatible, while the input now also accepts a typed multimodal `UserTurn`
 
 ### Fixed
+- Prompt-driven model tool calls now recover valid JSON even when the model mixes in malformed
+  `</parameter></invoke>` closing tags, and Telegram replies filter tool protocol, turn-control
+  text, and audio direction tags before sending while preserving voice-failure reports for
+  diagnosis
 - Claude Code CLI turns now send prompts through stdin (also honoring legacy commands with a
   `{}` placeholder), preventing long conversations from failing with `Argument list too long`;
   CLI turns also estimate multilingual token usage so the existing 60k-token history compaction

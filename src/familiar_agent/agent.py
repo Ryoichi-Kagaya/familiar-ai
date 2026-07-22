@@ -2684,6 +2684,7 @@ class EmbodiedAgent:
             on_phase=on_phase,
             desires=desires,
             inner_voice=inner_voice,
+            excluded_tools=excluded_tools,
         )
 
         try:
