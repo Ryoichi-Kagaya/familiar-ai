@@ -10,7 +10,7 @@ from typing import Any, Protocol
 from .context import ContextBlock, select_context_blocks
 from .events.bus import EventBus
 from .models.base import ModelBackend, ModelTurnResult, ToolCall
-from .models.content import UserTurn, coerce_user_turn
+from .models.content import UserTurn, coerce_user_turn, format_user_message_text
 from .react_loop import ReActLoop, RunTurnResult
 from .tools.base import ToolExecutionResult
 from .tools.registry import ToolRegistry
@@ -217,9 +217,9 @@ class AgentRuntime:
             system = f"{system_prompt}\n\n{context_text}".strip()
 
         turn_messages = messages if messages is not None else []
-        turn_messages.append(
-            self._backend.make_user_message(user_turn if user_turn.images else user_turn.text)
-        )
+        model_text = format_user_message_text(user_turn.text, sent_at=user_turn.sent_at)
+        model_input = user_turn.with_text(model_text) if user_turn.images else model_text
+        turn_messages.append(self._backend.make_user_message(model_input))
         if self._event_bus is not None:
             self._event_bus.emit_simple(
                 source="user",

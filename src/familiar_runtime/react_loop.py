@@ -11,7 +11,12 @@ from typing import TYPE_CHECKING, Any
 
 from .events.bus import EventBus
 from .models.base import ModelBackend, ToolCall
-from .models.content import UserTurn, coerce_user_turn, compact_image_blocks
+from .models.content import (
+    UserTurn,
+    coerce_user_turn,
+    compact_image_blocks,
+    format_user_message_text,
+)
 from .tools.base import ToolExecutionResult
 from .tools.registry import ToolRegistry
 
@@ -137,6 +142,10 @@ class ReActLoop:
                                 break
                     images = tuple(image for turn in drained for image in turn.images)
                     interrupt_text = formatted or f"[User interrupted]: {joined}"
+                    interrupt_text = format_user_message_text(
+                        interrupt_text,
+                        sent_at=drained[0].sent_at,
+                    )
                     messages.append(
                         self._backend.make_user_message(
                             UserTurn(text=interrupt_text, images=images)

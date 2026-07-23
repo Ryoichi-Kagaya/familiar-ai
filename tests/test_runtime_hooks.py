@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
 
 from familiar_runtime.context import ContextBlock
-from familiar_runtime.models import ModelTurnResult, ToolCall
+from familiar_runtime.models import ModelTurnResult, ToolCall, UserTurn
 from familiar_runtime.runtime import (
     AgentRuntime,
     InterruptSource,
@@ -380,6 +381,24 @@ async def test_hooks_run_in_order_for_simple_turn() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_attaches_send_time_metadata_to_human_turn() -> None:
+    backend = _ScriptedBackend([ModelTurnResult(stop_reason="end_turn", text="ok")])
+    runtime = AgentRuntime(backend=backend, tools=ToolRegistry())
+    messages: list[Any] = []
+    user_turn = UserTurn(
+        text="hello",
+        sent_at=datetime(2026, 7, 23, 12, 5, 6, tzinfo=timezone.utc),
+    )
+
+    await runtime.run_turn(user_turn, messages=messages)
+
+    content = messages[0]["content"]
+    assert "sent_at=2026-07-23T12:05:06+00:00" in content
+    assert "weekday=Thursday" in content
+    assert content.endswith("\nhello")
+
+
+@pytest.mark.asyncio
 async def test_after_model_result_can_replace_result() -> None:
     """A hook returning a non-None ModelTurnResult replaces the model output."""
 
@@ -651,7 +670,9 @@ async def test_interrupt_format_hook_overrides_default() -> None:
         for m in messages
         if isinstance(m, dict) and m.get("role") == "user" and isinstance(m.get("content"), str)
     ]
-    assert any(t.startswith("[User interrupted x1]") and "say() now" in t for t in user_texts)
+    assert any(
+        "weekday=" in t and "[User interrupted x1]" in t and "say() now" in t for t in user_texts
+    )
 
 
 @pytest.mark.asyncio
@@ -665,7 +686,7 @@ async def test_interrupt_default_format_without_hook() -> None:
         for m in messages
         if isinstance(m, dict) and m.get("role") == "user" and isinstance(m.get("content"), str)
     ]
-    assert any(t.startswith("[User interrupted]:") for t in user_texts)
+    assert any("weekday=" in t and "[User interrupted]:" in t for t in user_texts)
 
 
 class _SystemRecordingBackend(_ScriptedBackend):

@@ -2675,12 +2675,15 @@ class EmbodiedAgent:
             user_turn = UserTurn(
                 text=user_turn.text,
                 images=(*user_turn.images, *legacy_images),
+                sent_at=user_turn.sent_at,
             )
         user_input_text = user_turn.text
+        ctx = TurnContext(user_input=user_input_text, profile="neighbor")
 
         prep = await self._hook.prepare_turn(
             user_input=user_input_text,
             user_images=user_turn.images,
+            message_sent_at=user_turn.sent_at,
             on_phase=on_phase,
             desires=desires,
             inner_voice=inner_voice,
@@ -2693,7 +2696,6 @@ class EmbodiedAgent:
                 if interrupt_queue is not None
                 else None
             )
-            ctx = TurnContext(user_input=user_input_text, profile="neighbor")
             ctx.metadata["prep"] = prep
             ctx.metadata["interrupt_source"] = interrupt_source
 

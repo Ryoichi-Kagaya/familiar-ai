@@ -8,6 +8,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Every human user turn now carries a runtime-supplied, timezone-aware send timestamp and
+  explicit weekday in the model-visible message context, including mid-turn interrupts
 - Provider-neutral multimodal user turns with validated JPEG/PNG/WebP attachments shared by
   Telegram, the desktop GUI, the Textual TUI, and the plain REPL; terminal users can send an
   image with `/image "<path>" [caption]`, while the GUI supports previewing and removing up to

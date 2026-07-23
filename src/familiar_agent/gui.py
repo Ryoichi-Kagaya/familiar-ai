@@ -1552,7 +1552,7 @@ class FamiliarWindow(QMainWindow):
         if not text:
             text = "この画像を見て。"
         self._input.clear()
-        user_input: str | UserTurn = (
+        user_input = coerce_user_turn(
             UserTurn(text=text, images=pending_images) if pending_images else text
         )
         if pending_images:
@@ -1728,7 +1728,7 @@ class FamiliarWindow(QMainWindow):
             if text:
                 self._log.append_line(f"{self._companion_display_name} 🎙 {text}")
                 self._append_log(f"{self._companion_display_name} 🎙 {text}")
-                self._input_queue.put_nowait(text)
+                self._input_queue.put_nowait(coerce_user_turn(text))
         except Exception as exc:
             logger.warning("Batch STT error: %s", exc)
             self._log.append_line(f"[error] STT: {exc}")

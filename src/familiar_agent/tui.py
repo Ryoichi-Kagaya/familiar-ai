@@ -19,7 +19,7 @@ from textual.binding import Binding
 from textual.widgets import Footer, Input, RichLog, Static
 from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 
-from familiar_runtime.models import UserTurn
+from familiar_runtime.models import UserTurn, coerce_user_turn
 
 from ._i18n import _make_banner, _t
 from ._ui_helpers import (
@@ -369,7 +369,7 @@ class FamiliarApp(App):
             return
 
         try:
-            user_input = parse_image_command(text) or text
+            user_input = coerce_user_turn(parse_image_command(text) or text)
         except ImageInputError as exc:
             self._log_system(f"⚠ {exc}")
             return
@@ -724,7 +724,7 @@ class FamiliarApp(App):
             if text.strip():
                 self._log_user(text)
                 self._last_interaction = time.time()
-                await self._input_queue.put(text)
+                await self._input_queue.put(coerce_user_turn(text))
         except Exception as e:
             self._log_system(f"STT error: {e}")
         finally:

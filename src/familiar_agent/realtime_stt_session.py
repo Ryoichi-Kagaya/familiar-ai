@@ -24,6 +24,8 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from familiar_runtime.models import UserTurn
+
 from .voice_guard import VoiceLoopGuard, get_shared_voice_guard
 
 if TYPE_CHECKING:
@@ -302,7 +304,7 @@ class RealtimeSttSession:
             self._last_time = now
             if self.on_committed:
                 self.on_committed(text)
-            await self._committed_queue.put(text)
+            await self._committed_queue.put(UserTurn(text=text))
 
     async def _partial_relay(self) -> None:
         while True:

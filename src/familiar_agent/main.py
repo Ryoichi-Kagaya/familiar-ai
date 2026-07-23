@@ -105,7 +105,7 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                 return
             text = line.strip()
             try:
-                await input_queue.put(parse_image_command(text) or text)
+                await input_queue.put(coerce_user_turn(parse_image_command(text) or text))
             except ImageInputError as exc:
                 print(f"\n  ⚠ {exc}")
 

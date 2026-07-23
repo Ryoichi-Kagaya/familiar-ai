@@ -24,6 +24,7 @@ import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -49,7 +50,7 @@ from familiar_neighbor.mind.social_policy import (
     relationship_learning_inputs,
 )
 from familiar_runtime.runtime import RuntimeHookBase
-from familiar_runtime.models import ImageAttachment, UserTurn
+from familiar_runtime.models import ImageAttachment, UserTurn, format_user_message_text
 
 
 # Within a sustained distress conversation, re-running ToM every turn adds a
@@ -211,6 +212,7 @@ class EmbodiedAgentHook(RuntimeHookBase):
         *,
         user_input: str,
         user_images: tuple[ImageAttachment, ...] = (),
+        message_sent_at: datetime | float | None = None,
         on_phase: Callable[[str], None] | None,
         desires: DesireSystem | None,
         inner_voice: str,
@@ -547,10 +549,13 @@ class EmbodiedAgentHook(RuntimeHookBase):
                 )
 
         # ── Append user message to history ──
+        model_user_input = (
+            user_input_with_ctx
+            if is_desire_turn
+            else format_user_message_text(user_input_with_ctx, sent_at=message_sent_at)
+        )
         message_input: str | UserTurn = (
-            UserTurn(text=user_input_with_ctx, images=user_images)
-            if user_images
-            else user_input_with_ctx
+            UserTurn(text=model_user_input, images=user_images) if user_images else model_user_input
         )
         agent.messages.append(agent.backend.make_user_message(message_input))
 

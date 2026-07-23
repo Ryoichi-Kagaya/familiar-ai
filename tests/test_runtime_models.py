@@ -8,6 +8,7 @@ deferred inside the test so a missing optional SDK fails that test only.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -61,6 +62,18 @@ def test_shared_helpers_exposed() -> None:
     assert len(calls) == 1
     assert calls[0].name == "ping"
     assert calls[0].input == {"x": 1}
+
+
+def test_user_message_metadata_includes_local_timestamp_and_weekday() -> None:
+    from familiar_runtime.models import format_user_message_text
+
+    sent_at = datetime(2026, 7, 23, 21, 5, 6, tzinfo=timezone(timedelta(hours=9)))
+
+    assert format_user_message_text("こんばんは", sent_at=sent_at) == (
+        "[familiar-ai message metadata: "
+        "sent_at=2026-07-23T21:05:06+09:00; weekday=Thursday]\n"
+        "こんばんは"
+    )
 
 
 def test_prompt_tool_call_recovers_mixed_closing_protocol() -> None:

@@ -14,7 +14,7 @@ from ._shared import (
 from .anthropic import AnthropicBackend
 from .base import ModelBackend, ModelTurnResult, ToolCall
 from .cli import CLIBackend, ClaudeCodeCLIBackend
-from .content import ImageAttachment, UserTurn, coerce_user_turn
+from .content import ImageAttachment, UserTurn, coerce_user_turn, format_user_message_text
 from .gemini import GeminiBackend
 from .glm import GLMBackend
 from .kimi import KimiBackend
@@ -28,6 +28,7 @@ __all__ = [
     "ImageAttachment",
     "UserTurn",
     "coerce_user_turn",
+    "format_user_message_text",
     # providers
     "AnthropicBackend",
     "OpenAICompatibleBackend",

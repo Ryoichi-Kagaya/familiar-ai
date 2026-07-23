@@ -383,8 +383,11 @@ async def test_run_appends_user_message_to_history():
     try:
         assert len(agent.messages) == 0
         await agent.run("hello from user")
-        # At minimum, a user message was added
-        assert any(m.get("role") == "user" for m in agent.messages)
+        user_messages = [m for m in agent.messages if m.get("role") == "user"]
+        assert user_messages
+        assert "sent_at=" in user_messages[0]["content"]
+        assert "weekday=" in user_messages[0]["content"]
+        assert "hello from user" in user_messages[0]["content"]
     finally:
         for p in ps:
             p.stop()
@@ -1355,8 +1358,9 @@ async def test_interrupt_queue_drained_with_embodied_format():
         for p in ps:
             p.stop()
 
-    interrupted = [t for t in _user_texts(agent) if t.startswith("[User interrupted x1]")]
+    interrupted = [t for t in _user_texts(agent) if "[User interrupted x1]" in t]
     assert interrupted
+    assert "weekday=" in interrupted[0]
     assert "なあ、聞いてる？" in interrupted[0]
     assert "say() now" in interrupted[0]
 

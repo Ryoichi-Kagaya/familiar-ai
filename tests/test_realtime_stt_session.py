@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from familiar_runtime.models import UserTurn
+
 from familiar_agent.realtime_stt_session import (
     RealtimeSttController,
     RealtimeSttSession,
@@ -36,7 +38,7 @@ def test_should_skip_stt_drops_bracketed_audio_events() -> None:
 async def test_committed_relay_drops_same_text_within_dedupe_window(monkeypatch) -> None:
     session = RealtimeSttSession("dummy")
     committed_q: asyncio.Queue[str] = asyncio.Queue()
-    input_q: asyncio.Queue[str | None] = asyncio.Queue()
+    input_q: asyncio.Queue[UserTurn | None] = asyncio.Queue()
     session._incoming_committed = committed_q
     session._committed_queue = input_q
 
@@ -58,8 +60,9 @@ async def test_committed_relay_drops_same_text_within_dedupe_window(monkeypatch)
     queued: list[str] = []
     while not input_q.empty():
         item = input_q.get_nowait()
-        assert isinstance(item, str)
-        queued.append(item)
+        assert isinstance(item, UserTurn)
+        assert item.sent_at.tzinfo is not None
+        queued.append(item.text)
 
     assert forwarded == ["こんにちは", "こんにちは"]
     assert queued == ["こんにちは", "こんにちは"]
@@ -69,7 +72,7 @@ async def test_committed_relay_drops_same_text_within_dedupe_window(monkeypatch)
 async def test_committed_relay_keeps_different_texts(monkeypatch) -> None:
     session = RealtimeSttSession("dummy")
     committed_q: asyncio.Queue[str] = asyncio.Queue()
-    input_q: asyncio.Queue[str | None] = asyncio.Queue()
+    input_q: asyncio.Queue[UserTurn | None] = asyncio.Queue()
     session._incoming_committed = committed_q
     session._committed_queue = input_q
 
@@ -87,8 +90,9 @@ async def test_committed_relay_keeps_different_texts(monkeypatch) -> None:
     queued: list[str] = []
     while not input_q.empty():
         item = input_q.get_nowait()
-        assert isinstance(item, str)
-        queued.append(item)
+        assert isinstance(item, UserTurn)
+        assert item.sent_at.tzinfo is not None
+        queued.append(item.text)
 
     assert queued == ["こんにちは", "こんばんは"]
 
@@ -213,7 +217,7 @@ async def test_committed_relay_drops_recent_tts_echo(monkeypatch) -> None:
 
     session = RealtimeSttSession("dummy", voice_guard=guard)
     committed_q: asyncio.Queue[str] = asyncio.Queue()
-    input_q: asyncio.Queue[str | None] = asyncio.Queue()
+    input_q: asyncio.Queue[UserTurn | None] = asyncio.Queue()
     session._incoming_committed = committed_q
     session._committed_queue = input_q
 
@@ -240,7 +244,7 @@ async def test_committed_relay_schedules_restart_after_loop_watchdog(monkeypatch
 
     session = RealtimeSttSession("dummy", voice_guard=guard)
     committed_q: asyncio.Queue[str] = asyncio.Queue()
-    input_q: asyncio.Queue[str | None] = asyncio.Queue()
+    input_q: asyncio.Queue[UserTurn | None] = asyncio.Queue()
     session._incoming_committed = committed_q
     session._committed_queue = input_q
 
