@@ -78,6 +78,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - `EmbodiedAgent.run()` is now a thin wrapper around the substrate `ReActLoop`: TAPE replan, coherence retry, interrupt drain, and say() reminders ride `EmbodiedAgentHook` lifecycle methods; finalisation and the forced final response stay in the wrapper. The existing text and legacy `user_images` calls remain compatible, while the input now also accepts a typed multimodal `UserTurn`
 
 ### Fixed
+- Camera images returned by `see()` now reach the default Claude Code CLI backend through its
+  staged read-only image transport instead of being reduced to a text-only tool result; Telegram
+  and GUI image previews continue to receive the same captured JPEG
 - Prompt-driven model tool calls now recover valid JSON even when the model mixes in malformed
   `</parameter></invoke>` closing tags, and Telegram replies filter tool protocol, turn-control
   text, and audio direction tags before sending while preserving voice-failure reports for

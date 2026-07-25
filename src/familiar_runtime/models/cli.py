@@ -288,6 +288,33 @@ class ClaudeCodeCLIBackend(CLIBackend):
             "source": {"type": "base64", "media_type": media_type, "data": b64},
         }
 
+    def make_tool_results(
+        self,
+        tool_calls: list[ToolCall],
+        results: Sequence[tuple[str, str | list[str] | None]],
+    ) -> list[dict]:
+        """Preserve images returned by tools such as ``see``.
+
+        The generic CLI transport is text-only, but Claude Code can inspect
+        staged image files through its Read tool. Represent tool-result images
+        with the same blocks used for user attachments so ``stream_turn`` can
+        stage them before invoking Claude.
+        """
+        if not any(image for _, image in results):
+            return super().make_tool_results(tool_calls, results)
+
+        parts: list[dict[str, Any]] = []
+        for tool_call, (text, image) in zip(tool_calls, results):
+            parts.append(
+                {
+                    "type": "text",
+                    "text": f"[Tool result: {tool_call.name}]\n{text}",
+                }
+            )
+            images = image if isinstance(image, list) else ([image] if image else [])
+            parts.extend(self.make_image_block(item) for item in images)
+        return [{"role": "user", "content": parts}]
+
     @staticmethod
     def _merge_tool_name(value: str, tool_name: str) -> str:
         if value == "default":

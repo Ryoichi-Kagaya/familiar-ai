@@ -459,6 +459,33 @@ async def test_claude_cli_stages_images_for_read_and_cleans_them_up() -> None:
 
 
 @pytest.mark.asyncio
+async def test_claude_cli_stages_tool_result_images_for_read() -> None:
+    from familiar_runtime.models import ClaudeCodeCLIBackend, ToolCall
+
+    backend = ClaudeCodeCLIBackend(["claude", "-p", "--tools", "", "{}"])
+    messages = [
+        backend.make_tool_results(
+            [ToolCall(id="t", name="see", input={})],
+            [("You see the current view.", "aW1hZ2UtYnl0ZXM=")],
+        )
+    ]
+
+    async def fake_run(prompt: str, *, command=None, cwd=None) -> str:
+        assert cwd is not None
+        image_path = Path(cwd) / "image-1.jpg"
+        assert image_path.read_bytes() == b"image-bytes"
+        assert "[Tool result: see]" in prompt
+        assert str(image_path) in prompt
+        assert "Use the Read tool" in prompt
+        return "I can see it."
+
+    with patch.object(backend, "_run", side_effect=fake_run):
+        result, _ = await backend.stream_turn("system", messages, [], 100, None)
+
+    assert result.text == "I can see it."
+
+
+@pytest.mark.asyncio
 async def test_claude_cli_text_turn_keeps_original_command_path() -> None:
     from familiar_runtime.models import ClaudeCodeCLIBackend
 
