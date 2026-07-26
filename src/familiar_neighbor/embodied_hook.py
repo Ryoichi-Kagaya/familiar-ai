@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -42,6 +43,7 @@ from familiar_neighbor.mind.appraisal import AppraisalContext, AppraisalEngine
 from familiar_neighbor.mind.deferral import DEFERRAL_PREFIX, detect_deferral
 from familiar_neighbor.mind.desires import DesireSystem
 from familiar_neighbor.mind.mental_state import MentalStateBus, MentalStateSnapshot
+from familiar_neighbor.mind.reality import looks_like_fresh_perception_claim
 from familiar_neighbor.mind.social_policy import (
     SPEECH_ACT_VOCABULARY,
     SocialPolicyDecision,
@@ -57,6 +59,54 @@ from familiar_runtime.models import ImageAttachment, UserTurn, format_user_messa
 # serial utility call to time-to-first-token and writes near-duplicate person
 # model rows. Re-run only after this many turns unless the speech act changed.
 _AUTO_TOM_COOLDOWN_TURNS = 3
+
+
+_AUTONOMOUS_MOVE_DIRECTIVES = {
+    "act_autonomously": "",  # the impulse itself is the directive
+    "write_private_reflection": (
+        "This is a private moment: reflect and remember, but do NOT call say() "
+        "— no one asked, and speaking now would be for you, not for them."
+    ),
+    "quietly_prepare": (
+        "Nothing is urgent: quietly tend your memory, plans and curiosities. Do NOT call say()."
+    ),
+    "stay_silent": (
+        "Quiet hours and nothing urgent: keep this turn minimal and silent — do NOT call say()."
+    ),
+}
+
+
+def _frame_autonomous_moment(agent: Any, desires: DesireSystem | None, inner_voice: str) -> str:
+    """Attach the autonomous-move policy's directive to a self-initiated turn.
+
+    ``decide()`` governs how to answer a companion; this governs what to do
+    with a moment nobody prompted. Deterministic and best-effort: any failure
+    leaves the impulse text untouched.
+    """
+    policy = getattr(agent, "_social_policy", None)
+    decide_move = getattr(policy, "decide_autonomous_move", None)
+    if not callable(decide_move):
+        return inner_voice
+    try:
+        heartbeat = getattr(agent, "_heartbeat", None)
+        quiet = bool(heartbeat.routine_state().quiet_hours) if heartbeat else False
+        dominant = desires.get_dominant() if desires is not None else None
+        concerns = getattr(agent, "_concerns", None)
+        open_concerns = len(concerns.snapshot()) if concerns is not None else 0
+        move = decide_move(
+            quiet_hours=quiet,
+            dominant_desire=dominant[0] if dominant else None,
+            desire_level=float(dominant[1]) if dominant else 0.0,
+            open_concerns=open_concerns,
+        )
+        directive = _AUTONOMOUS_MOVE_DIRECTIVES.get(move.move, "")
+        if not move.vocalize and move.move == "act_autonomously":
+            directive = "No one seems to be around: act, but do NOT call say()."
+        if directive:
+            return f"{inner_voice}\n\n{directive}"
+        return inner_voice
+    except Exception:  # noqa: BLE001
+        return inner_voice
 
 
 def _should_auto_tom(
@@ -181,6 +231,9 @@ class PreparedTurn:
     non_say_streak: int = 0
     say_streak: int = 0
     identity_retried: bool = False
+    voice_retried: bool = False
+    reality_retried: bool = False
+    see_succeeded: bool = False
     observation_action_name: str | None = None
     observation_action_input: dict | None = None
     pending_view_action_name: str | None = None
@@ -261,17 +314,41 @@ class EmbodiedAgentHook(RuntimeHookBase):
         if on_phase:
             on_phase("startup" if startup_phase else "thinking")
 
-        # ── Background tasks (MCP connections, memory worker) ──
+        # ── Background tasks (MCP connections, memory worker, inner loop) ──
         # MCP is awaited so tools are registered before _tool_defs_for_turn builds
-        # the turn's tool list.  ensure_future (fire-and-forget) was a regression
-        # from the original fix in 6333cd9 that was lost when this block moved to
-        # embodied_hook during the EmbodiedAgentHook refactor.
-        if agent._mcp and not agent._mcp.is_started:
+        # the turn's tool list. UIs may start the handshake before the turn,
+        # but the first turn still waits for that task to finish.
+        start_mcp_early = getattr(agent, "start_mcp_early", None)
+        if callable(start_mcp_early):
+            start_mcp_early()
+        mcp_start_task = getattr(agent, "_mcp_start_task", None)
+        if mcp_start_task is not None and not mcp_start_task.done():
+            await mcp_start_task
+        elif agent._mcp and not agent._mcp.is_started:
             await agent._mcp.start()
         if memory_worker and not memory_worker.is_running:
             await memory_worker.start()
+        # Inner loop starts here (not in __init__) because it needs a running
+        # event loop; gated on config so it stays dark by default.
+        inner_loop = getattr(agent, "_inner_loop", None)
+        if (
+            inner_loop is not None
+            and not inner_loop.is_running
+            and bool(getattr(agent.config, "inner_loop", False))
+        ):
+            await inner_loop.start()
+        # Dense recurrence defers self-state writes between turns; every real
+        # turn starts from persisted state (flush is a no-op otherwise).
+        self_state = getattr(agent, "_self_state", None)
+        if self_state is not None and hasattr(self_state, "flush"):
+            try:
+                self_state.flush()
+            except Exception:  # noqa: BLE001
+                pass
 
         is_desire_turn = bool(inner_voice and not user_input)
+        if is_desire_turn:
+            inner_voice = _frame_autonomous_moment(agent, desires, inner_voice)
         candidate_brief_turn = agent._is_candidate_brief_turn(
             user_input,
             is_desire_turn=is_desire_turn,
@@ -295,6 +372,15 @@ class EmbodiedAgentHook(RuntimeHookBase):
             agenda_ctx = agent._today_agenda_context()
             if agenda_ctx:
                 morning_ctx = f"{morning_ctx}\n\n{agenda_ctx}" if morning_ctx else agenda_ctx
+            # Self-ledger: resume last session's metacognitive thread and
+            # re-surface corrected interpretations (anti-regression).
+            carryover_fn = getattr(agent, "_self_ledger_carryover_context", None)
+            if callable(carryover_fn):
+                carryover_ctx = carryover_fn()
+                if carryover_ctx:
+                    morning_ctx = (
+                        f"{morning_ctx}\n\n{carryover_ctx}" if morning_ctx else carryover_ctx
+                    )
 
         # ── Context compaction ──
         if agent._should_compact():
@@ -527,7 +613,11 @@ class EmbodiedAgentHook(RuntimeHookBase):
         # ── Deterministic perspective-taking ──
         # should_use_tom used to be advisory only; now the inference actually
         # runs (and accumulates into the person model) on flagged turns.
-        auto_tom_ctx = ""
+        # Latency (roadmap PR7): the run is a BACKGROUND task — it used to sit
+        # serially before the first token, adding up to 12 s of TTFT. Its
+        # structured inference persists into the person model, which the
+        # [Person model] block surfaces from the next turn on; this turn's
+        # softness/validation gates come from social policy, as they always did.
         last_auto_tom_turn = getattr(agent, "_last_auto_tom_turn", None)
         if _should_auto_tom(
             social_policy,
@@ -541,12 +631,9 @@ class EmbodiedAgentHook(RuntimeHookBase):
         ):
             agent._last_auto_tom_turn = agent._turn_count
             agent._last_auto_tom_act = social_policy.primary_act
-            auto_tom_ctx = await agent._run_auto_tom(user_input)
-            if auto_tom_ctx:
-                auto_tom_ctx = (
-                    "[Perspective-taking already done this turn — do not call the "
-                    "tom tool again]\n" + auto_tom_ctx
-                )
+            agent._spawn_background_task(
+                agent._run_auto_tom_background(user_input), name="auto-tom"
+            )
 
         # ── Append user message to history ──
         model_user_input = (
@@ -573,6 +660,17 @@ class EmbodiedAgentHook(RuntimeHookBase):
             if not workspace_ctx:
                 workspace_ctx = agent._cached_workspace_ctx
             continuity_ctx = agent._self_continuity_context()
+            # Post-compaction re-anchor comes FIRST in continuity (constitution
+            # before memory details); pending until the next non-brief turn so
+            # a brief reply can never consume it invisibly.
+            if getattr(agent, "_post_compact_recovery_pending", False):
+                agent._post_compact_recovery_pending = False
+                recovery_fn = getattr(agent, "_post_compact_recovery_context", None)
+                recovery_ctx = recovery_fn() if callable(recovery_fn) else ""
+                if recovery_ctx:
+                    continuity_ctx = recovery_ctx + (
+                        "\n\n" + continuity_ctx if continuity_ctx else ""
+                    )
             heartbeat_ctx = agent._heartbeat.continuity_context_for_prompt()
             if heartbeat_ctx:
                 continuity_ctx = (
@@ -640,7 +738,6 @@ class EmbodiedAgentHook(RuntimeHookBase):
                     agent._mental_state_bus.summarize_recent_for_prompt(2),
                     mental_snapshot.prompt_summary(),
                     agent._format_social_policy_prompt(social_policy),
-                    auto_tom_ctx,
                 )
                 if part
             )
@@ -710,6 +807,16 @@ class EmbodiedAgentHook(RuntimeHookBase):
         if not final_text or final_text == "(no response)":
             return
         agent = self._agent
+        # Grounding record: did this turn actually touch the world? A failed
+        # see() does not count, and self-initiated reflection turns are not
+        # reality-testing-relevant (the gate exempts them for the same
+        # reason), so they neither raise nor sink the ratio.
+        grounding = getattr(agent, "_grounding", None)
+        if grounding is not None and not is_desire_turn:
+            try:
+                grounding.note_turn(prep.see_succeeded)
+            except Exception:  # noqa: BLE001
+                pass
         try:
             agent._mental_state_bus.append(prep.mental_snapshot)
         except Exception as exc:  # noqa: BLE001
@@ -828,6 +935,69 @@ class EmbodiedAgentHook(RuntimeHookBase):
                     ),
                 )
 
+        # Reality gate: a reply that claims present-tense perception without
+        # having looked this turn is generation outrunning error correction —
+        # dreaming out loud. One re-ask lets the model either actually call
+        # see() or honestly reframe as memory/uncertainty. Runs BEFORE the
+        # voice gate: the re-ask may change what there is to say. Only fires
+        # when a see-capable tool is on this turn's surface (camera-less
+        # installs stay covered by the prompt constraint). Deterministic
+        # pattern checks only; memory-framed sentences are exempt (the safe
+        # failure direction is a missed claim, not a false re-ask).
+        if (
+            getattr(agent.config, "reality_gate", False)
+            and not prep.reality_retried
+            and not prep.is_desire_turn
+            and not prep.brief_reply_turn
+            and not prep.see_succeeded
+            and any(t.get("name") == "see" for t in prep.turn_tools)
+        ):
+            if looks_like_fresh_perception_claim(result.text or ""):
+                prep.reality_retried = True
+                prep.say_used = False
+                logger.info("[REALITY] gate fired: perception claim without see() this turn")
+                from familiar_runtime.runtime import RetryDecision
+
+                return RetryDecision(
+                    retry=True,
+                    inject_user_message=(
+                        "[REALITY] You describe seeing something, but you did not "
+                        "look this turn. Either call see() now and describe what is "
+                        "actually there, or rephrase honestly as memory ('I "
+                        "remember…') or uncertainty."
+                    ),
+                )
+
+        # Voice gate: written text is silent — a conversational reply that
+        # never called say() gets ONE re-ask so the model itself picks the
+        # line to speak aloud. Unlike auto_say (which would pipe the whole
+        # reply, stage directions and all, into TTS), this keeps say() as the
+        # deliberate voice channel. Small local models write text but forget
+        # to speak; well-behaved models never trip this (say_used is True).
+        # Brief turns (own say-first design, 2-iteration cap) and desire
+        # turns (private reflection must stay silent) are exempt.
+        if (
+            getattr(agent.config, "voice_gate", False)
+            and agent._tts is not None
+            and not prep.voice_retried
+            and not prep.say_used
+            and not prep.is_desire_turn
+            and not prep.brief_reply_turn
+            and (result.text or "").strip()
+        ):
+            prep.voice_retried = True
+            from familiar_runtime.runtime import RetryDecision
+
+            return RetryDecision(
+                retry=True,
+                inject_user_message=(
+                    "[VOICE] Your text is silent — the companion cannot hear it. "
+                    "Call the say tool NOW with only the one or two sentences you "
+                    "want spoken aloud (spoken words only, no stage directions or "
+                    "tags), then finish your reply."
+                ),
+            )
+
         # Coherence gate: ask the utility backend whether the response contains
         # a logical error. Only fires once per turn to avoid infinite loops.
         coherence_enabled = os.environ.get("FAMILIAR_COHERENCE_CHECK", "").strip() in (
@@ -867,6 +1037,12 @@ class EmbodiedAgentHook(RuntimeHookBase):
 
         if call.name == "see":
             prep.camera_used = True
+            # camera_used means "a capture was attempted" (the observation
+            # pipeline keys on it); the reality gate and grounding need
+            # "a capture actually landed" — a failed see() must not license
+            # perception claims.
+            if result.success:
+                prep.see_succeeded = True
             if prep.pending_view_action_name is not None:
                 prep.observation_action_name = prep.pending_view_action_name
                 prep.observation_action_input = dict(prep.pending_view_action_input or {})
@@ -882,6 +1058,8 @@ class EmbodiedAgentHook(RuntimeHookBase):
             prep.say_used = True
             prep.non_say_streak = 0
             prep.say_streak += 1
+            # Voice recency for the consciousness profile's reportability dim.
+            agent._last_say_at = time.time()
         else:
             prep.non_say_streak += 1
             prep.say_streak = 0

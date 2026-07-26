@@ -37,6 +37,15 @@ def _make_agent(*, with_tts: bool = False, with_camera: bool = False, with_mcp: 
     agent.config.max_tokens = 1000
     agent.config.agent_name = "Kokone"
     agent.config.companion_name = "Kouta"
+    # MagicMock attrs are truthy — pin flag-gated subsystems to their real
+    # defaults so tests exercise the same paths a default install does.
+    agent.config.consciousness_profile = False
+    agent.config.reality_gate = False
+    agent.config.inner_dense = False
+    agent.config.inner_min_interval = 5.0
+    agent.config.sleep_consolidation = False
+    agent.config.dream_mode = False
+    agent.config.experience_ledger = False
 
     agent._turn_count = 0
     agent._session_input_tokens = 0
@@ -162,6 +171,20 @@ def _make_agent(*, with_tts: bool = False, with_camera: bool = False, with_mcp: 
     agent._memory_worker.is_running = True
     agent._mood = "neutral"
     agent._mood_intensity = 0.0
+
+    # Inner loop (Phase 2): live tick state; the loop itself is not started.
+    from familiar_agent.inner_loop import InnerLoopConfig, TrainOfThought
+    from collections import deque
+
+    agent._turn_active = False
+    agent._desires = None
+    agent._inner_monologue = deque(maxlen=8)
+    agent._train_of_thought = TrainOfThought()
+    agent._inner_tick_count = 0
+    agent._inner_escalated_at = {}
+    agent._inner_loop_config = InnerLoopConfig()
+    agent._inner_backend = None
+    agent._last_micro_thought_at = 0.0
 
     # Per-turn cognition pipeline (PR3 runtime reorg).  __new__ skipped
     # the EmbodiedAgent.__init__ that normally wires the hook, so attach
@@ -938,9 +961,10 @@ async def test_post_response_pipeline_updates_self_continuity_state():
 
 
 @pytest.mark.asyncio
-async def test_flagged_turn_runs_auto_tom_and_injects_result():
-    """A venting turn (should_use_tom=True) runs ToM deterministically and the
-    result reaches the system prompt via mental_ctx."""
+async def test_flagged_turn_runs_auto_tom_off_critical_path():
+    """A venting turn (should_use_tom=True) still runs ToM deterministically —
+    but as a BACKGROUND task (roadmap PR7): it must not block the turn, and its
+    value persists via the person model rather than this turn's prompt."""
     agent = _make_agent()
     agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text="うん"), "うん"))
 
@@ -953,16 +977,20 @@ async def test_flagged_turn_runs_auto_tom_and_injects_result():
         p.start()
     try:
         await agent.run("むかつくわ、ほんまに最悪な一日や")
+        await agent._drain_background_tasks()
     finally:
         for p in ps:
             p.stop()
 
     auto_tom.assert_awaited_once()
+    # Cooldown bookkeeping advances at trigger time.
+    assert agent._last_auto_tom_turn == agent._turn_count
+    # Off the critical path: nothing ToM-shaped is injected into THIS prompt.
     system = agent.backend.stream_turn.await_args.kwargs.get("system")
     if system is None:
         system = agent.backend.stream_turn.await_args.args[0]
     joined = "\n".join(system) if isinstance(system, tuple) else str(system)
-    assert "TOM-SENTINEL-XYZ" in joined
+    assert "TOM-SENTINEL-XYZ" not in joined
 
 
 @pytest.mark.asyncio

@@ -53,6 +53,13 @@ class SetupConfig:
     auto_say: bool = True
     proactive_reminders: bool = True
     inner_loop: bool = False
+    voice_gate: bool = False
+    prompt_profile: str = "full"
+    consciousness_profile: bool = False
+    reality_gate: bool = False
+    inner_dense: bool = False
+    sleep_consolidation: bool = False
+    experience_ledger: bool = False
 
 
 Validator = Callable[[Any], str | None]
@@ -442,6 +449,77 @@ SETTINGS_FIELDS: tuple[SettingField, ...] = (
         default=False,
         setup_visible=False,
         runtime_getter=lambda config: config.inner_loop,
+    ),
+    SettingField(
+        env_key="FAMILIAR_VOICE_GATE",
+        attr="voice_gate",
+        section="advanced",
+        label="Voice gate (re-ask silent replies):",
+        widget="bool",
+        default=False,
+        setup_visible=False,
+        runtime_getter=lambda config: config.voice_gate,
+    ),
+    SettingField(
+        env_key="PROMPT_PROFILE",
+        attr="prompt_profile",
+        section="advanced",
+        label="Prompt profile:",
+        widget="combo",
+        default="full",
+        options=("full", "compact"),
+        setup_visible=False,
+        runtime_getter=lambda config: config.prompt_profile,
+    ),
+    SettingField(
+        env_key="FAMILIAR_CONSCIOUSNESS_PROFILE",
+        attr="consciousness_profile",
+        section="advanced",
+        label="Consciousness profile (diagnostics):",
+        widget="bool",
+        default=False,
+        setup_visible=False,
+        runtime_getter=lambda config: config.consciousness_profile,
+    ),
+    SettingField(
+        env_key="FAMILIAR_REALITY_GATE",
+        attr="reality_gate",
+        section="advanced",
+        label="Reality gate (perception claims):",
+        widget="bool",
+        default=False,
+        setup_visible=False,
+        runtime_getter=lambda config: config.reality_gate,
+    ),
+    SettingField(
+        env_key="FAMILIAR_INNER_DENSE",
+        attr="inner_dense",
+        section="advanced",
+        label="Dense idle recurrence:",
+        widget="bool",
+        default=False,
+        setup_visible=False,
+        runtime_getter=lambda config: config.inner_dense,
+    ),
+    SettingField(
+        env_key="FAMILIAR_SLEEP_CONSOLIDATION",
+        attr="sleep_consolidation",
+        section="advanced",
+        label="Sleep consolidation (nightly):",
+        widget="bool",
+        default=False,
+        setup_visible=False,
+        runtime_getter=lambda config: config.sleep_consolidation,
+    ),
+    SettingField(
+        env_key="FAMILIAR_EXPERIENCE_LEDGER",
+        attr="experience_ledger",
+        section="advanced",
+        label="Experience ledger (self-authored):",
+        widget="bool",
+        default=False,
+        setup_visible=False,
+        runtime_getter=lambda config: config.experience_ledger,
     ),
 )
 

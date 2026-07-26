@@ -32,6 +32,7 @@ from ._ui_helpers import (
     format_tool_result as _format_tool_result,
     should_fire_commitment_reminder,
     should_fire_idle_desire,
+    should_run_sleep_consolidation,
 )
 from .realtime_stt_session import create_realtime_stt_controller, RealtimeSttController
 from .image_input import ImageInputError, parse_image_command
@@ -274,6 +275,13 @@ class FamiliarApp(App):
         self._log_system(_t("startup", log_path=str(self._log_path)))
         self.set_interval(IDLE_CHECK_INTERVAL, self._reminder_tick)
         self.set_interval(IDLE_CHECK_INTERVAL, self._desire_tick)
+        # familiard wake events accelerate the idle ticks when the daemon runs.
+        if getattr(self.agent.config, "daemon", False) is True:
+            self.run_worker(self._wake_listener_loop(), exclusive=False)
+        # Start the MCP handshake now so tools are ready by the first turn (#188).
+        start_mcp_early = getattr(self.agent, "start_mcp_early", None)
+        if callable(start_mcp_early):
+            start_mcp_early()
         self.run_worker(self._process_queue(), exclusive=False)
         # Start realtime STT if configured
         if self._realtime_stt:
@@ -476,6 +484,9 @@ class FamiliarApp(App):
                 count = action_counts.get(tool_name, 0)
                 if count:
                     parts.append(f"[dim]{icon} ×{count}[/dim]")
+            profile = getattr(self.agent, "_last_consciousness_profile", None)
+            if profile is not None:
+                parts.append(f"[dim]{profile.one_line()}[/dim]")
             summary = "  [dim]──[/dim] " + "  ".join(parts) + "  [dim]" + "─" * 20 + "[/dim]"
             log.write(summary)
             self._append_log(f"── {elapsed:.1f}s ──")
@@ -561,14 +572,40 @@ class FamiliarApp(App):
             stream.update("")
             self._agent_running = False
 
+    def _maybe_start_sleep_consolidation(self, *, quiet: bool) -> None:
+        """Nightly consolidation: a background job, never a turn — checked
+        after the reminder branch so idle precedence stays untouched."""
+        if not bool(getattr(self.agent.config, "sleep_consolidation", False)):
+            return  # short-circuit before touching the marker file
+        try:
+            if should_run_sleep_consolidation(
+                enabled=True,
+                agent_running=self._agent_running,
+                has_pending_input=not self._input_queue.empty(),
+                quiet_hours=quiet,
+                now_dt=datetime.now(),
+                last_night_key=self.agent.last_consolidation_night_key(),
+                # Gate and job MUST share the configured end hour, or their
+                # night keys diverge inside an extended quiet window.
+                quiet_end_hour=self.agent.consolidation_quiet_end_hour(),
+            ):
+                self.agent.start_sleep_consolidation()
+        except Exception:
+            logger.exception("sleep consolidation gate failed; skipping")
+
     async def _reminder_tick(self) -> None:
         """Proactively surface due commitments when idle (independent of auto_desire)."""
         store = getattr(self.agent, "_commitment_store", None)
+        heartbeat = getattr(self.agent, "_heartbeat", None)
+        quiet_now = heartbeat.routine_state().quiet_hours if heartbeat else False
+        # getattr-guarded: tests bind this method onto bare namespaces.
+        consolidation = getattr(self, "_maybe_start_sleep_consolidation", None)
+        if consolidation is not None:
+            consolidation(quiet=quiet_now)
         if store is None or not getattr(self.agent.config, "proactive_reminders", True):
             return
         try:
-            heartbeat = getattr(self.agent, "_heartbeat", None)
-            quiet = heartbeat.routine_state().quiet_hours if heartbeat else False
+            quiet = quiet_now
             reminders = should_fire_commitment_reminder(
                 agent_running=self._agent_running,
                 has_pending_input=not self._input_queue.empty(),
@@ -576,6 +613,7 @@ class FamiliarApp(App):
                 now=time.time(),
                 store=store,
                 quiet_hours=quiet,
+                routine_store=getattr(self.agent, "_routine_store", None),
             )
             if not reminders:
                 return
@@ -590,6 +628,29 @@ class FamiliarApp(App):
             return
         self._last_interaction = time.time()
         await self._run_agent("", inner_voice=commitment_reminder_prompt(reminders))
+
+    async def _wake_listener_loop(self) -> None:
+        """Consume familiard wake events; each one is just an early idle tick.
+
+        The tick methods re-check every gate themselves (agent running,
+        pending input, cooldowns, quiet hours), so a wake can never bypass
+        the idle precedence contract — it only removes poll latency.
+        """
+        from .wake import WakeListener
+
+        listener = WakeListener(
+            getattr(self.agent.config, "daemon_socket", "") or None,
+            enabled=True,  # the caller gates on config.daemon
+        )
+        try:
+            while not self._closing:
+                event = await listener.wait(60.0)
+                if event is None or self._closing:
+                    continue
+                await self._reminder_tick()
+                await self._desire_tick()
+        finally:
+            listener.close()
 
     async def _desire_tick(self) -> None:
         """Check desires and fire autonomous actions when idle."""

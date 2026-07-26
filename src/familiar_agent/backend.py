@@ -66,6 +66,7 @@ __all__ = [
     # factories
     "create_backend",
     "create_utility_backend",
+    "create_inner_backend",
     "create_scene_backend",
 ]
 
@@ -179,12 +180,66 @@ def create_utility_backend(
         return GLMBackend(api_key=api_key, model=model)
     if platform == "openai":
         model = model or "gpt-4o-mini"
-        logger.info("Using OpenAI utility backend: %s", model)
-        return OpenAICompatibleBackend(
-            api_key=api_key, model=model, base_url="https://api.openai.com/v1"
-        )
+        base_url = getattr(config, "utility_base_url", "") or "https://api.openai.com/v1"
+        logger.info("Using OpenAI-compatible utility backend: %s (%s)", model, base_url)
+        return OpenAICompatibleBackend(api_key=api_key, model=model, base_url=base_url)
 
     logger.warning("Unknown UTILITY_PLATFORM: %s, falling back to main backend", platform)
+    return None
+
+
+def create_inner_backend(
+    config: AgentConfig,
+) -> AnthropicBackend | OpenAICompatibleBackend | KimiBackend | GLMBackend | GeminiBackend | None:
+    """Create a separate backend for inner-loop micro-thoughts.
+
+    One short completion per crystallized idle thought — the natural fit is a
+    small LOCAL model, so unlike the utility factory the openai path honors
+    INNER_BASE_URL (default: local Ollama) and needs no API key. Returns None
+    when INNER_PLATFORM is unset; the agent then falls back to the utility
+    backend only if it is separate from the main model (cost philosophy:
+    idle cycles must never burn main-model calls).
+    """
+    if not config.inner_platform:
+        return None
+
+    platform = config.inner_platform
+    api_key = config.inner_api_key
+    model = config.inner_model
+
+    if platform == "openai":
+        if not model:
+            logger.warning("INNER_PLATFORM=openai needs INNER_MODEL; micro-thoughts disabled")
+            return None
+        base_url = config.inner_base_url or "http://localhost:11434/v1"
+        logger.info("Using OpenAI-compatible inner backend: %s @ %s", model, base_url)
+        return OpenAICompatibleBackend(
+            api_key=api_key or "local",
+            model=model,
+            base_url=base_url,
+            tools_mode="prompt",
+        )
+    if not api_key:
+        logger.warning("INNER_PLATFORM=%s needs INNER_API_KEY; micro-thoughts disabled", platform)
+        return None
+    if platform == "anthropic":
+        model = model or "claude-haiku-4-5-20251001"
+        logger.info("Using Anthropic inner backend: %s", model)
+        return AnthropicBackend(api_key=api_key, model=model, thinking_mode="disabled")
+    if platform == "gemini":
+        model = model or "gemini-2.5-flash"
+        logger.info("Using Gemini inner backend: %s", model)
+        return GeminiBackend(api_key=api_key, model=model)
+    if platform == "kimi":
+        model = model or "kimi-k2.5"
+        logger.info("Using Kimi inner backend: %s", model)
+        return KimiBackend(api_key=api_key, model=model)
+    if platform == "glm":
+        model = model or "glm-4.6v"
+        logger.info("Using GLM inner backend: %s", model)
+        return GLMBackend(api_key=api_key, model=model)
+
+    logger.warning("Unknown INNER_PLATFORM: %s; micro-thoughts disabled", platform)
     return None
 
 
@@ -221,10 +276,9 @@ def create_scene_backend(
         return GLMBackend(api_key=api_key, model=model)
     if platform == "openai":
         model = model or "gpt-4o-mini"
-        logger.info("Using OpenAI scene backend: %s", model)
-        return OpenAICompatibleBackend(
-            api_key=api_key, model=model, base_url="https://api.openai.com/v1"
-        )
+        base_url = getattr(config, "scene_base_url", "") or "https://api.openai.com/v1"
+        logger.info("Using OpenAI-compatible scene backend: %s (%s)", model, base_url)
+        return OpenAICompatibleBackend(api_key=api_key, model=model, base_url=base_url)
 
     logger.warning("Unknown SCENE_PLATFORM: %s, falling back", platform)
     return None

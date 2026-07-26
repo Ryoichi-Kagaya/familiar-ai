@@ -41,7 +41,9 @@ def test_main_gui_path_defers_agent_construction(monkeypatch) -> None:
 
     import familiar_agent.gui as gui_mod
 
-    monkeypatch.setattr(gui_mod, "run_gui", lambda config, desires, **_kw: calls.append((config, desires)))
+    monkeypatch.setattr(
+        gui_mod, "run_gui", lambda config, desires, **_kw: calls.append((config, desires))
+    )
     monkeypatch.setattr(main_mod.sys, "argv", ["familiar", "--gui"])
 
     main_mod.main()
@@ -59,6 +61,13 @@ async def test_initialize_agent_builds_agent_in_background(monkeypatch) -> None:
             self.config = config
             self.is_embedding_ready = True
             self.stt = None
+            self.bound_desires = None
+
+        def bind_desires(self, desires) -> None:
+            self.bound_desires = desires
+
+        def start_mcp_early(self) -> None:
+            pass
 
     monkeypatch.setattr("familiar_agent.agent.EmbodiedAgent", _FakeAgent)
 
@@ -95,6 +104,7 @@ async def test_initialize_agent_builds_agent_in_background(monkeypatch) -> None:
     await FamiliarWindow._initialize_agent(win)
 
     assert isinstance(win._agent, _FakeAgent)
+    assert win._agent.bound_desires is win._desires
     assert win._agent_ready is True
     assert win._agent_init_failed is False
     assert win._input_enabled is True

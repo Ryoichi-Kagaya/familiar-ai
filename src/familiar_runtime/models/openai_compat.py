@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -18,6 +19,45 @@ from .base import ModelTurnResult, ToolCall
 from .content import UserTurn, compact_image_blocks
 
 logger = logging.getLogger(__name__)
+
+
+def _read_usage(chunk: Any, input_tokens: int, output_tokens: int) -> tuple[int, int]:
+    """Fold a streaming chunk's usage into running totals, if present.
+
+    With ``stream_options={"include_usage": True}`` OpenAI-compatible servers
+    (Ollama, vLLM, real OpenAI) emit a final usage-only chunk. Servers that
+    ignore the option simply never send one, so tokens stay 0 — no regression.
+    """
+    usage = getattr(chunk, "usage", None)
+    if usage is None:
+        return input_tokens, output_tokens
+    return (
+        getattr(usage, "prompt_tokens", None) or input_tokens,
+        getattr(usage, "completion_tokens", None) or output_tokens,
+    )
+
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _strip_think_blocks(text: str) -> str:
+    """Drop ``<think>…</think>`` reasoning spans local models emit inline.
+
+    Reasoning-capable local models (gemma, qwen) served through Ollama's
+    OpenAI-compatible endpoint interleave chain-of-thought as literal
+    ``<think>`` markup in the content stream. That text must never reach the
+    conversation: it is not a reply, and feeding it back as assistant context
+    bloats and confuses subsequent turns. An *unclosed* ``<think>`` means the
+    model spent its whole budget reasoning — everything from the marker on is
+    dropped. Text without markers is returned unchanged (byte-stable).
+    """
+    if "<think>" not in text:
+        return text
+    cleaned = _THINK_RE.sub("", text)
+    open_idx = cleaned.find("<think>")
+    if open_idx != -1:
+        cleaned = cleaned[:open_idx]
+    return cleaned.strip()
 
 
 class OpenAICompatibleBackend:
@@ -192,17 +232,24 @@ class OpenAICompatibleBackend:
             **{tokens_key: max_tokens},
             messages=flat,
             stream=True,
+            stream_options={"include_usage": True},
         )
 
         text_chunks: list[str] = []
+        input_tokens = 0
+        output_tokens = 0
         async for chunk in stream:
+            input_tokens, output_tokens = _read_usage(chunk, input_tokens, output_tokens)
+            # The final usage-only chunk (and any keep-alive) carries no choices.
             if not chunk.choices:
                 continue
             if chunk.choices[0].delta.content:
                 chunk_text = chunk.choices[0].delta.content
                 text_chunks.append(chunk_text)
 
-        text = "".join(text_chunks)
+        # Scrub reasoning before parsing: contemplated tool calls inside a
+        # <think> block must never execute.
+        text = _strip_think_blocks("".join(text_chunks))
         tool_calls, spans = _extract_tool_calls_from_text(text)
         clean_text = _strip_tool_calls_from_text(text, spans)
         if on_text and clean_text:
@@ -212,7 +259,13 @@ class OpenAICompatibleBackend:
         raw_text = _canonical_tool_call_text(tool_calls) if tool_calls else clean_text
         raw_assistant: dict[str, Any] = {"role": "assistant", "content": raw_text or None}
         return (
-            ModelTurnResult(stop_reason=stop, text=clean_text, tool_calls=tool_calls),
+            ModelTurnResult(
+                stop_reason=stop,
+                text=clean_text,
+                tool_calls=tool_calls,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            ),
             raw_assistant,
         )
 
@@ -237,6 +290,7 @@ class OpenAICompatibleBackend:
         }
         if oai_tools:
             kwargs["tools"] = oai_tools
+        kwargs["stream_options"] = {"include_usage": True}
 
         logger.debug(
             "OpenAICompatibleBackend request messages: %s",
@@ -249,11 +303,15 @@ class OpenAICompatibleBackend:
         reasoning_chunks: list[str] = []
         raw_tcs: dict[int, dict] = {}
         finish_reason: str | None = None
+        input_tokens = 0
+        output_tokens = 0
         # Filter Gemini thinking tokens: buffer until thinking block ends.
         _thinking_buf: str = ""
         _in_thinking: bool | None = None
 
         async for chunk in stream:
+            input_tokens, output_tokens = _read_usage(chunk, input_tokens, output_tokens)
+            # The final usage-only chunk (and any keep-alive) carries no choices.
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]
@@ -306,7 +364,7 @@ class OpenAICompatibleBackend:
                     if tc_delta.function and tc_delta.function.arguments:
                         raw_tcs[idx]["arguments"] += tc_delta.function.arguments
 
-        text = "".join(text_chunks)
+        text = _strip_think_blocks("".join(text_chunks))
         tool_calls: list[ToolCall] = []
         for idx in sorted(raw_tcs.keys()):
             tc = raw_tcs[idx]
@@ -333,7 +391,13 @@ class OpenAICompatibleBackend:
                 for tc in tool_calls
             ]
         return (
-            ModelTurnResult(stop_reason=stop, text=text, tool_calls=tool_calls),
+            ModelTurnResult(
+                stop_reason=stop,
+                text=text,
+                tool_calls=tool_calls,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            ),
             raw_assistant,
         )
 

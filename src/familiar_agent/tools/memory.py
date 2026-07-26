@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -918,9 +919,16 @@ class ObservationMemory:
             return False
 
     def recall(self, query: str, n: int = 3, kind: str | None = None) -> list[dict]:
-        """Recall by vector similarity. Fallback to LIKE + recency."""
+        """Recall by vector similarity. Fallback to LIKE + recency.
+
+        Dreams are an opt-in provenance lane: general recall (``kind=None``)
+        never returns them — they surface only when a caller explicitly asks
+        for ``kind="dream"``. Without this, journaled dreams would re-enter
+        turn context, working memory, and DMN seeding as ordinary memories
+        (and self-amplify across nights).
+        """
         try:
-            kind_filter = "AND kind = ?" if kind else ""
+            kind_filter = "AND kind = ?" if kind else "AND kind != 'dream'"
             kind_params: list[Any] = [kind] if kind else []
 
             # Fetch rows under lock, then compute similarity outside lock
@@ -959,13 +967,15 @@ class ObservationMemory:
                             fallback_rows = db.execute(
                                 f"SELECT id, content, timestamp, date, time, direction, kind, emotion, image_path "
                                 f"FROM observations WHERE ({conditions}) AND superseded_by IS NULL "
+                                f"AND kind != 'dream' "
                                 f"ORDER BY timestamp DESC LIMIT ?",
                                 params_like + [n],
                             ).fetchall()
                     if not fallback_rows:
                         fallback_rows = db.execute(
                             "SELECT id, content, timestamp, date, time, direction, kind, emotion, image_path "
-                            "FROM observations WHERE superseded_by IS NULL ORDER BY timestamp DESC LIMIT ?",
+                            "FROM observations WHERE superseded_by IS NULL AND kind != 'dream' "
+                            "ORDER BY timestamp DESC LIMIT ?",
                             (n,),
                         ).fetchall()
 
@@ -1262,6 +1272,45 @@ class ObservationMemory:
             logger.warning("Failed to recall revisions: %s", e)
             return []
 
+    # ── Interpretation shifts (self-ledger) ────────────────────────────────
+    # Anti-regression ledger: "I used to read X as A; now I read it as B."
+    # Rides the generic memory_revisions table with a dedicated entity_type,
+    # so corrected interpretations survive restarts and compaction and can be
+    # re-surfaced before the agent regresses to already-corrected behavior.
+
+    _INTERPRETATION_ENTITY = "interpretation"
+
+    def record_interpretation_shift(
+        self,
+        *,
+        topic: str,
+        previous_reading: str,
+        new_reading: str,
+        reason: str = "self_correction",
+    ) -> None:
+        """Persist one interpretation shift (never raises)."""
+        try:
+            with self._db_lock:
+                db = self._ensure_connected()
+                self._insert_revision_locked(
+                    db,
+                    self._INTERPRETATION_ENTITY,
+                    topic[:120],
+                    previous_reading,
+                    new_reading,
+                    0.0,
+                    1.0,
+                    None,
+                    reason=reason,
+                )
+                db.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to record interpretation shift: %s", e)
+
+    def recall_interpretation_shifts(self, n: int = 5) -> list[dict]:
+        """Most recent interpretation shifts, newest first."""
+        return self.recall_revisions(entity_type=self._INTERPRETATION_ENTITY, n=n)
+
     def save_with_id(
         self,
         content: str,
@@ -1476,6 +1525,11 @@ class ObservationMemory:
 
         Returns list of (id_older, id_newer, similarity) tuples, sorted by similarity desc.
         Older = earlier timestamp is marked as the one to supersede.
+
+        Dreams are excluded: a dream is verbalized FROM recalled real memories,
+        so a newer dream can sit above the threshold against the very
+        observation it derives from — dedup must never evict a real memory in
+        favor of a hallucinated one.
         """
         with self._db_lock:
             db = self._ensure_connected()
@@ -1484,7 +1538,7 @@ class ObservationMemory:
                 SELECT o.id, o.timestamp, e.vector
                 FROM observations o
                 JOIN obs_embeddings e ON o.id = e.obs_id
-                WHERE o.superseded_by IS NULL
+                WHERE o.superseded_by IS NULL AND o.kind != 'dream'
                 ORDER BY o.timestamp DESC
                 LIMIT ?
                 """,
@@ -1895,6 +1949,261 @@ class ObservationMemory:
             )
             processed += 1
         return processed
+
+    def recall_recent_by_kind(self, kind: str, n: int = 3) -> list[dict]:
+        """Most recent observations of one kind (timestamp desc, not similarity)."""
+        with self._db_lock:
+            db = self._ensure_connected()
+            rows = db.execute(
+                "SELECT id, content, timestamp, date, kind FROM observations "
+                "WHERE kind = ? AND superseded_by IS NULL "
+                "ORDER BY timestamp DESC LIMIT ?",
+                (kind, n),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    async def recall_recent_by_kind_async(self, kind: str, n: int = 3) -> list[dict]:
+        return await asyncio.to_thread(self.recall_recent_by_kind, kind, n)
+
+    def upsert_semantic_fact(
+        self,
+        fact_key: str,
+        fact_text: str,
+        *,
+        confidence: float = 0.6,
+        tags: str = "",
+        source_memory_id: str | None = None,
+    ) -> None:
+        """Public wrapper for distillation jobs — locked, revision-audited."""
+        with self._db_lock:
+            db = self._ensure_connected()
+            self._upsert_semantic_fact_locked(
+                db,
+                fact_key,
+                fact_text,
+                source_memory_id=source_memory_id,
+                confidence=confidence,
+                tags=tags,
+            )
+            db.commit()
+
+    async def upsert_semantic_fact_async(
+        self,
+        fact_key: str,
+        fact_text: str,
+        *,
+        confidence: float = 0.6,
+        tags: str = "",
+    ) -> None:
+        await asyncio.to_thread(
+            self.upsert_semantic_fact,
+            fact_key,
+            fact_text,
+            confidence=confidence,
+            tags=tags,
+        )
+
+    # ── Experience ledger (self-authored standing context) ─────────────────
+    # Guardrails live in the STORE (house rule): the tool layer can never
+    # widen them. Lessons are advisory prompt text ONLY — never a checker or
+    # gate input (the identity two-tier discipline).
+
+    _LESSON_TIERS = ("agent", "auto_proposed")
+    _LESSON_MAX_ROWS = 12
+    _LESSON_MAX_TEXT = 160
+    # Must fit MAX_ROWS full-length lessons (12 × 160 = 1920) — otherwise the
+    # budget silently dominates the row cap and "a dozen lines" is a lie.
+    _LESSON_TOTAL_BUDGET = 2000
+
+    def upsert_experience_lesson(
+        self,
+        lesson_key: str,
+        lesson_text: str,
+        *,
+        tier: str = "agent",
+        confidence: float = 0.6,
+        source: str = "agent",
+    ) -> bool:
+        """Insert or update one distilled lesson, revision-audited and capped.
+
+        Same key from a higher tier promotes the row (auto_proposed → agent).
+        Overflow evicts auto_proposed first, then lowest confidence, then
+        oldest — a bounded prompt region forces exactly the biology-like
+        compression the feature exists for.
+        """
+        key = re.sub(r"[^a-z0-9_-]", "", lesson_key.strip().lower().replace(" ", "-"))[:40]
+        text = lesson_text.strip()[: self._LESSON_MAX_TEXT]
+        if not key or not text:
+            return False
+        if tier not in self._LESSON_TIERS:
+            tier = "auto_proposed"  # never let a caller mint a privileged tier
+        confidence = max(0.0, min(1.0, float(confidence)))
+        now_iso = self._now_iso()
+        with self._db_lock:
+            db = self._ensure_connected()
+            existing = db.execute(
+                "SELECT id, lesson_text, tier, confidence FROM experience_lessons "
+                "WHERE lesson_key = ?",
+                (key,),
+            ).fetchone()
+            if existing:
+                # Tier can only ratchet upward (auto_proposed → agent).
+                new_tier = "agent" if "agent" in (tier, str(existing["tier"])) else tier
+                self._insert_revision_locked(
+                    db,
+                    "experience_lesson",
+                    key,
+                    str(existing["lesson_text"]),
+                    text,
+                    float(existing["confidence"]),
+                    confidence,
+                    None,
+                    reason="lesson_update",
+                )
+                db.execute(
+                    "UPDATE experience_lessons SET lesson_text = ?, tier = ?, "
+                    "confidence = ?, last_confirmed_at = ?, updated_at = ? "
+                    "WHERE lesson_key = ?",
+                    (text, new_tier, confidence, now_iso, now_iso, key),
+                )
+            else:
+                self._insert_revision_locked(
+                    db,
+                    "experience_lesson",
+                    key,
+                    "",
+                    text,
+                    0.0,
+                    confidence,
+                    None,
+                    reason="lesson_create",
+                )
+                db.execute(
+                    "INSERT INTO experience_lessons "
+                    "(id, lesson_key, lesson_text, tier, confidence, source, "
+                    "last_confirmed_at, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        str(uuid.uuid4()),
+                        key,
+                        text,
+                        tier,
+                        confidence,
+                        source,
+                        now_iso,
+                        now_iso,
+                        now_iso,
+                    ),
+                )
+            self._evict_lessons_over_budget_locked(db)
+            # Honest postcondition: a low-tier/low-conviction insert into a
+            # full ledger may be the eviction victim itself — report that as
+            # failure instead of claiming the lesson was recorded.
+            survived = (
+                db.execute(
+                    "SELECT 1 FROM experience_lessons WHERE lesson_key = ?", (key,)
+                ).fetchone()
+                is not None
+            )
+            db.commit()
+        return survived
+
+    def _evict_lessons_over_budget_locked(self, db: sqlite3.Connection) -> None:
+        while True:
+            rows = db.execute(
+                "SELECT lesson_key, lesson_text, tier, confidence, "
+                "COALESCE(last_confirmed_at, created_at) AS freshness "
+                "FROM experience_lessons"
+            ).fetchall()
+            total_chars = sum(len(str(r["lesson_text"])) for r in rows)
+            if len(rows) <= self._LESSON_MAX_ROWS and total_chars <= self._LESSON_TOTAL_BUDGET:
+                return
+            victims = sorted(
+                rows,
+                key=lambda r: (
+                    0 if str(r["tier"]) == "auto_proposed" else 1,
+                    float(r["confidence"]),
+                    str(r["freshness"]),
+                ),
+            )
+            victim_key = str(victims[0]["lesson_key"])
+            self._insert_revision_locked(
+                db,
+                "experience_lesson",
+                victim_key,
+                str(victims[0]["lesson_text"]),
+                "",
+                float(victims[0]["confidence"]),
+                0.0,
+                None,
+                reason="lesson_evicted",
+            )
+            db.execute("DELETE FROM experience_lessons WHERE lesson_key = ?", (victim_key,))
+
+    def list_experience_lessons(self) -> list[dict]:
+        """Agent-authored first, then by conviction."""
+        with self._db_lock:
+            db = self._ensure_connected()
+            rows = db.execute(
+                "SELECT lesson_key, lesson_text, tier, confidence, "
+                "last_confirmed_at, created_at FROM experience_lessons "
+                "ORDER BY CASE tier WHEN 'agent' THEN 0 ELSE 1 END, confidence DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def drop_experience_lesson(self, lesson_key: str) -> bool:
+        with self._db_lock:
+            db = self._ensure_connected()
+            existing = db.execute(
+                "SELECT lesson_text, confidence FROM experience_lessons WHERE lesson_key = ?",
+                (lesson_key,),
+            ).fetchone()
+            if not existing:
+                return False
+            self._insert_revision_locked(
+                db,
+                "experience_lesson",
+                lesson_key,
+                str(existing["lesson_text"]),
+                "",
+                float(existing["confidence"]),
+                0.0,
+                None,
+                reason="lesson_dropped",
+            )
+            db.execute("DELETE FROM experience_lessons WHERE lesson_key = ?", (lesson_key,))
+            db.commit()
+        return True
+
+    async def upsert_experience_lesson_async(
+        self,
+        lesson_key: str,
+        lesson_text: str,
+        *,
+        tier: str = "agent",
+        confidence: float = 0.6,
+        source: str = "agent",
+    ) -> bool:
+        return await asyncio.to_thread(
+            lambda: self.upsert_experience_lesson(
+                lesson_key, lesson_text, tier=tier, confidence=confidence, source=source
+            )
+        )
+
+    async def list_experience_lessons_async(self) -> list[dict]:
+        return await asyncio.to_thread(self.list_experience_lessons)
+
+    def expire_working_memory(self, days: float = 2.0) -> int:
+        """Drop stale working-memory activation rows (nightly hygiene)."""
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        with self._db_lock:
+            db = self._ensure_connected()
+            cur = db.execute("DELETE FROM memory_activation WHERE activated_at < ?", (cutoff,))
+            db.commit()
+            return int(cur.rowcount or 0)
+
+    async def expire_working_memory_async(self, days: float = 2.0) -> int:
+        return await asyncio.to_thread(self.expire_working_memory, days)
 
     def open_unfinished_business(
         self,

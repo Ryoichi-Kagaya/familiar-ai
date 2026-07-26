@@ -17,9 +17,12 @@ Key concepts:
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
@@ -53,10 +56,55 @@ class AttentionSchema:
     reasoning — the key AST claim about consciousness.
     """
 
-    def __init__(self, max_history: int = _DEFAULT_MAX_HISTORY) -> None:
+    def __init__(
+        self,
+        max_history: int = _DEFAULT_MAX_HISTORY,
+        state_path: str | Path | None = None,
+    ) -> None:
         self._history: deque[FocusEntry] = deque(maxlen=max_history)
         self._turn: int = 0
         self._last_coalition: Coalition | None = None
+        # Optional persistence (self-ledger): the focus history survives
+        # restarts so "what was I attending to" is state, not luck. The live
+        # `_last_coalition` object is deliberately NOT restored — it
+        # repopulates on the first update_focus() of the new session.
+        self._state_path = Path(state_path).expanduser() if state_path else None
+        # Batched persistence for idle notes (note_focus): dense inner-loop
+        # ticks must not turn 1 Hz cognition into 1 Hz disk writes.
+        self._dirty: int = 0
+        self._last_save_at: float = time.monotonic()
+        self._load_state()
+
+    def _load_state(self) -> None:
+        if self._state_path is None or not self._state_path.exists():
+            return
+        try:
+            raw = json.loads(self._state_path.read_text(encoding="utf-8"))
+            self._turn = int(raw.get("turn", 0))
+            for item in raw.get("history", []):
+                self._history.append(
+                    FocusEntry(
+                        source=str(item.get("source", "")),
+                        summary=str(item.get("summary", "")),
+                        activation=float(item.get("activation", 0.0)),
+                        turn=int(item.get("turn", 0)),
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not load attention state: %s", exc)
+
+    def _save_state(self) -> None:
+        if self._state_path is None:
+            return
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "turn": self._turn,
+                "history": [asdict(entry) for entry in self._history],
+            }
+            self._state_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not save attention state: %s", exc)
 
     # ── Core interface ─────────────────────────────────────────────────────
 
@@ -71,7 +119,46 @@ class AttentionSchema:
             turn=self._turn,
         )
         self._history.append(entry)
+        self._save_state()
+        self._dirty = 0
+        self._last_save_at = time.monotonic()
         logger.debug("AttentionSchema: focus → %s (turn %d)", winner.source, self._turn)
+
+    def note_focus(
+        self,
+        winner: Coalition,
+        *,
+        save_every: int = 10,
+        save_interval_sec: float = 60.0,
+    ) -> None:
+        """``update_focus`` for idle ticks: same recording, batched persistence.
+
+        Idle foci deliberately enter the shared history — idle thought
+        shaping the next turn's attention context IS the feature — but the
+        disk write is deferred until ``save_every`` notes or
+        ``save_interval_sec`` have accumulated. A real turn's
+        ``update_focus`` (or ``flush``) persists any backlog.
+        """
+        self._last_coalition = winner
+        self._turn += 1
+        self._history.append(
+            FocusEntry(
+                source=winner.source,
+                summary=winner.summary,
+                activation=winner.activation,
+                turn=self._turn,
+            )
+        )
+        self._dirty += 1
+        now = time.monotonic()
+        if self._dirty >= save_every or (now - self._last_save_at) >= save_interval_sec:
+            self.flush()
+
+    def flush(self) -> None:
+        """Persist any batched idle notes immediately."""
+        self._save_state()
+        self._dirty = 0
+        self._last_save_at = time.monotonic()
 
     def current_focus(self) -> Coalition | None:
         """Return the most recent workspace winner Coalition, or None."""
@@ -105,22 +192,26 @@ class AttentionSchema:
         what it is attending to and why.
         Returns None if there is no focus history yet.
         """
-        if not self._history:
+        # Snapshot: as_coalition runs in a worker thread while note_focus /
+        # update_focus append on the event loop — iterating the live deque
+        # can raise "deque mutated during iteration".
+        history = list(self._history)
+        if not history:
             return None
 
-        current = self._history[-1]
+        current = history[-1]
         parts = [f"I'm currently focused on [{current.source}]: {current.summary}."]
 
         # Detect recent shift
-        if len(self._history) >= 2:
-            prev = self._history[-2]
+        if len(history) >= 2:
+            prev = history[-2]
             if prev.source != current.source:
                 parts.append(
                     f"My attention recently shifted from [{prev.source}] to [{current.source}]."
                 )
 
         # Mention stable focus if same source repeated
-        sources = [e.source for e in self._history]
+        sources = [e.source for e in history]
         if len(sources) >= 3 and len(set(sources[-3:])) == 1:
             parts.append(f"I have been consistently focused on [{current.source}].")
 

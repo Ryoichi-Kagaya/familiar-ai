@@ -9,6 +9,7 @@ import os
 import signal
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 
@@ -22,6 +23,7 @@ from .drive_executor import DriveActionExecutor
 from .image_input import ImageInputError, parse_image_command
 from .realtime_stt_session import create_realtime_stt_session
 from .setup import run_cli_setup_wizard
+from .wake import WakeListener, wait_input_or_wake
 from ._i18n import BANNER, _t
 from ._ui_helpers import (
     DESIRE_COOLDOWN,
@@ -30,6 +32,7 @@ from ._ui_helpers import (
     format_action as _format_action,
     should_fire_commitment_reminder,
     should_fire_idle_desire,
+    should_run_sleep_consolidation,
 )
 
 
@@ -90,6 +93,18 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
 
     loop = asyncio.get_event_loop()
     executor = DriveActionExecutor(agent, desires)
+
+    # Start the MCP handshake now so tools are ready by the first turn (#188).
+    start_mcp_early = getattr(agent, "start_mcp_early", None)
+    if callable(start_mcp_early):
+        start_mcp_early()
+
+    # familiard wake events accelerate the idle poll when the daemon runs;
+    # disabled (the default) this changes nothing about the wait below.
+    wake_listener = WakeListener(
+        getattr(agent.config, "daemon_socket", "") or None,
+        enabled=getattr(agent.config, "daemon", False) is True,
+    )
 
     # Persistent input queue — stdin reader runs as a background task
     # so user input is captured even while the agent is busy.
@@ -152,17 +167,34 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                     )
                 continue
 
-            # No pending input — show prompt and wait briefly
+            # No pending input — show prompt and wait briefly. A familiard
+            # wake short-circuits the wait; the idle gates below re-check
+            # everything, so a wake is never more than an early poll.
             print("\n> ", end="", flush=True)
-            queued_input: str | UserTurn | None
-            try:
-                queued_input = await asyncio.wait_for(
-                    input_queue.get(), timeout=IDLE_CHECK_INTERVAL
-                )
-            except asyncio.TimeoutError:
-                queued_input = None
+            kind, item = await wait_input_or_wake(input_queue, wake_listener, IDLE_CHECK_INTERVAL)
+            queued_input: str | UserTurn | None = item if kind == "input" else None
 
             if queued_input is None and input_queue.empty():
+                heartbeat = getattr(agent, "_heartbeat", None)
+                quiet_now = heartbeat.routine_state().quiet_hours if heartbeat else False
+                # Nightly consolidation: a background job, never a turn — it
+                # does not participate in idle precedence.
+                try:
+                    if bool(
+                        getattr(agent.config, "sleep_consolidation", False)
+                    ) and should_run_sleep_consolidation(
+                        enabled=True,
+                        agent_running=False,
+                        has_pending_input=not input_queue.empty(),
+                        quiet_hours=quiet_now,
+                        now_dt=datetime.now(),
+                        last_night_key=agent.last_consolidation_night_key(),
+                        # Must match the job's configured end hour.
+                        quiet_end_hour=agent.consolidation_quiet_end_hour(),
+                    ):
+                        agent.start_sleep_consolidation()
+                except Exception:
+                    logging.getLogger(__name__).exception("sleep consolidation gate failed")
                 # Proactive commitment reminders fire independently of auto_desire
                 # (a baseline neighbour behaviour, toggled by FAMILIAR_PROACTIVE_REMINDERS).
                 store = getattr(agent, "_commitment_store", None)
@@ -172,8 +204,7 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                     and agent.config.proactive_reminders
                 ):
                     try:
-                        heartbeat = getattr(agent, "_heartbeat", None)
-                        quiet = heartbeat.routine_state().quiet_hours if heartbeat else False
+                        quiet = quiet_now
                         reminders = should_fire_commitment_reminder(
                             agent_running=False,
                             has_pending_input=not input_queue.empty(),
@@ -181,6 +212,7 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                             now=time.time(),
                             store=store,
                             quiet_hours=quiet,
+                            routine_store=getattr(agent, "_routine_store", None),
                         )
                         if reminders:
                             # Record the fire BEFORE the turn: the cadence advances
@@ -681,6 +713,7 @@ def main() -> None:
     elif use_tui:
         agent = EmbodiedAgent(config)
         desires = DesireSystem(companion_name=config.companion_name)
+        agent.bind_desires(desires)
         from .tui import FamiliarApp
 
         import termios as _termios
@@ -693,6 +726,7 @@ def main() -> None:
     else:
         agent = EmbodiedAgent(config)
         desires = DesireSystem(companion_name=config.companion_name)
+        agent.bind_desires(desires)
         _run_repl(agent, desires, debug=debug)
 
 

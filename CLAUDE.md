@@ -24,7 +24,7 @@ uv run familiar
 # Discover ONVIF/Tapo cameras on the LAN
 uv run familiar-discover-cameras
 
-# Tests (pytest-asyncio; ~990 tests)
+# Tests (pytest-asyncio; ~1300 tests)
 uv run pytest -q
 uv run pytest -q tests/test_runtime_hooks.py            # one file
 uv run pytest -q tests/test_runtime_hooks.py::test_name # one test
@@ -108,6 +108,45 @@ status, auto-say, `commit_after_end_turn`) and the forced final response on
 max-iterations remain in `run()`. The `run()` public signature is unchanged
 and must stay that way.
 
+**Inner loop (live, dark by default).** `familiar_agent/inner_loop.py` drives a
+sub-verbal idle workspace between turns; gated by `FAMILIAR_INNER_LOOP`
+(default OFF, interval `FAMILIAR_INNER_LOOP_INTERVAL`). `agent._compete_once(cheap=...)`
+is the shared workspace-cycle seam — `cheap=True` skips embedding-backed sources
+(memory recall + DMN wander) for zero-LLM idle cycles; `_gather_workspace_context`
+is a thin wrapper over it. The tick feeds `TrainOfThought`; a sustained salient
+focus escalates by **boosting a drive** (`_INNER_SOURCE_TO_DRIVE`, streak+salience
+gate, per-source cooldown) consumed by the UI-owned idle chain — the tick never
+calls `run()` (no turn lock exists; single-flight is UI-owned). `bind_desires()`
+late-binds the UI's DesireSystem; the loop lazy-starts in `prepare_turn`.
+Micro-thoughts: a crystallized focus may be verbalized by a dedicated small
+model (`INNER_PLATFORM`/`INNER_MODEL`/`INNER_BASE_URL`, local-friendly; falls
+back to the utility backend only when separate from main — idle cycles never
+burn main-model calls). The monologue re-competes as a `monologue` coalition
+with TTL-faded salience; recurrence sources (`train_of_thought`/`monologue`)
+never re-crystallize (feedback-loop guard). Cadence is body-modulated
+(interoceptive energy scales the tick interval, clamped
+`FAMILIAR_INNER_MIN_INTERVAL` (default 5 s) – 120 s). **Dense recurrence**
+(`FAMILIAR_INNER_DENSE`, default OFF): idle winners also update the attention
+schema (`note_focus`, batched persistence) and re-enter broadcast listeners
+(self-state with deferred saves flushed at turn boundaries, plus a drive-nudge
+accumulator flushed once per full cycle). Listener REGISTRATION is gated on
+the flag — not just the tick call — because listeners fire on the turn path too.
+
+**Body daemon (familiard, separate process, dark by default).**
+`familiar_agent/familiard.py` (`uv run familiard`) owns interoception sampling
+(payload consumed via the existing `MCPInteroceptionProvider` path), wake
+scheduling (due commitments / desire pressure / schedule bands → Unix-socket
+wake events), and offline self-state decay (only while no cortex is connected).
+**Read-only toward cortex state**: never writes `desires.json`, opens
+`commitments.db` in SQLite read-only URI mode, never opens `observations.db`.
+Cortex side: `familiar_agent/wake.py` (`WakeListener`, `wait_input_or_wake`) —
+gated by `FAMILIAR_DAEMON` (default OFF); a wake only accelerates the idle poll,
+every behavioral gate re-checks in the cortex. Daemon config:
+`~/.familiar_ai/familiard.conf` + `FAMILIARD_*` env. A contract-identical
+**Rust port** lives in `familiard-rs/` (`cargo build --release && cargo test`
+there; CI: `.github/workflows/rust.yml`) — keep the two implementations'
+payload shape, socket protocol, config keys and probe SQL in lockstep.
+
 ### Turn flow (conceptual)
 
 ingest input → interoception → prediction state → activate memory / working memory /
@@ -140,6 +179,16 @@ Invariants to preserve when touching these loops:
   cadence reset survives and error turns still burn a capped slot. Cadence:
   escalating backoff (600s × {1,3}) capped at 3 reminders, then quiet; quiet
   hours (23-7) pass only priority>=2.
+- **Self-authored routines** (`routine_store.py`, `~/.familiar_ai/routines.json`;
+  tools `routine_commit`/`routine_review`/`routine_drop`) fire by materializing
+  commitments inside `should_fire_commitment_reminder` (pass `routine_store=`) —
+  one firing path, all the gates above apply unchanged. Guardrails live in the
+  STORE (agent interval floor 600s, cap 12, seed rows operator-owned), never in
+  the tool wrapper. Autonomous moments are framed by
+  `SocialPolicyEngine.decide_autonomous_move()` (a separate axis from the
+  reactive `decide()`): quiet hours → private reflection / stay silent, dominant
+  desire → act, neither → quietly prepare; the directive is appended to the
+  desire turn's `inner_voice` in `prepare_turn`.
 - `repl()`'s finally block calls `os._exit(0)` — tests touching it must patch
   `familiar_agent.main.os._exit` or pytest dies silently.
 
@@ -199,15 +248,20 @@ Primary stores under `~/.familiar_ai/`:
 
 - `observations.db` — observations, embeddings, semantic facts, behavior policies,
   revisions, episodes + membership, memory activation, unfinished business,
-  relationship state, memory graph, person inferences, identity assertions
+  relationship state, memory graph, person inferences, identity assertions,
+  experience lessons (self-authored standing context, migration 012)
 - `commitments.db` — secretary commitments (self-init schema, outside the
   `migration/` runner)
 - `mental_state.jsonl` — append-only mental-state snapshots
 - `heartbeat_state.json` — continuation / carryover status
+- `consolidation_state.json` — sleep-consolidation once-per-night marker
 - `desires.json` — drive levels
 - `self_state.json` — latent bodily carryover
 - `identity_state.json` — identity dissonance ledger (decay + reflection relief)
 - `identity_seed.json` — persona identity seed (operator-supplied; insert-if-missing)
+- `attention_state.json` — attention-schema focus history (survives restarts)
+- `meta_state.json` — previous session's distilled metacognitive summary (the raw
+  MetaMonitor step window is deliberately session-scoped and never persisted)
 - `relationship.json` — legacy; imported once if present, then SQLite is authoritative
 
 **Every schema change must add a timestamped migration under `migration/`**

@@ -11,6 +11,7 @@ Keeping these here prevents duplication across tui.py, gui.py, and main.py.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import TYPE_CHECKING
 
@@ -304,6 +305,7 @@ def should_fire_commitment_reminder(
     min_idle_gap: float = REMINDER_MIN_IDLE_GAP,
     quiet_hours: bool = False,
     min_priority_in_quiet: int = REMINDER_QUIET_MIN_PRIORITY,
+    routine_store=None,
 ) -> list[Commitment]:
     """Return commitments that should be proactively reminded right now.
 
@@ -311,15 +313,61 @@ def should_fire_commitment_reminder(
     while the agent is busy, while user input is pending, or before ``min_idle_gap``
     has elapsed since the last interaction. During quiet hours only urgent
     (priority >= ``min_priority_in_quiet``) commitments pass.
+
+    When a ``routine_store`` is supplied, due self-authored routines first
+    materialize as commitments here, then ride the exact same gates — one
+    firing path for everything self-initiated-by-schedule.
     """
     if agent_running or has_pending_input:
         return []
     if now - last_interaction < min_idle_gap:
         return []
+    if routine_store is not None:
+        try:
+            routine_store.materialize_due(store, now=now)
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).exception("routine materialization failed")
     ready = store.list_due_for_reminder(now=now, base_cooldown=base_cooldown)
     if quiet_hours:
         ready = [c for c in ready if c.priority >= min_priority_in_quiet]
     return ready
+
+
+def night_key_for(now_dt, *, quiet_end_hour: int = 7) -> str:
+    """Group one 23:00→07:00 window under a single key.
+
+    Subtracting ``quiet_end_hour`` maps every instant of the same night
+    (before AND after midnight) onto the same calendar date.
+    """
+    from datetime import timedelta
+
+    return (now_dt - timedelta(hours=quiet_end_hour)).date().isoformat()
+
+
+def should_run_sleep_consolidation(
+    *,
+    enabled: bool,
+    agent_running: bool,
+    has_pending_input: bool,
+    quiet_hours: bool,
+    now_dt,
+    last_night_key: str | None,
+    quiet_end_hour: int = 7,
+) -> bool:
+    """Pure scheduling gate for the nightly consolidation job.
+
+    Mirrors :func:`should_fire_commitment_reminder`: never during activity,
+    only in quiet hours, at most once per night (``last_night_key`` is the
+    persisted marker). The caller spawns a background job — no turn fires,
+    so idle precedence (user > reminder > desire) is untouched.
+    """
+    if not enabled:
+        return False
+    if agent_running or has_pending_input:
+        return False
+    if not quiet_hours:
+        return False
+    return night_key_for(now_dt, quiet_end_hour=quiet_end_hour) != (last_night_key or "")
 
 
 def commitment_reminder_prompt(commitments: list[Commitment]) -> str:

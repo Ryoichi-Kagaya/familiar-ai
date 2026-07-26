@@ -67,6 +67,7 @@ from ._ui_helpers import (
     format_tool_result,
     should_fire_commitment_reminder,
     should_fire_idle_desire,
+    should_run_sleep_consolidation,
 )
 from .bootstrap import resolve_env_path
 from .user_profile import UserRegistry
@@ -1277,6 +1278,14 @@ class FamiliarWindow(QMainWindow):
         )
         status_layout.addWidget(self._status_readiness)
 
+        # Consciousness profile line (empty unless FAMILIAR_CONSCIOUSNESS_PROFILE).
+        self._status_consciousness = QLabel("")
+        self._status_consciousness.setWordWrap(True)
+        self._status_consciousness.setStyleSheet(
+            f"color: {_TEXT_SECONDARY}; font-size: {_px(10)}px; background: transparent;"
+            f"font-family: {_MONO_FONT_STACK};"
+        )
+        status_layout.addWidget(self._status_consciousness)
         left_layout.addWidget(status_card)
 
         # Chat log
@@ -1471,6 +1480,9 @@ class FamiliarWindow(QMainWindow):
             readiness.setText(
                 f"{snapshot.readiness}\nqueue={snapshot.queue_backlog} | stt_connected={snapshot.realtime_stt_connected}"
             )
+        consciousness = getattr(self, "_status_consciousness", None)
+        if consciousness is not None:
+            consciousness.setText(snapshot.consciousness_line)
 
     def _copy_diagnostics(self) -> None:
         snapshot = build_gui_diagnostics(self)
@@ -1784,10 +1796,23 @@ class FamiliarWindow(QMainWindow):
 
     async def _process_queue(self) -> None:
         """Dequeue user messages and run the agent; fire desires when idle."""
+        from .wake import WakeListener, wait_input_or_wake
+
+        window_config = getattr(self, "_config", None)
+        wake_listener = WakeListener(
+            getattr(window_config, "daemon_socket", "") or None,
+            enabled=getattr(window_config, "daemon", False) is True,
+        )
         last_interaction = time.time()
         while True:
             try:
-                text = await asyncio.wait_for(self._input_queue.get(), timeout=IDLE_CHECK_INTERVAL)
+                kind, text = await wait_input_or_wake(
+                    self._input_queue, wake_listener, IDLE_CHECK_INTERVAL
+                )
+                if kind != "input":
+                    # A familiard wake takes the same path as the poll timeout:
+                    # it is only an early poll — every idle gate re-checks below.
+                    raise asyncio.TimeoutError
             except asyncio.TimeoutError:
                 now = time.time()
                 if self._closing:
@@ -1796,6 +1821,28 @@ class FamiliarWindow(QMainWindow):
                     continue
                 agent_obj = getattr(self, "_agent", None)
                 agent_config = getattr(agent_obj, "config", None)
+                heartbeat = getattr(agent_obj, "_heartbeat", None)
+                quiet_now = heartbeat.routine_state().quiet_hours if heartbeat else False
+                # Nightly consolidation: a background job, never a turn — it
+                # does not participate in idle precedence.
+                try:
+                    if (
+                        agent_obj is not None
+                        and bool(getattr(agent_config, "sleep_consolidation", False))
+                        and should_run_sleep_consolidation(
+                            enabled=True,
+                            agent_running=self._agent_running,
+                            has_pending_input=not self._input_queue.empty(),
+                            quiet_hours=quiet_now,
+                            now_dt=datetime.now(),
+                            last_night_key=agent_obj.last_consolidation_night_key(),
+                            # Must match the job's configured end hour.
+                            quiet_end_hour=agent_obj.consolidation_quiet_end_hour(),
+                        )
+                    ):
+                        agent_obj.start_sleep_consolidation()
+                except Exception:
+                    logger.exception("sleep consolidation gate failed; skipping")
                 # Proactive commitment reminders fire independently of auto_desire.
                 store = getattr(agent_obj, "_commitment_store", None)
                 if (
@@ -1804,8 +1851,7 @@ class FamiliarWindow(QMainWindow):
                     and getattr(agent_config, "proactive_reminders", True)
                 ):
                     try:
-                        heartbeat = getattr(agent_obj, "_heartbeat", None)
-                        quiet = heartbeat.routine_state().quiet_hours if heartbeat else False
+                        quiet = quiet_now
                         reminders = should_fire_commitment_reminder(
                             agent_running=self._agent_running,
                             has_pending_input=not self._input_queue.empty(),
@@ -1813,6 +1859,7 @@ class FamiliarWindow(QMainWindow):
                             now=now,
                             store=store,
                             quiet_hours=quiet,
+                            routine_store=getattr(agent_obj, "_routine_store", None),
                         )
                         if reminders and self._input_queue.empty() and not self._agent_running:
                             # Record the fire BEFORE the turn: the cadence advances
@@ -2050,6 +2097,11 @@ class FamiliarWindow(QMainWindow):
                 )
 
             agent = await asyncio.to_thread(_build_agent)
+            agent.bind_desires(self._desires)
+            # Start the MCP handshake now so tools are ready by the first turn (#188).
+            start_mcp_early = getattr(agent, "start_mcp_early", None)
+            if callable(start_mcp_early):
+                start_mcp_early()
             self._agent = agent
             if not agent.is_embedding_ready:
                 self._set_startup_status(f"{_t('initializing')} memory...")

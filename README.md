@@ -257,6 +257,42 @@ adapter explicitly supports images.
 
 ---
 
+## Body daemon (familiard)
+
+familiar-ai can run with an always-on body: `familiard` is a small separate
+process that keeps living while the app is closed.
+
+```bash
+uv run familiard        # start the body daemon
+FAMILIAR_DAEMON=1 ./run.sh   # the app now feels it and wakes on its nudges
+```
+
+What it owns (zero LLM calls, a few hertz):
+
+- **Interoception** — samples CPU / memory / time of day into a body signal the
+  agent feels each turn (energy, cognitive load, stress)
+- **Wake events** — due commitments, rising desires, and schedule-band pulses
+  nudge the app instantly instead of waiting for its next idle poll; every
+  behavioral gate stays in the app, so a wake is never more than an early poll
+- **Offline affect decay** — feelings settle toward baseline on wall-clock time
+  while the app is closed, instead of freezing mid-emotion
+
+Configuration lives in `~/.familiar_ai/familiard.conf` (`key = value` lines,
+`FAMILIARD_*` env overrides), e.g. `active_bands = 07:00-09:00,18:00-24:00`.
+Without the daemon (the default), nothing changes — the app keeps its plain
+idle polling.
+
+A **Rust port** with the identical contract (same config, same socket, same
+payload) lives in [`familiard-rs/`](./familiard-rs) — a single ~2 MB static
+binary that never shares the Python GIL:
+
+```bash
+cd familiard-rs && cargo build --release
+./target/release/familiard
+```
+
+---
+
 ## MCP Servers
 
 familiar-ai can connect to any [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server. This lets you plug in external memory, filesystem access, web search, or any other tool.
@@ -431,18 +467,27 @@ STT_LANGUAGE=ja            # recommended for Japanese; used by both batch and re
 
 familiar-ai streams microphone audio to ElevenLabs Scribe v2 and auto-commits transcripts when you pause speaking. No button press required. Coexists with the push-to-talk mode (Ctrl+T).
 
-On WSL2/WSLg, realtime STT also depends on `sounddevice` / PortAudio being able to
-see your microphone input, not just PulseAudio playback. Install
-`pulseaudio-utils` and `libasound2-plugins`, set
-`PULSE_SERVER=unix:/mnt/wslg/PulseServer`, then verify:
+On WSL2/WSLg, PortAudio often cannot see the WSLg microphone bridge even though
+PulseAudio-level capture works. familiar-ai handles this automatically: when
+`sounddevice` finds no input device, both STT paths (realtime and push-to-talk)
+fall back to PulseAudio's native `parec`. You only need:
 
 ```bash
-uv run python -m sounddevice
+sudo apt install pulseaudio-utils libasound2-plugins
+# in .env (or your shell):
+PULSE_SERVER=unix:/mnt/wslg/PulseServer
 ```
 
-If that command shows no input devices or reports `Error querying device -1`,
-familiar-ai will not be able to capture microphone audio until PortAudio can
-see the WSLg input bridge.
+Verify PulseAudio capture works (this is what the fallback uses):
+
+```bash
+pactl list short sources      # should show an RDPSource / input
+parec --rate=16000 --channels=1 | head -c 32000 > /dev/null && echo mic OK
+```
+
+To force a specific capture backend, set `FAMILIAR_STT_BACKEND=sounddevice`
+or `FAMILIAR_STT_BACKEND=parec` (default: auto — sounddevice first, parec
+fallback).
 
 ---
 
