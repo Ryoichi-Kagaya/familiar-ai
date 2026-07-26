@@ -279,6 +279,10 @@ What it owns (zero LLM calls, a few hertz):
 
 Configuration lives in `~/.familiar_ai/familiard.conf` (`key = value` lines,
 `FAMILIARD_*` env overrides), e.g. `active_bands = 07:00-09:00,18:00-24:00`.
+Interoception uses every numbered quiet-hours rule from
+`~/.familiar_ai/schedule.conf`; `FAMILIARD_SCHEDULE_PATH` can point it elsewhere.
+The legacy `quiet_start_hour` / `quiet_end_hour` daemon settings remain a
+single-window override.
 Without the daemon (the default), nothing changes — the app keeps its plain
 idle polling.
 

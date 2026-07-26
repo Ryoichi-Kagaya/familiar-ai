@@ -142,7 +142,9 @@ wake events), and offline self-state decay (only while no cortex is connected).
 Cortex side: `familiar_agent/wake.py` (`WakeListener`, `wait_input_or_wake`) —
 gated by `FAMILIAR_DAEMON` (default OFF); a wake only accelerates the idle poll,
 every behavioral gate re-checks in the cortex. Daemon config:
-`~/.familiar_ai/familiard.conf` + `FAMILIARD_*` env. A contract-identical
+`~/.familiar_ai/familiard.conf` + `FAMILIARD_*` env. Interoception quiet hours
+reuse all numbered rules in `~/.familiar_ai/schedule.conf`; the legacy scalar
+daemon keys override them with one window. A contract-identical
 **Rust port** lives in `familiard-rs/` (`cargo build --release && cargo test`
 there; CI: `.github/workflows/rust.yml`) — keep the two implementations'
 payload shape, socket protocol, config keys and probe SQL in lockstep.

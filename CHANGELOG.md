@@ -65,6 +65,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - Generic runtime substrate foundations: model/tool protocols, ToolRegistry, runtime event/task stores, a provider-neutral ReAct loop, neighbor profile boundary, and a non-embodied `familiar task ...` entry point
 
 ### Changed
+- Desire-driven idle turns now wait at least 10 minutes by default (`DESIRE_COOLDOWN=600`)
+- Python and Rust `familiard` interoception now follow every numbered quiet-hours rule in
+  `~/.familiar_ai/schedule.conf`, while retaining the legacy single-window daemon override
 - Lint and test workflows now run for both `develop` and `main`, matching the new default-branch strategy
 - CI now runs the full pytest suite again instead of excluding GUI async stability coverage
 - Camera discovery now browses `_onvif._tcp.local.` via zeroconf, respects RTSP TXT paths when present, and falls back to socket-based local-prefix detection when `ip route` is unavailable
@@ -85,6 +88,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - `EmbodiedAgent.run()` is now a thin wrapper around the substrate `ReActLoop`: TAPE replan, coherence retry, interrupt drain, and say() reminders ride `EmbodiedAgentHook` lifecycle methods; finalisation and the forced final response stay in the wrapper. The existing text and legacy `user_images` calls remain compatible, while the input now also accepts a typed multimodal `UserTurn`
 
 ### Fixed
+- Self-initiated desire turns once again use a temporary conversation-history fork, so their
+  synthetic prompt, tool trace, and reply do not become companion-authored conversation context
 - Camera images returned by `see()` now reach the default Claude Code CLI backend through its
   staged read-only image transport instead of being reduced to a text-only tool result; Telegram
   and GUI image previews continue to receive the same captured JPEG

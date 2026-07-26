@@ -417,6 +417,48 @@ async def test_run_appends_user_message_to_history():
 
 
 @pytest.mark.asyncio
+async def test_desire_turn_uses_history_but_does_not_persist_its_messages():
+    agent = _make_agent()
+    original_messages = [{"role": "user", "content": "earlier companion turn"}]
+    agent.messages = original_messages
+    agent.backend.stream_turn = AsyncMock(
+        return_value=(_turn("end_turn", text="private autonomous reply"), "raw")
+    )
+
+    ps = _patch_heavy()
+    for p in ps:
+        p.start()
+    try:
+        result = await agent.run("", inner_voice="look around")
+    finally:
+        for p in ps:
+            p.stop()
+
+    assert result == "private autonomous reply"
+    assert agent.messages is original_messages
+    assert agent.messages == [{"role": "user", "content": "earlier companion turn"}]
+    turn_messages = agent.backend.stream_turn.await_args.kwargs["messages"]
+    assert turn_messages is not original_messages
+    assert original_messages[0] in turn_messages
+    assert any(message.get("content") == "private autonomous reply" for message in turn_messages)
+
+
+@pytest.mark.asyncio
+async def test_desire_turn_restores_history_when_prepare_fails():
+    agent = _make_agent()
+    original_messages = [{"role": "user", "content": "keep me"}]
+    agent.messages = original_messages
+    agent._hook.prepare_turn = AsyncMock(side_effect=RuntimeError("prepare failed"))
+
+    with pytest.raises(RuntimeError, match="prepare failed"):
+        await agent.run("", inner_voice="reflect")
+
+    assert agent.messages is original_messages
+    assert agent.messages == [{"role": "user", "content": "keep me"}]
+    assert agent._turn_active is False
+
+
+@pytest.mark.asyncio
 async def test_repeated_tool_failure_raises_self_protect_without_irritable_tone(tmp_path):
     agent = _make_agent()
     agent.backend.stream_turn = AsyncMock(

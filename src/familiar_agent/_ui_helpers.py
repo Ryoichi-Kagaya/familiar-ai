@@ -227,7 +227,7 @@ def _format_tom_result(result: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 IDLE_CHECK_INTERVAL: float = 10.0  # seconds between desire checks when idle
-DESIRE_COOLDOWN: float = float(os.environ.get("DESIRE_COOLDOWN", "90"))  # configurable
+DESIRE_COOLDOWN: float = float(os.environ.get("DESIRE_COOLDOWN", "600"))  # configurable
 
 
 def should_fire_idle_desire(

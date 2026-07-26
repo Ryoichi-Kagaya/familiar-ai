@@ -92,8 +92,7 @@ impl Daemon {
                 interoception::read_cpu_load_fraction(),
                 interoception::read_mem_free_fraction(),
                 interoception::local_hour(),
-                self.config.quiet_start_hour,
-                self.config.quiet_end_hour,
+                &self.config.quiet_hours,
             );
             if let Err(exc) =
                 interoception::write_json_atomic(&self.config.interoception_path, &payload)

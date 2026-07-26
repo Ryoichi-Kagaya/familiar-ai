@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 _STATE_DIR = Path.home() / ".familiar_ai"
 _DEFAULT_CONF_PATH = _STATE_DIR / "familiard.conf"
+_DEFAULT_SCHEDULE_PATH = _STATE_DIR / "schedule.conf"
 
 # Desire threshold mirrors familiar_neighbor.mind.desires.TRIGGER_THRESHOLD.
 # Kept as a literal on purpose: the daemon must not import the cortex's mind
@@ -80,6 +81,47 @@ def _parse_bands(raw: str) -> list[tuple[int, int]]:
     return bands
 
 
+def _parse_quiet_hours(path: Path) -> list[tuple[int, int]]:
+    """Read the cortex schedule.conf quiet-hour pairs without importing it."""
+    if not path.exists():
+        return []
+    starts: dict[int, int] = {}
+    ends: dict[int, int] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("schedule.conf unreadable (%s); using daemon defaults", exc)
+        return []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, raw_value = (part.strip() for part in stripped.split("=", 1))
+        try:
+            value = int(raw_value)
+        except ValueError:
+            continue
+        if not 0 <= value <= 23:
+            continue
+        if key == "quiet_hours_start":
+            starts.setdefault(0, value)
+        elif key == "quiet_hours_end":
+            ends.setdefault(0, value)
+        elif key.startswith("quiet_hours_start_"):
+            try:
+                starts[int(key.removeprefix("quiet_hours_start_"))] = value
+            except ValueError:
+                continue
+        elif key.startswith("quiet_hours_end_"):
+            try:
+                ends[int(key.removeprefix("quiet_hours_end_"))] = value
+            except ValueError:
+                continue
+    return [
+        (starts.get(index, 23), ends.get(index, 7)) for index in sorted(set(starts) | set(ends))
+    ]
+
+
 @dataclass(slots=True)
 class FamiliardConfig:
     interoception_path: Path = _STATE_DIR / "interoception.json"
@@ -103,7 +145,11 @@ class FamiliardConfig:
     night_start_hour: int = 0
     night_end_hour: int = 7
 
-    # Quiet hours for the interoception signal (mirrors the cortex default).
+    # Quiet hours for interoception. By default the daemon reads the cortex's
+    # numbered rules from schedule.conf. The scalar fields remain as a legacy
+    # familiard.conf override and are mirrored to the first active rule.
+    schedule_path: Path = _DEFAULT_SCHEDULE_PATH
+    quiet_hours: list[tuple[int, int]] = field(default_factory=lambda: [(23, 7)])
     quiet_start_hour: int = 23
     quiet_end_hour: int = 7
 
@@ -163,6 +209,7 @@ class FamiliardConfig:
         cfg.self_state_path = _p("self_state_path", cfg.self_state_path)
         cfg.desires_path = _p("desires_path", cfg.desires_path)
         cfg.commitments_db_path = _p("commitments_db_path", cfg.commitments_db_path)
+        cfg.schedule_path = _p("schedule_path", cfg.schedule_path)
         cfg.sample_interval_sec = _f("sample_interval_sec", cfg.sample_interval_sec)
         cfg.scheduler_interval_sec = _f("scheduler_interval_sec", cfg.scheduler_interval_sec)
         if "active_bands" in raw:
@@ -172,8 +219,15 @@ class FamiliardConfig:
         cfg.offband_chance_night = _f("offband_chance_night", cfg.offband_chance_night)
         cfg.night_start_hour = _i("night_start_hour", cfg.night_start_hour)
         cfg.night_end_hour = _i("night_end_hour", cfg.night_end_hour)
-        cfg.quiet_start_hour = _i("quiet_start_hour", cfg.quiet_start_hour)
-        cfg.quiet_end_hour = _i("quiet_end_hour", cfg.quiet_end_hour)
+        schedule_quiet_hours = _parse_quiet_hours(cfg.schedule_path)
+        if schedule_quiet_hours:
+            cfg.quiet_hours = schedule_quiet_hours
+        if "quiet_start_hour" in raw or "quiet_end_hour" in raw:
+            cfg.quiet_start_hour = _i("quiet_start_hour", cfg.quiet_start_hour)
+            cfg.quiet_end_hour = _i("quiet_end_hour", cfg.quiet_end_hour)
+            cfg.quiet_hours = [(cfg.quiet_start_hour, cfg.quiet_end_hour)]
+        else:
+            cfg.quiet_start_hour, cfg.quiet_end_hour = cfg.quiet_hours[0]
         cfg.reminder_wake_cooldown_sec = _f(
             "reminder_wake_cooldown_sec", cfg.reminder_wake_cooldown_sec
         )
@@ -232,12 +286,14 @@ def build_interoception_payload(
     cpu_load: float,
     mem_free: float,
     now: datetime,
-    quiet_start: int,
-    quiet_end: int,
+    quiet_start: int = 23,
+    quiet_end: int = 7,
+    quiet_hours: list[tuple[int, int]] | None = None,
 ) -> dict:
     """Map raw body metrics to the MCPInteroceptionProvider signal shape."""
     hour = now.hour
-    quiet = _in_hour_window(hour, quiet_start, quiet_end)
+    rules = quiet_hours if quiet_hours is not None else [(quiet_start, quiet_end)]
+    quiet = any(_in_hour_window(hour, start, end) for start, end in rules)
     arousal = _clamp01(cpu_load)
     mem_pressure = 1.0 - _clamp01(mem_free)
     energy = _clamp01(0.85 - 0.35 * arousal - (0.23 if quiet else 0.0))
@@ -484,8 +540,7 @@ class Familiard:
                     cpu_load=_read_cpu_load_fraction(),
                     mem_free=_read_mem_free_fraction(),
                     now=datetime.now().astimezone(),
-                    quiet_start=self.config.quiet_start_hour,
-                    quiet_end=self.config.quiet_end_hour,
+                    quiet_hours=self.config.quiet_hours,
                 )
                 _write_json_atomic(self.config.interoception_path, payload)
             except Exception as exc:  # noqa: BLE001

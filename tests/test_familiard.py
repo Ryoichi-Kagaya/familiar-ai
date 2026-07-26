@@ -22,6 +22,7 @@ from familiar_agent.familiard import (
     Familiard,
     FamiliardConfig,
     _parse_bands,
+    _parse_quiet_hours,
     apply_offline_settle,
     build_interoception_payload,
     decide_band_pulse,
@@ -65,6 +66,45 @@ def test_config_defaults_without_file(tmp_path: Path):
     cfg = FamiliardConfig.load(tmp_path / "missing.conf")
     assert cfg.sample_interval_sec == 10.0
     assert cfg.active_bands  # non-empty defaults
+
+
+def test_config_loads_numbered_cortex_quiet_hours(tmp_path: Path):
+    schedule = tmp_path / "schedule.conf"
+    schedule.write_text(
+        "\n".join(
+            [
+                "quiet_hours_start_01=10",
+                "quiet_hours_end_01=16",
+                "quiet_hours_start_02=23",
+                "quiet_hours_end_02=7",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    conf = tmp_path / "familiard.conf"
+    conf.write_text(f"schedule_path={schedule}\n", encoding="utf-8")
+
+    cfg = FamiliardConfig.load(conf)
+
+    assert _parse_quiet_hours(schedule) == [(10, 16), (23, 7)]
+    assert cfg.quiet_hours == [(10, 16), (23, 7)]
+
+
+def test_legacy_daemon_quiet_hours_override_schedule(tmp_path: Path):
+    schedule = tmp_path / "schedule.conf"
+    schedule.write_text(
+        "quiet_hours_start_01=10\nquiet_hours_end_01=16\n",
+        encoding="utf-8",
+    )
+    conf = tmp_path / "familiard.conf"
+    conf.write_text(
+        f"schedule_path={schedule}\nquiet_start_hour=22\nquiet_end_hour=8\n",
+        encoding="utf-8",
+    )
+
+    cfg = FamiliardConfig.load(conf)
+
+    assert cfg.quiet_hours == [(22, 8)]
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +152,25 @@ def test_payload_quiet_hours_wrap_midnight():
     assert payload_night["signal"]["quiet_hours"] is True
     assert payload_day["signal"]["quiet_hours"] is False
     assert payload_night["signal"]["energy"] < payload_day["signal"]["energy"]
+
+
+def test_payload_supports_multiple_quiet_hour_windows():
+    quiet_hours = [(10, 16), (23, 7)]
+    midday = build_interoception_payload(
+        cpu_load=0.1,
+        mem_free=0.8,
+        now=datetime.now().astimezone().replace(hour=12),
+        quiet_hours=quiet_hours,
+    )
+    evening = build_interoception_payload(
+        cpu_load=0.1,
+        mem_free=0.8,
+        now=datetime.now().astimezone().replace(hour=18),
+        quiet_hours=quiet_hours,
+    )
+
+    assert midday["signal"]["quiet_hours"] is True
+    assert evening["signal"]["quiet_hours"] is False
 
 
 def test_stale_payload_rejected_fresh_accepted(tmp_path: Path):

@@ -3570,6 +3570,15 @@ class EmbodiedAgent:
         user_input_text = user_turn.text
         ctx = TurnContext(user_input=user_input_text, profile="neighbor")
 
+        # Self-initiated turns need the current conversation as context, but
+        # their synthetic placeholder, tool trace and reply must not become
+        # the companion's conversation history. Run them on a shallow fork and
+        # restore the original list on every exit path.
+        main_messages: list[Any] | None = None
+        if inner_voice and not user_input_text:
+            main_messages = self.messages
+            self.messages = list(self.messages)
+
         # Mark the turn in flight so the inner loop skips its idle ticks; this
         # is a visibility flag for background cognition, NOT a lock — turn
         # single-flight is owned by the UI loops.
@@ -3587,6 +3596,8 @@ class EmbodiedAgent:
                     excluded_tools=excluded_tools,
                 )
         except BaseException:
+            if main_messages is not None:
+                self.messages = main_messages
             self._turn_active = False
             raise
 
@@ -3757,6 +3768,8 @@ class EmbodiedAgent:
             return result.text or "(max iterations reached)"
         finally:
             self._restore_backend_after_turn(prep.backend_turn_snapshot)
+            if main_messages is not None:
+                self.messages = main_messages
             self._turn_active = False
             if latency.enabled:
                 latency.record("finalize", time.perf_counter() - finalize_started)

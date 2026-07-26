@@ -28,6 +28,9 @@ pub struct FamiliardConfig {
     pub night_start_hour: u32,
     pub night_end_hour: u32,
 
+    pub schedule_path: PathBuf,
+    pub quiet_hours: Vec<(u32, u32)>,
+    // Legacy familiard.conf compatibility; mirrors the first active rule.
     pub quiet_start_hour: u32,
     pub quiet_end_hour: u32,
 
@@ -63,6 +66,8 @@ impl Default for FamiliardConfig {
             offband_chance_night: 0.1,
             night_start_hour: 0,
             night_end_hour: 7,
+            schedule_path: dir.join("schedule.conf"),
+            quiet_hours: vec![(23, 7)],
             quiet_start_hour: 23,
             quiet_end_hour: 7,
             reminder_wake_cooldown_sec: 60.0,
@@ -90,6 +95,56 @@ pub fn parse_bands(raw: &str) -> Vec<(u32, u32)> {
         }
     }
     bands
+}
+
+/// Parse cortex-style quiet_hours_start[_NN] / quiet_hours_end[_NN] pairs.
+pub fn parse_quiet_hours(path: &std::path::Path) -> Vec<(u32, u32)> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut starts: HashMap<u32, u32> = HashMap::new();
+    let mut ends: HashMap<u32, u32> = HashMap::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, raw_value)) = line.split_once('=') else {
+            continue;
+        };
+        let Ok(value) = raw_value.trim().parse::<u32>() else {
+            continue;
+        };
+        if value > 23 {
+            continue;
+        }
+        let key = key.trim();
+        if key == "quiet_hours_start" {
+            starts.entry(0).or_insert(value);
+        } else if key == "quiet_hours_end" {
+            ends.entry(0).or_insert(value);
+        } else if let Some(raw_index) = key.strip_prefix("quiet_hours_start_") {
+            if let Ok(index) = raw_index.parse::<u32>() {
+                starts.insert(index, value);
+            }
+        } else if let Some(raw_index) = key.strip_prefix("quiet_hours_end_") {
+            if let Ok(index) = raw_index.parse::<u32>() {
+                ends.insert(index, value);
+            }
+        }
+    }
+    let mut indexes: Vec<u32> = starts.keys().chain(ends.keys()).copied().collect();
+    indexes.sort_unstable();
+    indexes.dedup();
+    indexes
+        .into_iter()
+        .map(|index| {
+            (
+                starts.get(&index).copied().unwrap_or(23),
+                ends.get(&index).copied().unwrap_or(7),
+            )
+        })
+        .collect()
 }
 
 fn parse_hhmm(raw: &str) -> Option<u32> {
@@ -152,6 +207,7 @@ impl FamiliardConfig {
         cfg.self_state_path = p("self_state_path", cfg.self_state_path);
         cfg.desires_path = p("desires_path", cfg.desires_path);
         cfg.commitments_db_path = p("commitments_db_path", cfg.commitments_db_path);
+        cfg.schedule_path = p("schedule_path", cfg.schedule_path);
         cfg.sample_interval_sec = f("sample_interval_sec", cfg.sample_interval_sec);
         cfg.scheduler_interval_sec = f("scheduler_interval_sec", cfg.scheduler_interval_sec);
         if let Some(bands) = raw.get("active_bands") {
@@ -162,8 +218,18 @@ impl FamiliardConfig {
         cfg.offband_chance_night = f("offband_chance_night", cfg.offband_chance_night);
         cfg.night_start_hour = i("night_start_hour", cfg.night_start_hour);
         cfg.night_end_hour = i("night_end_hour", cfg.night_end_hour);
-        cfg.quiet_start_hour = i("quiet_start_hour", cfg.quiet_start_hour);
-        cfg.quiet_end_hour = i("quiet_end_hour", cfg.quiet_end_hour);
+        let schedule_quiet_hours = parse_quiet_hours(&cfg.schedule_path);
+        if !schedule_quiet_hours.is_empty() {
+            cfg.quiet_hours = schedule_quiet_hours;
+        }
+        if raw.contains_key("quiet_start_hour") || raw.contains_key("quiet_end_hour") {
+            cfg.quiet_start_hour = i("quiet_start_hour", cfg.quiet_start_hour);
+            cfg.quiet_end_hour = i("quiet_end_hour", cfg.quiet_end_hour);
+            cfg.quiet_hours = vec![(cfg.quiet_start_hour, cfg.quiet_end_hour)];
+        } else if let Some((start, end)) = cfg.quiet_hours.first().copied() {
+            cfg.quiet_start_hour = start;
+            cfg.quiet_end_hour = end;
+        }
         cfg.reminder_wake_cooldown_sec =
             f("reminder_wake_cooldown_sec", cfg.reminder_wake_cooldown_sec);
         cfg.desire_wake_cooldown_sec = f("desire_wake_cooldown_sec", cfg.desire_wake_cooldown_sec);
@@ -220,6 +286,49 @@ mod tests {
         assert_eq!(cfg.band_interval_sec, 300.0); // env beats file
         assert_eq!(cfg.active_bands, vec![(480, 600)]);
         assert!(!cfg.offline_decay);
+    }
+
+    #[test]
+    fn loads_numbered_cortex_quiet_hours() {
+        let dir = tempfile::tempdir().unwrap();
+        let schedule = dir.path().join("schedule.conf");
+        std::fs::write(
+            &schedule,
+            "quiet_hours_start_01=10\nquiet_hours_end_01=16\n\
+             quiet_hours_start_02=23\nquiet_hours_end_02=7\n",
+        )
+        .unwrap();
+        let conf = dir.path().join("familiard.conf");
+        std::fs::write(&conf, format!("schedule_path={}\n", schedule.display())).unwrap();
+
+        let cfg = FamiliardConfig::load(Some(conf));
+
+        assert_eq!(parse_quiet_hours(&schedule), vec![(10, 16), (23, 7)]);
+        assert_eq!(cfg.quiet_hours, vec![(10, 16), (23, 7)]);
+    }
+
+    #[test]
+    fn legacy_quiet_window_overrides_schedule() {
+        let dir = tempfile::tempdir().unwrap();
+        let schedule = dir.path().join("schedule.conf");
+        std::fs::write(
+            &schedule,
+            "quiet_hours_start_01=10\nquiet_hours_end_01=16\n",
+        )
+        .unwrap();
+        let conf = dir.path().join("familiard.conf");
+        std::fs::write(
+            &conf,
+            format!(
+                "schedule_path={}\nquiet_start_hour=22\nquiet_end_hour=8\n",
+                schedule.display()
+            ),
+        )
+        .unwrap();
+
+        let cfg = FamiliardConfig::load(Some(conf));
+
+        assert_eq!(cfg.quiet_hours, vec![(22, 8)]);
     }
 
     #[test]
