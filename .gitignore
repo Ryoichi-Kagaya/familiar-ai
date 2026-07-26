@@ -1,3 +1,6 @@
+# Hidden directories (local tooling, editor state, CI metadata, etc.)
+.*/
+
 # Personal familiar configuration (do not commit)
 ME.md
 
