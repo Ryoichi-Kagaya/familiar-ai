@@ -413,8 +413,10 @@ class TestAgentConfig:
 
     def test_proactive_reminders_independent_of_auto_desire(self, monkeypatch):
         # auto_desire off, but reminders still on by default
-        monkeypatch.delenv("FAMILIAR_AUTO", raising=False)
-        monkeypatch.delenv("FAMILIAR_AUTO_DESIRE", raising=False)
+        # Keep explicit false values so config's load_dotenv() cannot restore
+        # user-specific values when this module is reloaded.
+        monkeypatch.setenv("FAMILIAR_AUTO", "false")
+        monkeypatch.setenv("FAMILIAR_AUTO_DESIRE", "false")
         monkeypatch.delenv("FAMILIAR_PROACTIVE_REMINDERS", raising=False)
         import importlib
 
