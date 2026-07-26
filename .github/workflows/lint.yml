@@ -1,0 +1,27 @@
+name: Lint
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Lint
+        run: uvx ruff@0.15.3 check .
+
+      - name: Format check
+        run: uvx ruff@0.15.3 format --check .
+
+      - name: Type check
+        run: uv run --group dev mypy src/familiar_agent
