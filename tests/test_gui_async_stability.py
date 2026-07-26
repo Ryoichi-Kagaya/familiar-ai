@@ -7,7 +7,8 @@ import contextlib
 import logging
 import time
 from collections.abc import Callable
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -70,6 +71,7 @@ def _make_window_stub() -> FamiliarWindow:
     win._shutdown_task = None
     win._cancel_requested = False
     win._agent_task = None
+    win._drive_executor = None
     win._queue_task = None
     win._init_task = None
     win._look_preview_task = None
@@ -171,14 +173,11 @@ async def test_gui_realtime_stt_init_failure_sets_session_none():
 
 
 @pytest.mark.asyncio
-async def test_gui_idle_desire_logs_localized_murmur(monkeypatch):
+async def test_gui_idle_desire_dispatches_without_logging_murmur(monkeypatch):
     win = _make_window_stub()
-
-    async def _fake_run_agent(text: str, inner_voice: str = "") -> None:
-        assert text == ""
-        assert inner_voice == "inner-prompt"
-
-    win._run_agent = _fake_run_agent  # type: ignore[method-assign]
+    win._desires.get_dominant.return_value = ("worry_companion", 0.9)
+    win._drive_executor = MagicMock()
+    win._drive_executor.dispatch = AsyncMock(return_value=SimpleNamespace(fired=True))
 
     call_count = {"n": 0}
 
@@ -197,21 +196,14 @@ async def test_gui_idle_desire_logs_localized_murmur(monkeypatch):
         "familiar_agent.gui.should_fire_idle_desire",
         lambda **kwargs: True,
     )
-    monkeypatch.setattr(
-        "familiar_agent.gui.desire_tick_prompt",
-        lambda _desires, _peek: ("worry_companion", "inner-prompt", None),
-    )
-    monkeypatch.setattr(
-        "familiar_agent.gui._t",
-        lambda key, **kwargs: (
-            "localized-worry" if key == "desire_worry_companion" else "localized-default"
-        ),
-    )
-
     await FamiliarWindow._process_queue(win)
 
-    win._log.append_line.assert_called_with("localized-worry")
-    win._desires.satisfy.assert_called_once_with("worry_companion")
+    win._drive_executor.dispatch.assert_awaited_once()
+    call = win._drive_executor.dispatch.await_args
+    assert call.args == ("worry_companion",)
+    assert callable(call.kwargs["run_social_turn"])
+    win._log.append_line.assert_not_called()
+    win._desires.satisfy.assert_not_called()
 
 
 @pytest.mark.asyncio

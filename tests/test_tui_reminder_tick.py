@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from familiar_agent.tui import FamiliarApp
+from familiar_agent.drive_executor import DriveActionResult
 from familiar_runtime.commitments import SQLiteCommitmentStore
 
 
@@ -86,6 +87,59 @@ async def test_tui_mid_turn_snooze_survives_mark(tmp_path):
     assert got.reminder_count == 0  # snooze reset not clobbered
     assert got.last_reminded_at is None
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_tui_idle_desire_dispatches_without_logging_murmur():
+    executor = MagicMock()
+    executor.dispatch = AsyncMock(return_value=DriveActionResult(fired=True, desire_name="reflect"))
+    desires = MagicMock()
+    desires.get_dominant.return_value = ("reflect", 0.9)
+    app = SimpleNamespace(
+        agent=SimpleNamespace(config=SimpleNamespace(auto_desire=True)),
+        desires=desires,
+        _drive_executor=executor,
+        _agent_running=False,
+        _input_queue=asyncio.Queue(),
+        _last_interaction=time.time() - 3600,
+        _run_agent=AsyncMock(),
+        _log_system=MagicMock(),
+    )
+
+    await FamiliarApp._desire_tick(app)
+
+    executor.dispatch.assert_awaited_once()
+    call = executor.dispatch.await_args
+    assert call.args == ("reflect",)
+    assert callable(call.kwargs["run_social_turn"])
+    app._run_agent.assert_not_awaited()
+    app._log_system.assert_not_called()
+    desires.satisfy.assert_not_called()
+    assert desires.curiosity_target is None
+
+
+@pytest.mark.asyncio
+async def test_tui_social_desire_uses_normal_ui_turn():
+    async def dispatch(desire_name: str, **kwargs):
+        assert desire_name == "greet_companion"
+        await kwargs["run_social_turn"]("say hello")
+        return DriveActionResult(fired=True, desire_name=desire_name)
+
+    desires = MagicMock()
+    desires.get_dominant.return_value = ("greet_companion", 0.9)
+    app = SimpleNamespace(
+        agent=SimpleNamespace(config=SimpleNamespace(auto_desire=True)),
+        desires=desires,
+        _drive_executor=SimpleNamespace(dispatch=dispatch),
+        _agent_running=False,
+        _input_queue=asyncio.Queue(),
+        _last_interaction=time.time() - 3600,
+        _run_agent=AsyncMock(),
+    )
+
+    await FamiliarApp._desire_tick(app)
+
+    app._run_agent.assert_awaited_once_with("", inner_voice="say hello")
 
 
 @pytest.mark.asyncio

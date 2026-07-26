@@ -27,13 +27,13 @@ from ._ui_helpers import (
     DESIRE_COOLDOWN as _DESIRE_COOLDOWN,
     IDLE_CHECK_INTERVAL as _IDLE_CHECK_INTERVAL,
     commitment_reminder_prompt,
-    desire_tick_prompt,
     format_action as _format_action,
     format_tool_result as _format_tool_result,
     should_fire_commitment_reminder,
     should_fire_idle_desire,
     should_run_sleep_consolidation,
 )
+from .drive_executor import DriveActionExecutor
 from .realtime_stt_session import create_realtime_stt_controller, RealtimeSttController
 from .image_input import ImageInputError, parse_image_command
 
@@ -187,6 +187,7 @@ class FamiliarApp(App):
         self._term_attrs = term_attrs  # saved before Textual changes raw mode
         self.agent = agent
         self.desires = desires
+        self._drive_executor = DriveActionExecutor(agent, desires)
         self._agent_name = agent.config.agent_name
         self._companion_name = agent.config.companion_name
         self._input_queue: asyncio.Queue[str | UserTurn | None] = asyncio.Queue()
@@ -667,8 +668,8 @@ class FamiliarApp(App):
         ):
             return
 
-        tick = desire_tick_prompt(self.desires, [])
-        if tick is None:
+        dominant = self.desires.get_dominant()
+        if dominant is None:
             return
         if not should_fire_idle_desire(
             agent_running=self._agent_running,
@@ -679,18 +680,27 @@ class FamiliarApp(App):
         ):
             return
 
-        desire_name, prompt, _pending = tick
+        desire_name, _ = dominant
 
+        async def run_social_turn(inner_voice: str) -> None:
+            await self._run_agent("", inner_voice=inner_voice)
+
+        # Keep the queue consumer from starting a user turn while a silent
+        # desire action is touching shared agent state.
+        self._agent_running = True
         try:
-            murmur = _t(f"desire_{desire_name}")
-        except KeyError:
-            murmur = _t("desire_default")
-        self._log_system(murmur)
+            result = await self._drive_executor.dispatch(
+                desire_name,
+                last_interaction_time=self._last_interaction,
+                run_social_turn=run_social_turn,
+                interrupt_queue=self._input_queue,
+            )
+        finally:
+            self._agent_running = False
 
-        self._last_interaction = time.time()  # reset cooldown
-        await self._run_agent("", inner_voice=prompt)
-        self.desires.satisfy(desire_name)
-        self.desires.curiosity_target = None
+        if result.fired:
+            self.desires.curiosity_target = None
+            self._last_interaction = time.time()
 
     # ── Realtime STT (hands-free, always-on) ────────────────────
 

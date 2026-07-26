@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from .agent import EmbodiedAgent
     from .desires import DesireSystem
@@ -84,6 +84,7 @@ class DriveActionExecutor:
         desire_name: str,
         *,
         last_interaction_time: float,
+        run_social_turn: Callable[[str], Awaitable[None]] | None = None,
         on_action: Callable[[str, dict[str, Any]], None] | None = None,
         on_text: Callable[[str], None] | None = None,
         interrupt_queue: Any = None,
@@ -105,6 +106,7 @@ class DriveActionExecutor:
             return await self._expressive_solo(
                 desire_name,
                 companion_present=companion_here,
+                run_social_turn=run_social_turn,
                 on_action=on_action,
                 on_text=on_text,
                 interrupt_queue=interrupt_queue,
@@ -118,6 +120,7 @@ class DriveActionExecutor:
                 )
             return await self._social_initiation(
                 desire_name,
+                run_social_turn=run_social_turn,
                 on_action=on_action,
                 on_text=on_text,
                 interrupt_queue=interrupt_queue,
@@ -127,6 +130,7 @@ class DriveActionExecutor:
             if companion_here:
                 return await self._social_initiation(
                     desire_name,
+                    run_social_turn=run_social_turn,
                     on_action=on_action,
                     on_text=on_text,
                     interrupt_queue=interrupt_queue,
@@ -186,9 +190,7 @@ class DriveActionExecutor:
                     logger.info("drive consolidate: processed %d memory job(s)", count)
 
                 case "reflect":
-                    text = await agent._utility_backend.complete(
-                        _REFLECT_PROMPT, max_tokens=80
-                    )
+                    text = await agent._utility_backend.complete(_REFLECT_PROMPT, max_tokens=80)
                     if text and text.strip().lower() != "nothing":
                         agent._self_narrative.write(text.strip(), trigger="reflect_drive")
                         await agent._memory.save_async(
@@ -222,6 +224,7 @@ class DriveActionExecutor:
         desire_name: str,
         *,
         companion_present: bool,
+        run_social_turn: Callable[[str], Awaitable[None]] | None,
         on_action: Callable[[str, dict[str, Any]], None] | None,
         on_text: Callable[[str], None] | None,
         interrupt_queue: Any,
@@ -230,6 +233,7 @@ class DriveActionExecutor:
         if companion_present:
             return await self._social_initiation(
                 desire_name,
+                run_social_turn=run_social_turn,
                 on_action=on_action,
                 on_text=on_text,
                 interrupt_queue=interrupt_queue,
@@ -274,6 +278,7 @@ class DriveActionExecutor:
         self,
         desire_name: str,
         *,
+        run_social_turn: Callable[[str], Awaitable[None]] | None,
         on_action: Callable[[str, dict[str, Any]], None] | None,
         on_text: Callable[[str], None] | None,
         interrupt_queue: Any,
@@ -282,14 +287,17 @@ class DriveActionExecutor:
         spec = self._desires._drive_specs.get(desire_name)
         nudge = spec.prompt_text if spec is not None else desire_name
 
-        await self._agent.run(
-            "",
-            on_action=on_action,
-            on_text=on_text,
-            desires=self._desires,
-            inner_voice=nudge,
-            interrupt_queue=interrupt_queue,
-        )
+        if run_social_turn is not None:
+            await run_social_turn(nudge)
+        else:
+            await self._agent.run(
+                "",
+                on_action=on_action,
+                on_text=on_text,
+                desires=self._desires,
+                inner_voice=nudge,
+                interrupt_queue=interrupt_queue,
+            )
         self._desires.satisfy(desire_name)
         logger.info("drive %s: social initiation turn done", desire_name)
         return DriveActionResult(fired=True, desire_name=desire_name)

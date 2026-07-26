@@ -9,6 +9,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Route GUI and TUI auto-desire firings through the same effect-aware executor as
+  the REPL, keeping silent/private drives out of the visible conversation while
+  preserving normal UI output for genuinely social initiations.
 - Suppress immediate exact duplicate speech and movement actions within one
   agent turn, preventing failed or ambiguous device calls from executing twice.
 - Restore local speaker fallback when go2rtc camera playback fails, preserve

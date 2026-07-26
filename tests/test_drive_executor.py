@@ -143,9 +143,7 @@ def test_companion_absent_after_threshold(
 async def test_gate_drive_does_not_fire(
     executor: DriveActionExecutor, mock_agent: MagicMock
 ) -> None:
-    result = await executor.dispatch(
-        "rest", last_interaction_time=time.time()
-    )
+    result = await executor.dispatch("rest", last_interaction_time=time.time())
     assert result.fired is False
     assert result.reason == "gate_drive"
     mock_agent.run.assert_not_called()
@@ -155,9 +153,7 @@ async def test_gate_drive_does_not_fire(
 async def test_self_protect_gate_does_not_fire(
     executor: DriveActionExecutor, mock_agent: MagicMock
 ) -> None:
-    result = await executor.dispatch(
-        "self_protect", last_interaction_time=time.time()
-    )
+    result = await executor.dispatch("self_protect", last_interaction_time=time.time())
     assert result.fired is False
     assert result.reason == "gate_drive"
 
@@ -172,9 +168,7 @@ async def test_social_drive_does_not_fire_when_companion_absent(
     executor: DriveActionExecutor, mock_agent: MagicMock
 ) -> None:
     old_time = time.time() - ABSENCE_THRESHOLD - 10
-    result = await executor.dispatch(
-        "greet_companion", last_interaction_time=old_time
-    )
+    result = await executor.dispatch("greet_companion", last_interaction_time=old_time)
     assert result.fired is False
     assert result.reason == "companion_absent"
     mock_agent.run.assert_not_called()
@@ -202,11 +196,30 @@ async def test_social_drive_fires_when_companion_present(
 ) -> None:
     recent = time.time() - 60
     desires.boost("greet_companion", 1.0)
-    result = await executor.dispatch(
-        "greet_companion", last_interaction_time=recent
-    )
+    result = await executor.dispatch("greet_companion", last_interaction_time=recent)
     assert result.fired is True
     mock_agent.run.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_social_drive_can_use_ui_turn_runner(
+    executor: DriveActionExecutor,
+    mock_agent: MagicMock,
+    desires: DesireSystem,
+) -> None:
+    recent = time.time() - 60
+    desires.boost("greet_companion", 1.0)
+    run_social_turn = AsyncMock()
+
+    result = await executor.dispatch(
+        "greet_companion",
+        last_interaction_time=recent,
+        run_social_turn=run_social_turn,
+    )
+
+    assert result.fired is True
+    run_social_turn.assert_awaited_once_with(desires._drive_specs["greet_companion"].prompt_text)
+    mock_agent.run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -218,9 +231,7 @@ async def test_social_drive_fires_when_companion_present(
 async def test_consolidate_calls_memory_worker(
     executor: DriveActionExecutor, mock_agent: MagicMock
 ) -> None:
-    result = await executor.dispatch(
-        "consolidate", last_interaction_time=time.time()
-    )
+    result = await executor.dispatch("consolidate", last_interaction_time=time.time())
     assert result.fired is True
     mock_agent._memory_worker.run_once.assert_called_once()
 
@@ -234,13 +245,15 @@ async def test_consolidate_calls_memory_worker(
 async def test_reflect_writes_to_narrative(
     executor: DriveActionExecutor, mock_agent: MagicMock
 ) -> None:
-    result = await executor.dispatch(
-        "reflect", last_interaction_time=time.time()
-    )
+    result = await executor.dispatch("reflect", last_interaction_time=time.time())
     assert result.fired is True
     mock_agent._self_narrative.write.assert_called_once()
     call_kwargs = mock_agent._self_narrative.write.call_args
-    assert call_kwargs.kwargs.get("trigger") == "reflect_drive" or call_kwargs[1].get("trigger") == "reflect_drive" or "reflect_drive" in str(call_kwargs)
+    assert (
+        call_kwargs.kwargs.get("trigger") == "reflect_drive"
+        or call_kwargs[1].get("trigger") == "reflect_drive"
+        or "reflect_drive" in str(call_kwargs)
+    )
 
 
 @pytest.mark.asyncio
@@ -376,8 +389,6 @@ async def test_worry_uses_social_turn_when_present(
 async def test_unknown_drive_returns_not_fired(
     executor: DriveActionExecutor,
 ) -> None:
-    result = await executor.dispatch(
-        "nonexistent_drive", last_interaction_time=time.time()
-    )
+    result = await executor.dispatch("nonexistent_drive", last_interaction_time=time.time())
     assert result.fired is False
     assert result.reason == "unknown_drive"

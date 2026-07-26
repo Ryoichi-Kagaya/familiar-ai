@@ -62,7 +62,6 @@ from ._ui_helpers import (
     DESIRE_COOLDOWN,
     IDLE_CHECK_INTERVAL,
     commitment_reminder_prompt,
-    desire_tick_prompt,
     format_action,
     format_tool_result,
     should_fire_commitment_reminder,
@@ -70,6 +69,7 @@ from ._ui_helpers import (
     should_run_sleep_consolidation,
 )
 from .bootstrap import resolve_env_path
+from .drive_executor import DriveActionExecutor
 from .user_profile import UserRegistry
 from .diagnostics import (
     build_gui_diagnostics,
@@ -944,6 +944,7 @@ class FamiliarWindow(QMainWindow):
         self._shared_camera = shared_camera
         self._agent: EmbodiedAgent | None = None
         self._desires = desires
+        self._drive_executor: DriveActionExecutor | None = None
         self._agent_display_name = (config.agent_name or "Agent").strip() or "Agent"
         _init_registry = UserRegistry()
         active_user = _init_registry.get_active()
@@ -1887,21 +1888,29 @@ class FamiliarWindow(QMainWindow):
                 ):
                     continue
 
-                tick = desire_tick_prompt(self._desires, [])
-                if tick:
+                dominant = self._desires.get_dominant()
+                if dominant:
                     # If user input arrived meanwhile, prioritize that over autonomous desire.
                     if not self._input_queue.empty():
                         continue
-                    desire_name, prompt, _ = tick
-                    try:
-                        murmur = _t(f"desire_{desire_name}")
-                    except KeyError:
-                        murmur = _t("desire_default")
-                    self._log.append_line(murmur)
-                    await self._run_agent("", inner_voice=prompt)
-                    self._desires.satisfy(desire_name)
-                    self._desires.curiosity_target = None
-                    last_interaction = time.time()
+                    desire_name, _ = dominant
+                    executor = self._drive_executor
+                    if executor is None:
+                        logger.warning("desire tick skipped: drive executor is not ready")
+                        continue
+
+                    async def run_social_turn(inner_voice: str) -> None:
+                        await self._run_agent("", inner_voice=inner_voice)
+
+                    result = await executor.dispatch(
+                        desire_name,
+                        last_interaction_time=last_interaction,
+                        run_social_turn=run_social_turn,
+                        interrupt_queue=self._input_queue,
+                    )
+                    if result.fired:
+                        self._desires.curiosity_target = None
+                        last_interaction = time.time()
                 continue
 
             if text is None:
@@ -2103,6 +2112,7 @@ class FamiliarWindow(QMainWindow):
             if callable(start_mcp_early):
                 start_mcp_early()
             self._agent = agent
+            self._drive_executor = DriveActionExecutor(agent, self._desires)
             if not agent.is_embedding_ready:
                 self._set_startup_status(f"{_t('initializing')} memory...")
             self._agent_ready = True
