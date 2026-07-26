@@ -7,6 +7,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Suppress immediate exact duplicate speech and movement actions within one
+  agent turn, preventing failed or ambiguous device calls from executing twice.
+- Restore local speaker fallback when go2rtc camera playback fails, preserve
+  manual go2rtc configs, and generate the Tapo speaker backchannel when
+  `CAMERA_TAPO_PASSWORD` or `CAMERA_TAPO_HASH` is configured.
+
 ### Added
 - Every human user turn now carries a runtime-supplied, timezone-aware send timestamp and
   explicit weekday in the model-visible message context, including mid-turn interrupts

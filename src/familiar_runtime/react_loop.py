@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from collections.abc import Callable, Sequence
@@ -67,6 +68,7 @@ class ReActLoop:
         max_iterations: int = 50,
         default_tool_timeout: float = 20.0,
         tool_timeouts: dict[str, float] | None = None,
+        non_repeatable_tools: set[str] | frozenset[str] | None = None,
         event_bus: EventBus | None = None,
         hooks: Sequence["RuntimeHook"] = (),
     ) -> None:
@@ -75,6 +77,7 @@ class ReActLoop:
         self._max_iterations = max_iterations
         self._default_tool_timeout = default_tool_timeout
         self._tool_timeouts = tool_timeouts or {}
+        self._non_repeatable_tools = frozenset(non_repeatable_tools or ())
         self._event_bus = event_bus
         self._hooks = list(hooks)
 
@@ -102,6 +105,7 @@ class ReActLoop:
         all_tool_calls: list[ToolCall] = []
         input_tokens = 0
         output_tokens = 0
+        last_non_repeatable_signature: str | None = None
 
         def emit(source: str, type: str, payload: dict[str, Any]) -> None:
             if self._event_bus is None:
@@ -247,7 +251,34 @@ class ReActLoop:
                 # message assembly stay sequential in the model's order, so
                 # every order-dependent semantic (replan splicing, streak
                 # bookkeeping, tool_results layout) is unchanged.
+                duplicate_flags: list[bool] = []
                 for tool_call in result.tool_calls:
+                    duplicate = False
+                    if tool_call.name in self._non_repeatable_tools:
+                        signature = json.dumps(
+                            [tool_call.name, tool_call.input],
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            default=str,
+                        )
+                        duplicate = signature == last_non_repeatable_signature
+                        # Claim the action before awaiting it. A timeout has an
+                        # ambiguous physical outcome and must not make an
+                        # immediate automatic retry safe.
+                        last_non_repeatable_signature = signature
+                    else:
+                        # A different tool means later repetition may be an
+                        # intentional follow-up to new information.
+                        last_non_repeatable_signature = None
+                    duplicate_flags.append(duplicate)
+                    if duplicate:
+                        emit(
+                            "tool",
+                            "tool_duplicate_suppressed",
+                            {"name": tool_call.name, "input": tool_call.input},
+                        )
+                        continue
                     all_tool_calls.append(tool_call)
                     emit(
                         "tool",
@@ -257,8 +288,22 @@ class ReActLoop:
                     if on_action is not None:
                         on_action(tool_call.name, tool_call.input)
 
-                async def _execute(tool_call: ToolCall) -> tuple[str, ToolExecutionResult]:
+                async def _execute(
+                    tool_call: ToolCall, duplicate: bool
+                ) -> tuple[str, ToolExecutionResult]:
                     """Run one tool; classify the outcome for exact event parity."""
+                    if duplicate:
+                        return (
+                            "duplicate",
+                            ToolExecutionResult(
+                                text=(
+                                    "Duplicate action suppressed: this exact physical action "
+                                    "already ran during the current turn. Do not retry it."
+                                ),
+                                success=True,
+                                metadata={"duplicate_suppressed": True},
+                            ),
+                        )
                     timeout = self._tool_timeouts.get(tool_call.name, self._default_tool_timeout)
                     try:
                         return (
@@ -286,14 +331,25 @@ class ReActLoop:
                         )
 
                 if len(result.tool_calls) == 1:
-                    executed = [await _execute(result.tool_calls[0])]
+                    executed = [await _execute(result.tool_calls[0], duplicate_flags[0])]
                 else:
                     executed = list(
-                        await asyncio.gather(*(_execute(tc) for tc in result.tool_calls))
+                        await asyncio.gather(
+                            *(
+                                _execute(tool_call, duplicate)
+                                for tool_call, duplicate in zip(result.tool_calls, duplicate_flags)
+                            )
+                        )
                     )
 
                 collected: list[tuple[str, str | None]] = []
                 for tool_call, (exec_outcome, tool_result) in zip(result.tool_calls, executed):
+                    if exec_outcome == "duplicate":
+                        # The model still needs a result paired with its tool
+                        # call, but observers and hooks must not mistake the
+                        # suppressed request for a second physical action.
+                        collected.append((tool_result.text, None))
+                        continue
                     if exec_outcome == "timeout":
                         emit(
                             "tool",

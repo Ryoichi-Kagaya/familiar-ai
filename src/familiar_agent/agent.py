@@ -178,6 +178,11 @@ _TOOL_TIMEOUTS: dict[str, float] = {
     "bash": 45.0,
 }
 _BRIEF_REPLY_TOOL_NAMES = frozenset({"say"})
+# Immediate exact repeats of outward physical actions are unsafe after an
+# ambiguous timeout/failure: the first request may already have reached the
+# device. ReActLoop pairs a synthetic result with a repeated model request
+# without executing it again.
+_NON_REPEATABLE_ACTION_TOOLS = frozenset({"say", "speak", "walk", "look", "move_head"})
 _BRIEF_GREETING_PATTERNS = (
     r"^おはよ",
     r"^こんにちは",
@@ -3628,6 +3633,7 @@ class EmbodiedAgent:
                 tool_timeouts={
                     name: self._tool_timeout_seconds(name) for name in turn_tool_names if name
                 },
+                non_repeatable_tools=_NON_REPEATABLE_ACTION_TOOLS,
                 hooks=[self._hook],
             )
             with latency.span("react_loop"):

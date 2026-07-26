@@ -140,6 +140,7 @@ the setup dialog for you on first launch when `API_KEY` is still missing.
 | `AGENT_NAME` | Display name shown in the TUI (e.g. `Yukine`) |
 | `CAMERA_HOST` | IP address of your ONVIF/RTSP camera |
 | `CAMERA_USERNAME` / `CAMERA_PASSWORD` | Camera credentials |
+| `CAMERA_TAPO_PASSWORD` | Tapo cloud password used only for camera-speaker backchannel |
 | `CAMERA_PTZ_HOST` / `CAMERA_PTZ_USERNAME` / `CAMERA_PTZ_PASSWORD` / `CAMERA_PTZ_PORT` | Optional PTZ overrides when the control endpoint differs from the RTSP stream endpoint |
 | `ELEVENLABS_API_KEY` | For voice output — [elevenlabs.io](https://elevenlabs.io/) |
 | `REALTIME_STT` | `true` to enable always-on hands-free voice input (requires `ELEVENLABS_API_KEY`) |
@@ -438,8 +439,13 @@ Set `TTS_OUTPUT=remote` (or `both`). Requires [go2rtc](https://github.com/AlexxI
    streams:
      tapo_cam:
        - rtsp://YOUR_CAM_USER:YOUR_CAM_PASS@YOUR_CAM_IP/stream1
+       # Tapo cameras commonly require this second source for the speaker:
+       - tapo://YOUR_TAPO_CLOUD_PASSWORD@YOUR_CAM_IP
    ```
-   Use the local camera account credentials (not your TP-Link cloud account).
+   The RTSP source uses the local camera account. The `tapo://` source uses
+   the Tapo cloud password and provides the speaker/backchannel. Alternatively,
+   set `CAMERA_TAPO_PASSWORD` and familiar-ai will generate both sources.
+   Pre-hashed Tapo credentials are supported through `CAMERA_TAPO_HASH`.
 
 4. familiar-ai starts go2rtc automatically at launch. If your camera supports two-way audio (backchannel), voice plays from the camera speaker.
 

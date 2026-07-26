@@ -1406,6 +1406,39 @@ async def test_normal_turn_stops_after_repeated_say():
 
 
 @pytest.mark.asyncio
+async def test_exact_repeated_say_executes_only_once():
+    """A model retry with identical speech must not replay audio or UI action."""
+    agent = _make_agent(with_tts=True)
+    long_input = "この文章を声に出したあと、処理結果も短く教えてほしい。" * 3
+    say1 = ToolCall(id="t1", name="say", input={"text": "一度だけ話すで"})
+    say2 = ToolCall(id="t2", name="say", input={"text": "一度だけ話すで"})
+    agent.backend.stream_turn = AsyncMock(
+        side_effect=[
+            (_turn("tool_use", tool_calls=[say1]), None),
+            (_turn("tool_use", tool_calls=[say2]), None),
+            (_turn("end_turn", text="完了したで"), "完了したで"),
+        ]
+    )
+    actions: list[tuple[str, dict]] = []
+
+    ps = _patch_heavy()
+    for p in ps:
+        p.start()
+    try:
+        result = await agent.run(
+            long_input,
+            on_action=lambda name, tool_input: actions.append((name, tool_input)),
+        )
+    finally:
+        for p in ps:
+            p.stop()
+
+    assert result == "完了したで"
+    agent._tts.call.assert_awaited_once_with("say", {"text": "一度だけ話すで"})
+    assert actions == [("say", {"text": "一度だけ話すで"})]
+
+
+@pytest.mark.asyncio
 async def test_interrupt_queue_drained_with_embodied_format():
     """Queued interrupts surface with the [User interrupted xN] say() directive."""
     agent = _make_agent()

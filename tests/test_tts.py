@@ -176,6 +176,97 @@ async def test_say_returns_error_on_api_failure():
 
 
 @pytest.mark.asyncio
+async def test_remote_failure_falls_back_to_local_playback():
+    """A broken camera backchannel must not leave successful synthesis silent."""
+    tool = _make_tts()
+    tool.output = "remote"
+
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_response.headers = {"Content-Type": "audio/pcm"}
+    mock_response.read = AsyncMock(return_value=b"\x00\x00")
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=False)
+
+    mock_session = MagicMock()
+    mock_session.post = MagicMock(return_value=mock_response)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        patch("aiohttp.ClientSession", return_value=mock_session),
+        patch(
+            "familiar_agent.tools.tts._play_via_go2rtc",
+            return_value=(False, "can't find consumer"),
+        ),
+        patch(
+            "familiar_agent.tools.tts._play_local", new=AsyncMock(return_value=True)
+        ) as play_local,
+        patch("familiar_agent.tools.tts._write_pcm_as_wav", return_value="/tmp/fake.wav"),
+        patch("os.unlink"),
+    ):
+        result = await tool.say("hello")
+
+    assert "via local fallback" in result
+    play_local.assert_awaited_once_with("/tmp/fake.wav", volume=1.0)
+
+
+def test_go2rtc_autoconfig_adds_tapo_backchannel(monkeypatch, tmp_path):
+    from familiar_agent.tools import tts
+
+    config_path = tmp_path / "go2rtc.yaml"
+    monkeypatch.setattr(tts, "_GO2RTC_CACHE", tmp_path)
+    monkeypatch.setattr(tts, "_GO2RTC_CONFIG", config_path)
+    monkeypatch.setenv("CAMERA_HOST", "192.0.2.10")
+    monkeypatch.setenv("CAMERA_USERNAME", "camera user")
+    monkeypatch.setenv("CAMERA_PASSWORD", "local/pass")
+    monkeypatch.setenv("CAMERA_TAPO_PASSWORD", "cloud pass")
+    monkeypatch.delenv("CAMERA_TAPO_HASH", raising=False)
+
+    tts._write_go2rtc_config("tapo_cam")
+
+    generated = config_path.read_text()
+    assert "rtsp://camera%20user:local%2Fpass@192.0.2.10/stream1" in generated
+    assert "tapo://cloud%20pass@192.0.2.10" in generated
+
+
+def test_go2rtc_autoconfig_preserves_manual_config_without_tapo_env(monkeypatch, tmp_path):
+    from familiar_agent.tools import tts
+
+    config_path = tmp_path / "go2rtc.yaml"
+    manual = "streams:\n  custom: tapo://manual-credential@192.0.2.20\n"
+    config_path.write_text(manual)
+    monkeypatch.setattr(tts, "_GO2RTC_CACHE", tmp_path)
+    monkeypatch.setattr(tts, "_GO2RTC_CONFIG", config_path)
+    monkeypatch.setenv("CAMERA_HOST", "192.0.2.10")
+    monkeypatch.setenv("CAMERA_USERNAME", "camera")
+    monkeypatch.setenv("CAMERA_PASSWORD", "password")
+    monkeypatch.delenv("CAMERA_TAPO_PASSWORD", raising=False)
+    monkeypatch.delenv("CAMERA_TAPO_HASH", raising=False)
+
+    tts._write_go2rtc_config("tapo_cam")
+
+    assert config_path.read_text() == manual
+
+
+def test_go2rtc_autoconfig_formats_prehashed_tapo_password(monkeypatch, tmp_path):
+    from familiar_agent.tools import tts
+
+    config_path = tmp_path / "go2rtc.yaml"
+    monkeypatch.setattr(tts, "_GO2RTC_CACHE", tmp_path)
+    monkeypatch.setattr(tts, "_GO2RTC_CONFIG", config_path)
+    monkeypatch.setenv("CAMERA_HOST", "192.0.2.10")
+    monkeypatch.delenv("CAMERA_USERNAME", raising=False)
+    monkeypatch.delenv("CAMERA_PASSWORD", raising=False)
+    monkeypatch.delenv("CAMERA_TAPO_PASSWORD", raising=False)
+    monkeypatch.setenv("CAMERA_TAPO_HASH", "ABCDEF123")
+
+    tts._write_go2rtc_config("tapo_cam")
+
+    assert "tapo://admin:ABCDEF123@192.0.2.10" in config_path.read_text()
+
+
+@pytest.mark.asyncio
 async def test_say_notifies_voice_guard_on_success():
     tool = _make_tts()
     tool._voice_guard = MagicMock()

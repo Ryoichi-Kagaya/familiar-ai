@@ -64,6 +64,24 @@ class _EchoTool:
         return ToolExecutionResult(text=f"echo: {tool_input['text']}")
 
 
+class _RecordingActionTool:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def specs(self) -> list[ToolSpec]:
+        return [
+            ToolSpec(
+                name="say",
+                description="Speak",
+                input_schema={"type": "object", "properties": {}},
+            )
+        ]
+
+    async def call(self, name: str, tool_input: dict[str, Any]) -> ToolExecutionResult:
+        self.calls.append(dict(tool_input))
+        return ToolExecutionResult(text=f"said: {tool_input['text']}")
+
+
 @pytest.mark.asyncio
 async def test_react_loop_executes_tool_and_returns_final_text() -> None:
     backend = _ScriptedBackend(
@@ -109,3 +127,122 @@ async def test_react_loop_executes_tool_and_returns_final_text() -> None:
     assert any(message.get("role") == "tool" for message in flat_messages)
     assert "tool_call" in seen
     assert "tool_result" in seen
+
+
+@pytest.mark.asyncio
+async def test_react_loop_suppresses_exact_duplicate_physical_action() -> None:
+    backend = _ScriptedBackend(
+        [
+            ModelTurnResult(
+                stop_reason="tool_use",
+                text="",
+                tool_calls=[ToolCall(id="tc1", name="say", input={"text": "hello"})],
+            ),
+            ModelTurnResult(
+                stop_reason="tool_use",
+                text="",
+                tool_calls=[ToolCall(id="tc2", name="say", input={"text": "hello"})],
+            ),
+            ModelTurnResult(stop_reason="end_turn", text="done"),
+        ]
+    )
+    tool = _RecordingActionTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    bus = EventBus()
+    seen: list[str] = []
+    bus.subscribe(lambda event: seen.append(event.type))
+    actions: list[tuple[str, dict[str, Any]]] = []
+    messages: list[Any] = []
+
+    result = await ReActLoop(
+        backend=backend,
+        tools=registry,
+        event_bus=bus,
+        non_repeatable_tools={"say"},
+    ).run(
+        system="sys",
+        messages=messages,
+        max_tokens=100,
+        on_action=lambda name, tool_input: actions.append((name, tool_input)),
+    )
+
+    assert tool.calls == [{"text": "hello"}]
+    assert actions == [("say", {"text": "hello"})]
+    assert [call.id for call in result.tool_calls] == ["tc1"]
+    assert "tool_duplicate_suppressed" in seen
+    tool_messages = [
+        message
+        for batch in messages
+        for message in (batch if isinstance(batch, list) else [batch])
+        if isinstance(message, dict) and message.get("role") == "tool"
+    ]
+    assert any("Duplicate action suppressed" in message["content"] for message in tool_messages)
+
+
+@pytest.mark.asyncio
+async def test_react_loop_allows_different_physical_actions() -> None:
+    backend = _ScriptedBackend(
+        [
+            ModelTurnResult(
+                stop_reason="tool_use",
+                text="",
+                tool_calls=[ToolCall(id="tc1", name="say", input={"text": "first"})],
+            ),
+            ModelTurnResult(
+                stop_reason="tool_use",
+                text="",
+                tool_calls=[ToolCall(id="tc2", name="say", input={"text": "second"})],
+            ),
+            ModelTurnResult(stop_reason="end_turn", text="done"),
+        ]
+    )
+    tool = _RecordingActionTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    result = await ReActLoop(
+        backend=backend,
+        tools=registry,
+        non_repeatable_tools={"say"},
+    ).run(system="sys", messages=[], max_tokens=100)
+
+    assert tool.calls == [{"text": "first"}, {"text": "second"}]
+    assert [call.id for call in result.tool_calls] == ["tc1", "tc2"]
+
+
+@pytest.mark.asyncio
+async def test_react_loop_allows_same_action_after_intervening_tool() -> None:
+    backend = _ScriptedBackend(
+        [
+            ModelTurnResult(
+                stop_reason="tool_use",
+                text="",
+                tool_calls=[ToolCall(id="tc1", name="say", input={"text": "status"})],
+            ),
+            ModelTurnResult(
+                stop_reason="tool_use",
+                text="",
+                tool_calls=[ToolCall(id="tc2", name="echo", input={"text": "new info"})],
+            ),
+            ModelTurnResult(
+                stop_reason="tool_use",
+                text="",
+                tool_calls=[ToolCall(id="tc3", name="say", input={"text": "status"})],
+            ),
+            ModelTurnResult(stop_reason="end_turn", text="done"),
+        ]
+    )
+    tool = _RecordingActionTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    registry.register(_EchoTool())
+
+    result = await ReActLoop(
+        backend=backend,
+        tools=registry,
+        non_repeatable_tools={"say"},
+    ).run(system="sys", messages=[], max_tokens=100)
+
+    assert tool.calls == [{"text": "status"}, {"text": "status"}]
+    assert [call.id for call in result.tool_calls] == ["tc1", "tc2", "tc3"]
