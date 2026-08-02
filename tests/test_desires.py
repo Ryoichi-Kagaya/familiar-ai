@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 import pytest
 
@@ -222,6 +223,36 @@ def test_worry_companion_cooldown_is_4h(desires: DesireSystem) -> None:
 
 def test_care_cooldown_is_2h(desires: DesireSystem) -> None:
     assert desires._drive_specs["care"].min_interval_seconds == 7200
+
+
+def test_recently_attempted_dominant_yields_to_other_ready_drive(
+    desires: DesireSystem,
+) -> None:
+    for name in desires._desires:
+        desires._desires[name] = 0.0
+    desires._desires["consolidate"] = 1.0
+    desires._desires["share_memory"] = 0.9
+    desires.update_context(
+        unfinished_business_bonus=0.3,
+        context_affordances={"consolidate": 1.2},
+    )
+
+    assert desires.get_dominant() == ("consolidate", 1.5)
+
+    desires.note_attempt("consolidate", at=time.time() - 121)
+
+    dominant = desires.get_dominant()
+    assert dominant is not None
+    assert dominant[0] == "share_memory"
+
+
+def test_attempt_respects_drive_minimum_interval(desires: DesireSystem) -> None:
+    for name in desires._desires:
+        desires._desires[name] = 0.0
+    desires._desires["consolidate"] = 1.0
+    desires.note_attempt("consolidate")
+
+    assert desires.get_dominant() is None
 
 
 def test_rest_prompt_is_localized_for_ja_and_en(

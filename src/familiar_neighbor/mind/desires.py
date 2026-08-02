@@ -168,6 +168,11 @@ class DesireSystem:
         self._companion_name = resolved_name or default_name
         self._drive_config_path = drive_config_path
         self._last_fired: dict[str, float] = {}
+        # Selection attempts are tracked separately from successful firings.
+        # A drive may be temporarily impossible (no camera, companion absent,
+        # or a gate-only drive); remembering the attempt prevents it from
+        # monopolising every idle tick while leaving its desire level intact.
+        self._last_attempted: dict[str, float] = {}
         self._schedule_multiplier = 1.0
         self._social_permission = 1.0
         self._energy_budget = 1.0
@@ -443,6 +448,11 @@ class DesireSystem:
             self._last_fired[desire_name] = time.time()
             self._save()
 
+    def note_attempt(self, desire_name: str, *, at: float | None = None) -> None:
+        """Record that a drive was selected, whether or not its action succeeded."""
+        if desire_name in self._drive_specs:
+            self._last_attempted[desire_name] = time.time() if at is None else float(at)
+
     def level(self, desire_name: str) -> float:
         """Return the current level of a desire (0.0–1.0)."""
         return self._desires.get(desire_name, 0.0)
@@ -481,7 +491,10 @@ class DesireSystem:
         energy = self._energy_budget if name in {"explore", "look_around", "play"} else 1.0
         interval = self._drive_specs.get(name)
         if interval is not None:
-            last = self._last_fired.get(name)
+            last = max(
+                self._last_fired.get(name, float("-inf")),
+                self._last_attempted.get(name, float("-inf")),
+            )
             if last is not None and interval.min_interval_seconds > 0:
                 if time.time() - last < interval.min_interval_seconds:
                     return 0.0
@@ -493,16 +506,28 @@ class DesireSystem:
         return min(1.5, level * affordance * permission * energy + bonus)
 
     def get_dominant(self) -> tuple[str, float] | None:
-        """Return the strongest desire if it exceeds the trigger threshold."""
+        """Return a ready desire without letting one drive starve the rest.
+
+        Effective score still decides among equally fresh candidates, so an
+        urgent newly activated drive wins. Once a drive has been attempted,
+        however, ready drives that have never run (then the least recently
+        attempted drive) take precedence. This keeps a permanently boosted or
+        temporarily impossible drive from monopolising autonomous idle turns.
+        """
         self.tick()
-        candidates = []
+        candidates: list[tuple[str, float, float]] = []
         for name, level in self._desires.items():
             score = self._effective_score(name, level)
             if score >= TRIGGER_THRESHOLD:
-                candidates.append((name, score))
+                last_activity = max(
+                    self._last_fired.get(name, float("-inf")),
+                    self._last_attempted.get(name, float("-inf")),
+                )
+                candidates.append((name, score, last_activity))
         if not candidates:
             return None
-        return max(candidates, key=lambda x: x[1])
+        name, score, _ = min(candidates, key=lambda item: (item[2], -item[1]))
+        return name, score
 
     def dominant_as_prompt(self) -> str | None:
         """Return a natural-language prompt for the dominant desire, if any."""

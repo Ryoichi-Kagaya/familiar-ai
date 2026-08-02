@@ -9,6 +9,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Prevent one permanently strong or currently impossible autonomous desire from
+  monopolizing every idle turn by fairly rotating ready drives and recording
+  failed/gated action attempts for per-drive cooldowns.
 - Route GUI and TUI auto-desire firings through the same effect-aware executor as
   the REPL, keeping silent/private drives out of the visible conversation while
   preserving normal UI output for genuinely social initiations.

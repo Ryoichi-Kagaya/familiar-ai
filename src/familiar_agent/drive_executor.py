@@ -96,6 +96,12 @@ class DriveActionExecutor:
         if spec is None:
             return DriveActionResult(fired=False, desire_name=desire_name, reason="unknown_drive")
 
+        # Record selection before any awaited work. Failed, gated, and
+        # unavailable actions must yield to other ready drives just like
+        # successful ones; otherwise one impossible drive can own every idle
+        # tick forever.
+        self._desires.note_attempt(desire_name)
+
         effect = spec.effect_type
         companion_here = self._companion_present(last_interaction_time)
 

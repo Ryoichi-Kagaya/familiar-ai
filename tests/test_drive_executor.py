@@ -141,11 +141,13 @@ def test_companion_absent_after_threshold(
 
 @pytest.mark.asyncio
 async def test_gate_drive_does_not_fire(
-    executor: DriveActionExecutor, mock_agent: MagicMock
+    executor: DriveActionExecutor, mock_agent: MagicMock, desires: DesireSystem
 ) -> None:
+    before = time.time()
     result = await executor.dispatch("rest", last_interaction_time=time.time())
     assert result.fired is False
     assert result.reason == "gate_drive"
+    assert desires._last_attempted["rest"] >= before
     mock_agent.run.assert_not_called()
 
 
@@ -271,12 +273,14 @@ async def test_reflect_saves_to_memory(
 
 @pytest.mark.asyncio
 async def test_look_around_no_camera_does_not_fire(
-    executor: DriveActionExecutor, mock_agent: MagicMock
+    executor: DriveActionExecutor, mock_agent: MagicMock, desires: DesireSystem
 ) -> None:
     mock_agent._camera = None
+    before = time.time()
     result = await executor.dispatch("look_around", last_interaction_time=time.time())
     assert result.fired is False
     assert result.reason == "no_camera"
+    assert desires._last_attempted["look_around"] >= before
 
 
 # ---------------------------------------------------------------------------
