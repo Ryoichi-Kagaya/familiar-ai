@@ -9,6 +9,10 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Suppress auto-desire turns across the GUI, TUI, and REPL during configured
+  quiet hours, then refresh desire growth from the live schedule while idle so
+  activity resumes after quiet hours end; nightly consolidation and urgent
+  reminders remain on their separate scheduling paths.
 - Prevent one permanently strong or currently impossible autonomous desire from
   monopolizing every idle turn by fairly rotating ready drives and recording
   failed/gated action attempts for per-drive cooldowns.

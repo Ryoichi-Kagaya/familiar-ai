@@ -1879,9 +1879,11 @@ class FamiliarWindow(QMainWindow):
                 # Skip desire-driven turns when auto_desire is disabled (default OFF)
                 if agent_config is not None and not getattr(agent_config, "auto_desire", False):
                     continue
+                self._desires.set_schedule_multiplier(0.0 if quiet_now else 1.0)
                 if not should_fire_idle_desire(
                     agent_running=self._agent_running,
                     has_pending_input=not self._input_queue.empty(),
+                    quiet_hours=quiet_now,
                     last_interaction=last_interaction,
                     now=now,
                     cooldown=DESIRE_COOLDOWN,

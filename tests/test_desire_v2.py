@@ -146,6 +146,22 @@ def test_circadian_modulation_returns_dict(tmp_path):
             assert v >= 0.0
 
 
+def test_schedule_multiplier_resumes_growth_after_quiet_hours(tmp_path):
+    ds = _make_desires(tmp_path)
+    ds._desires["look_around"] = 0.0
+    ds._desires["rest"] = 0.0
+
+    ds.set_schedule_multiplier(0.0)
+    ds._last_tick = time.time() - 60
+    ds.tick()
+    assert ds.level("look_around") == 0.0
+
+    ds.set_schedule_multiplier(1.0)
+    ds._last_tick = time.time() - 60
+    ds.tick()
+    assert ds.level("look_around") > 0.0
+
+
 # ---------------------------------------------------------------------------
 # Tests: Phase 3-2 — drive suppression
 # ---------------------------------------------------------------------------

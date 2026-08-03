@@ -658,10 +658,14 @@ class FamiliarApp(App):
         # Skip if auto_desire is disabled (default OFF)
         if not getattr(self.agent.config, "auto_desire", False):
             return
+        heartbeat = getattr(self.agent, "_heartbeat", None)
+        quiet_now = heartbeat.routine_state().quiet_hours if heartbeat else False
+        self.desires.set_schedule_multiplier(0.0 if quiet_now else 1.0)
         now = time.time()
         if not should_fire_idle_desire(
             agent_running=self._agent_running,
             has_pending_input=not self._input_queue.empty(),
+            quiet_hours=quiet_now,
             last_interaction=self._last_interaction,
             now=now,
             cooldown=DESIRE_COOLDOWN,
@@ -674,6 +678,7 @@ class FamiliarApp(App):
         if not should_fire_idle_desire(
             agent_running=self._agent_running,
             has_pending_input=not self._input_queue.empty(),
+            quiet_hours=quiet_now,
             last_interaction=self._last_interaction,
             now=time.time(),
             cooldown=DESIRE_COOLDOWN,

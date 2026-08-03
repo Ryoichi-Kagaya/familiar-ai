@@ -114,8 +114,35 @@ async def test_tui_idle_desire_dispatches_without_logging_murmur():
     assert callable(call.kwargs["run_social_turn"])
     app._run_agent.assert_not_awaited()
     app._log_system.assert_not_called()
+    desires.set_schedule_multiplier.assert_called_once_with(1.0)
     desires.satisfy.assert_not_called()
     assert desires.curiosity_target is None
+
+
+@pytest.mark.asyncio
+async def test_tui_idle_desire_sleeps_during_quiet_hours():
+    executor = MagicMock()
+    executor.dispatch = AsyncMock(return_value=DriveActionResult(fired=True, desire_name="reflect"))
+    desires = MagicMock()
+    desires.get_dominant.return_value = ("reflect", 0.9)
+    heartbeat = MagicMock()
+    heartbeat.routine_state.return_value = SimpleNamespace(quiet_hours=True)
+    app = SimpleNamespace(
+        agent=SimpleNamespace(config=SimpleNamespace(auto_desire=True), _heartbeat=heartbeat),
+        desires=desires,
+        _drive_executor=executor,
+        _agent_running=False,
+        _input_queue=asyncio.Queue(),
+        _last_interaction=time.time() - 3600,
+        _run_agent=AsyncMock(),
+    )
+
+    await FamiliarApp._desire_tick(app)
+
+    desires.set_schedule_multiplier.assert_called_once_with(0.0)
+    desires.get_dominant.assert_not_called()
+    executor.dispatch.assert_not_awaited()
+    app._run_agent.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -246,10 +246,12 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                 # Skip desire-driven turns when auto_desire is disabled
                 if not getattr(agent, "config", None) or not agent.config.auto_desire:
                     continue
+                desires.set_schedule_multiplier(0.0 if quiet_now else 1.0)
                 # Genuine idle — check desires, but respect cooldown after conversation
                 if not should_fire_idle_desire(
                     agent_running=False,
                     has_pending_input=not input_queue.empty(),
+                    quiet_hours=quiet_now,
                     last_interaction=last_interaction_time,
                     now=time.time(),
                     cooldown=DESIRE_COOLDOWN,

@@ -234,14 +234,22 @@ def should_fire_idle_desire(
     *,
     agent_running: bool,
     has_pending_input: bool,
+    quiet_hours: bool = False,
     last_interaction: float,
     now: float,
     cooldown: float = DESIRE_COOLDOWN,
 ) -> bool:
-    """Return True when an autonomous desire turn is allowed to fire."""
+    """Return True when an autonomous desire turn is allowed to fire.
+
+    Quiet hours are a sleep boundary for desire-driven activity. Nightly
+    consolidation has its own gate and urgent reminders are handled
+    separately, so neither needs an autonomous desire turn to stay awake.
+    """
     if agent_running:
         return False
     if has_pending_input:
+        return False
+    if quiet_hours:
         return False
     return now - last_interaction >= cooldown
 

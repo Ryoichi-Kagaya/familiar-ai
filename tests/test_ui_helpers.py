@@ -205,6 +205,16 @@ class TestShouldFireIdleDesire:
             cooldown=90.0,
         )
 
+    def test_false_during_quiet_hours(self):
+        assert not should_fire_idle_desire(
+            agent_running=False,
+            has_pending_input=False,
+            quiet_hours=True,
+            last_interaction=0.0,
+            now=999.0,
+            cooldown=90.0,
+        )
+
     def test_false_before_cooldown(self):
         assert not should_fire_idle_desire(
             agent_running=False,

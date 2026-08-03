@@ -480,6 +480,15 @@ class DesireSystem:
             str(k): max(0.0, min(1.5, float(v))) for k, v in (context_affordances or {}).items()
         }
 
+    def set_schedule_multiplier(self, schedule_multiplier: float) -> None:
+        """Refresh the current routine's growth multiplier between turns.
+
+        The broader context is updated during a turn, but quiet hours can end
+        while the agent is idle. Keeping this narrow avoids resetting social,
+        energy, and affordance context merely because the clock advanced.
+        """
+        self._schedule_multiplier = max(0.0, float(schedule_multiplier))
+
     def _effective_score(self, name: str, level: float) -> float:
         affordance = self._context_affordances.get(name, 1.0)
         permission = (
