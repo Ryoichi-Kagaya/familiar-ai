@@ -26,6 +26,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   `CAMERA_TAPO_PASSWORD` or `CAMERA_TAPO_HASH` is configured.
 
 ### Added
+- Outbound Telegram messaging as an agent tool: GUI, TUI, REPL, and autonomous turns can call
+  `send_telegram_message` for a profile linked through `/register`; recipients remain constrained
+  by `TELEGRAM_ALLOWED_IDS`. Inbound Telegram is now an additive channel on the exact GUI/TUI/REPL
+  agent and desire state instead of constructing a parallel mind; cross-channel turns are
+  serialized through one turn coordinator (including autonomous silent actions), while user
+  switching and history clearing share the same boundary. Inbound polling and reusable outbound
+  transport have separate lifecycles, and inbound turns omit the outbound tool to prevent
+  recursive duplicate replies.
 - Every human user turn now carries a runtime-supplied, timezone-aware send timestamp and
   explicit weekday in the model-visible message context, including mid-turn interrupts
 - Provider-neutral multimodal user turns with validated JPEG/PNG/WebP attachments shared by

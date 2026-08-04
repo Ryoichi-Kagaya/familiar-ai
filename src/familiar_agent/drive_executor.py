@@ -89,7 +89,38 @@ class DriveActionExecutor:
         on_text: Callable[[str], None] | None = None,
         interrupt_queue: Any = None,
     ) -> DriveActionResult:
-        """Route a desire to its effect handler and return the result."""
+        """Route a desire inside the same exclusive scope as channel turns."""
+        get_coordinator = getattr(self._agent, "_get_turn_coordinator", None)
+        if not callable(get_coordinator):
+            return await self._dispatch(
+                desire_name,
+                last_interaction_time=last_interaction_time,
+                run_social_turn=run_social_turn,
+                on_action=on_action,
+                on_text=on_text,
+                interrupt_queue=interrupt_queue,
+            )
+        async with get_coordinator().scope("autonomous-action"):
+            return await self._dispatch(
+                desire_name,
+                last_interaction_time=last_interaction_time,
+                run_social_turn=run_social_turn,
+                on_action=on_action,
+                on_text=on_text,
+                interrupt_queue=interrupt_queue,
+            )
+
+    async def _dispatch(
+        self,
+        desire_name: str,
+        *,
+        last_interaction_time: float,
+        run_social_turn: Callable[[str], Awaitable[None]] | None,
+        on_action: Callable[[str, dict[str, Any]], None] | None,
+        on_text: Callable[[str], None] | None,
+        interrupt_queue: Any,
+    ) -> DriveActionResult:
+        """Resolve and execute a drive after exclusivity has been acquired."""
         from familiar_neighbor.mind.desires import DriveEffect
 
         spec = self._desires._drive_specs.get(desire_name)
@@ -303,6 +334,7 @@ class DriveActionExecutor:
                 desires=self._desires,
                 inner_voice=nudge,
                 interrupt_queue=interrupt_queue,
+                turn_source="autonomous",
             )
         self._desires.satisfy(desire_name)
         logger.info("drive %s: social initiation turn done", desire_name)

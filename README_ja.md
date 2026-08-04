@@ -140,6 +140,8 @@ GUI から始めたい場合は、`API_KEY` が未設定でも初回起動時に
 | `ELEVENLABS_API_KEY` | 音声出力用 — [elevenlabs.io](https://elevenlabs.io/) |
 | `REALTIME_STT` | `true` でハンズフリー音声入力を有効化（`ELEVENLABS_API_KEY` が必要） |
 | `TTS_OUTPUT` | 音声出力先: `local`（PCスピーカー、デフォルト）\| `remote`（カメラスピーカー）\| `both` |
+| `TELEGRAM_BOT_TOKEN` | BotFather のトークン。Telegram チャットと outbound の `send_telegram_message` tool を有効化 |
+| `TELEGRAM_ALLOWED_IDS` | 任意の Telegram user ID allowlist（カンマ区切り） |
 | `THINKING_MODE` | Anthropicのみ — `auto`（デフォルト）\| `adaptive` \| `extended` \| `disabled` |
 | `THINKING_EFFORT` | 思考努力度: `high`（デフォルト）\| `medium` \| `low` \| `max`（Opus 4.6のみ） |
 
@@ -163,6 +165,24 @@ cp persona-template/ja.md ME.md
 run.bat              # Textual TUI（推奨）
 run.bat --no-tui     # シンプルなREPL
 ```
+
+### Telegram
+
+optional dependency を入れ、`TELEGRAM_BOT_TOKEN` を設定して使う画面に Telegram を足します。
+
+```bash
+uv sync --extra telegram
+./run.sh --telegram            # TUI + Telegram
+./run.sh --no-tui --telegram   # REPL + Telegram
+./run.sh --gui --telegram      # GUI + Telegram
+```
+
+bot に `/register default` を送ると、Telegram アカウントが現在の familiar user profile に
+紐付きます。Telegram は選択した GUI・TUI・REPL が所有する、まったく同じ agent と欲求状態の
+ひとつの channel として動きます。会話履歴・記憶・tool・内部状態を Telegram 専用の別 agent に
+複製せず、channel をまたぐ turn は必ず一つずつ処理します。同じ agent は
+`send_telegram_message` で明示的なメッセージや有用なフォローアップも送れます。Telegram から
+来た通常 turn だけは outbound tool を一時的に外すため、通常返信との二重送信は起きません。
 
 ---
 

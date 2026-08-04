@@ -95,7 +95,9 @@ from .tools.memory import MemoryTool, ObservationMemory
 from .tools.tom import ToMTool
 from .tools.mobility import MobilityTool
 from .tools.stt import STTTool
+from .tools.telegram import TelegramTool, TelegramTransport
 from .tools.tts import TTSTool
+from .turn_coordinator import TurnCoordinator, TurnRequest
 from ._i18n import _t
 from ._ui_helpers import night_key_for
 from .mcp_client import MCPClientManager, _resolve_config_path
@@ -112,6 +114,7 @@ from familiar_capabilities import (
     MobilityCapability,
     RoutineCapability,
     SelfLedgerCapability,
+    TelegramCapability,
     ToMCapability,
     VoiceCapability,
 )
@@ -652,6 +655,12 @@ class EmbodiedAgent:
         self.messages: list = []
         self._started_at = time.time()
         self._turn_count = 0
+        # All presentation surfaces share one agent. The coordinator owns
+        # current-user switching and single-flight turn execution.
+        self._turn_coordinator = TurnCoordinator(
+            runner=self._run_request,
+            switch_user=self.switch_user,
+        )
         self._session_input_tokens: int = 0
         self._session_output_tokens: int = 0
         self._last_context_tokens: int = 0
@@ -667,6 +676,8 @@ class EmbodiedAgent:
         self._mobility: MobilityTool | None = None
         self._tts: TTSTool | None = None
         self._stt: STTTool | None = None
+        self._telegram: TelegramTool | None = None
+        self._telegram_transport: TelegramTransport | None = None
         self._me_md: str = self._load_me_md()  # loaded once; restart to pick up changes
         self._memory = ObservationMemory()
         self._memory_worker = MemoryJobWorker(self._memory)
@@ -793,7 +804,12 @@ class EmbodiedAgent:
         self._init_tools()
 
     async def switch_user(self, user_id: str) -> str:
-        """Switch the active user in-session. Returns the new user's display name."""
+        """Switch the active user without racing a turn from another channel."""
+        async with self._get_turn_coordinator().scope("user-switch"):
+            return self._switch_user_unlocked(user_id)
+
+    def _switch_user_unlocked(self, user_id: str) -> str:
+        """Apply a user switch while the caller owns the turn scope."""
         user_id = user_id.strip()
         if user_id == self._current_user.id:
             return self._current_user.name
@@ -1134,6 +1150,16 @@ class EmbodiedAgent:
                 stt_cfg.elevenlabs_api_key, stt_cfg.language, rtsp_url, stt_cfg.input
             )
 
+        telegram_config = self.config.telegram
+        if telegram_config.token:
+            self._telegram_transport = TelegramTransport(telegram_config.token)
+            self._telegram = TelegramTool(
+                telegram_config,
+                self._user_registry,
+                current_user_id=lambda: self._current_user.id,
+                transport=self._telegram_transport,
+            )
+
         # World model: persistent scene entity tracker (Phase 1)
         # Reuses the same SQLite DB as ObservationMemory via a separate connection.
         import sqlite3 as _sqlite3
@@ -1174,6 +1200,9 @@ class EmbodiedAgent:
             registry.register(MobilityCapability(self._mobility))
         if self._tts:
             registry.register(VoiceCapability(self._tts))
+        telegram_tool = getattr(self, "_telegram", None)
+        if telegram_tool is not None:
+            registry.register(TelegramCapability(telegram_tool))
         registry.register(
             MemoryCapability(
                 self._memory_tool,
@@ -3472,6 +3501,12 @@ class EmbodiedAgent:
                 await asyncio.wait_for(self._mcp.stop(), timeout=2.0)
             except (asyncio.TimeoutError, Exception):
                 pass
+        telegram_transport = getattr(self, "_telegram_transport", None)
+        if telegram_transport is not None:
+            try:
+                await asyncio.wait_for(telegram_transport.close(), timeout=2.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
         try:
             await asyncio.wait_for(asyncio.to_thread(self._memory.close), timeout=1.0)
         except (asyncio.TimeoutError, Exception):
@@ -3550,7 +3585,46 @@ class EmbodiedAgent:
         interrupt_queue=None,
         excluded_tools: frozenset[str] | None = None,
         user_images: list[str] | None = None,
+        user_id: str | None = None,
+        turn_source: str = "local",
     ) -> str:
+        """Submit one turn to the coordinator shared by every input channel."""
+        request = TurnRequest(
+            user_input=user_input,
+            source=turn_source,
+            user_id=user_id,
+            on_action=on_action,
+            on_text=on_text,
+            on_image=on_image,
+            on_phase=on_phase,
+            on_tool_result=on_tool_result,
+            desires=desires,
+            inner_voice=inner_voice,
+            interrupt_queue=interrupt_queue,
+            excluded_tools=excluded_tools,
+            user_images=user_images,
+        )
+        return await self._get_turn_coordinator().run(request)
+
+    def _get_turn_coordinator(self) -> TurnCoordinator:
+        """Return the coordinator, including for lightweight ``__new__`` tests."""
+        coordinator = getattr(self, "_turn_coordinator", None)
+        if coordinator is None:
+            coordinator = self._turn_coordinator = TurnCoordinator(
+                runner=self._run_request,
+                switch_user=self.switch_user,
+            )
+        return coordinator
+
+    @property
+    def is_turn_busy(self) -> bool:
+        return self._get_turn_coordinator().is_busy
+
+    @property
+    def active_turn_source(self) -> str | None:
+        return self._get_turn_coordinator().active_source
+
+    async def _run_request(self, request: TurnRequest) -> str:
         """Run one conversation turn with the agent loop.
 
         inner_voice: agent's own desire/impulse (injected into system prompt, NOT a user message).
@@ -3562,6 +3636,17 @@ class EmbodiedAgent:
         lifecycle methods; finalisation (meta-gate repair, continuation
         status, auto-say, commit) stays here.
         """
+        user_input = request.user_input
+        on_action = request.on_action
+        on_text = request.on_text
+        on_image = request.on_image
+        on_phase = request.on_phase
+        on_tool_result = request.on_tool_result
+        desires = request.desires
+        inner_voice = request.inner_voice
+        interrupt_queue = request.interrupt_queue
+        excluded_tools = request.excluded_tools
+        user_images = request.user_images
         user_turn = coerce_user_turn(user_input)
         if user_images:
             legacy_images = tuple(
@@ -3574,6 +3659,7 @@ class EmbodiedAgent:
             )
         user_input_text = user_turn.text
         ctx = TurnContext(user_input=user_input_text, profile="neighbor")
+        ctx.metadata["turn_source"] = request.source
 
         # Self-initiated turns need the current conversation as context, but
         # their synthetic placeholder, tool trace and reply must not become
@@ -3584,9 +3670,8 @@ class EmbodiedAgent:
             main_messages = self.messages
             self.messages = list(self.messages)
 
-        # Mark the turn in flight so the inner loop skips its idle ticks; this
-        # is a visibility flag for background cognition, NOT a lock — turn
-        # single-flight is owned by the UI loops.
+        # Mark the turn in flight so the inner loop skips its idle ticks. The
+        # public run() wrapper owns single-flight across presentation surfaces.
         self._turn_active = True
         latency = getattr(self, "_latency", None) or LatencyRecorder(enabled=False)
         try:
@@ -3789,6 +3874,11 @@ class EmbodiedAgent:
     def clear_history(self) -> None:
         """Clear conversation history (start fresh)."""
         self.messages = []
+
+    async def clear_history_exclusive(self, *, source: str = "command") -> None:
+        """Clear history after any in-flight channel turn has completed."""
+        async with self._get_turn_coordinator().scope(source):
+            self.clear_history()
 
     async def execute_desire_silent_action(self, desire_name: str) -> None:
         """Execute a SILENT_ACTION drive directly without generating an LLM turn.

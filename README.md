@@ -145,6 +145,8 @@ the setup dialog for you on first launch when `API_KEY` is still missing.
 | `ELEVENLABS_API_KEY` | For voice output — [elevenlabs.io](https://elevenlabs.io/) |
 | `REALTIME_STT` | `true` to enable always-on hands-free voice input (requires `ELEVENLABS_API_KEY`) |
 | `TTS_OUTPUT` | Where to play audio: `local` (PC speaker, default) \| `remote` (camera speaker) \| `both` |
+| `TELEGRAM_BOT_TOKEN` | BotFather token; enables Telegram chat and the outbound `send_telegram_message` tool |
+| `TELEGRAM_ALLOWED_IDS` | Optional comma-separated Telegram user-ID allowlist |
 | `THINKING_MODE` | Anthropic only — `auto` (default) \| `adaptive` \| `extended` \| `disabled` |
 | `THINKING_EFFORT` | Adaptive thinking effort: `high` (default) \| `medium` \| `low` \| `max` (Opus 4.6 only) |
 
@@ -172,6 +174,24 @@ run-gui.bat          # Desktop GUI launcher
 run.bat --gui        # Desktop GUI (same as run-gui.bat)
 run.bat --no-tui     # Plain REPL
 ```
+
+### Telegram
+
+Install the optional dependency, set `TELEGRAM_BOT_TOKEN`, and add Telegram to a surface:
+
+```bash
+uv sync --extra telegram
+./run.sh --telegram            # TUI + Telegram
+./run.sh --no-tui --telegram   # REPL + Telegram
+./run.sh --gui --telegram      # GUI + Telegram
+```
+
+Send `/register default` to the bot to link your Telegram account to the current familiar user
+profile. Telegram is a channel on the exact same agent and desire state owned by the selected
+GUI/TUI/REPL: conversation history, memory, tools, and inner state are no longer duplicated in a
+parallel Telegram agent. Cross-channel turns run one at a time. The shared agent can also use
+`send_telegram_message` for explicit messages and useful proactive follow-ups; inbound Telegram
+turns temporarily omit that outbound tool so the ordinary chat reply is never sent twice.
 
 ---
 

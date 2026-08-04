@@ -36,6 +36,7 @@ from ._ui_helpers import (
 from .drive_executor import DriveActionExecutor
 from .realtime_stt_session import create_realtime_stt_controller, RealtimeSttController
 from .image_input import ImageInputError, parse_image_command
+from .telegram_bot import TelegramChannel
 
 if TYPE_CHECKING:
     from .agent import EmbodiedAgent
@@ -181,7 +182,11 @@ class FamiliarApp(App):
     ]
 
     def __init__(
-        self, agent: "EmbodiedAgent", desires: "DesireSystem", *, term_attrs: object = None
+        self,
+        agent: "EmbodiedAgent",
+        desires: "DesireSystem",
+        *,
+        term_attrs: object = None,
     ) -> None:
         super().__init__()
         self._term_attrs = term_attrs  # saved before Textual changes raw mode
@@ -190,6 +195,11 @@ class FamiliarApp(App):
         self._drive_executor = DriveActionExecutor(agent, desires)
         self._agent_name = agent.config.agent_name
         self._companion_name = agent.config.companion_name
+        current_profile = getattr(agent, "current_user", None)
+        current_profile_id = getattr(current_profile, "id", None)
+        self._current_user_id = (
+            current_profile_id if isinstance(current_profile_id, str) else "default"
+        )
         self._input_queue: asyncio.Queue[str | UserTurn | None] = asyncio.Queue()
         self._last_interaction = time.time()
         self._agent_running = False
@@ -199,6 +209,12 @@ class FamiliarApp(App):
         self._stop_recording: asyncio.Event = asyncio.Event()
         self._last_toggle_listen: float = 0.0  # debounce Ctrl+T key-repeat
         self._closing = False
+        self._telegram_channel = TelegramChannel.from_config(
+            agent.config,
+            agent,
+            desires,
+            on_error=self._on_telegram_error,
+        )
         # ESC cancel support
         self._cancel_event: asyncio.Event = asyncio.Event()
         self._agent_task: asyncio.Task | None = None
@@ -284,12 +300,22 @@ class FamiliarApp(App):
         if callable(start_mcp_early):
             start_mcp_early()
         self.run_worker(self._process_queue(), exclusive=False)
+        if self._telegram_channel is not None:
+            self._telegram_channel.start()
         # Start realtime STT if configured
         if self._realtime_stt:
             self.run_worker(self._start_realtime_stt(), exclusive=False)
         # Show initializing status until embedding model is ready
         if not self.agent.is_embedding_ready:
             asyncio.create_task(self._embedding_ready_watcher())
+
+    def _on_telegram_error(self, exc: Exception) -> None:
+        self._log_system(f"⚠ Telegram failed: {exc}")
+
+    def on_unmount(self) -> None:
+        """Ensure the Telegram polling task never outlives the TUI event loop."""
+        if self._telegram_channel is not None:
+            self._telegram_channel.cancel()
 
     async def _embedding_ready_watcher(self) -> None:
         """Show initializing status in #stream until embedding model is ready."""
@@ -346,7 +372,7 @@ class FamiliarApp(App):
             self.exit()
             return
         if text == "/clear":
-            self.agent.clear_history()
+            await self.agent.clear_history_exclusive(source="tui-command")
             self._log_system(_t("history_cleared"))
             return
         if text == "/transcribe":
@@ -374,6 +400,7 @@ class FamiliarApp(App):
                 self._log_system(f"登録ユーザー:\n{lines}")
                 return
             name = await self.agent.switch_user(user_id)
+            self._current_user_id = user_id
             self._log_system(f"── {name} に切り替わりました ──")
             return
 
@@ -547,6 +574,8 @@ class FamiliarApp(App):
                     desires=self.desires,
                     inner_voice=inner_voice,
                     interrupt_queue=self._input_queue,
+                    user_id=self._current_user_id,
+                    turn_source="tui-autonomous" if inner_voice else "tui",
                 )
             )
             await self._agent_task
@@ -579,9 +608,10 @@ class FamiliarApp(App):
         if not bool(getattr(self.agent.config, "sleep_consolidation", False)):
             return  # short-circuit before touching the marker file
         try:
+            turn_busy = self._agent_running or bool(getattr(self.agent, "is_turn_busy", False))
             if should_run_sleep_consolidation(
                 enabled=True,
-                agent_running=self._agent_running,
+                agent_running=turn_busy,
                 has_pending_input=not self._input_queue.empty(),
                 quiet_hours=quiet,
                 now_dt=datetime.now(),
@@ -607,8 +637,9 @@ class FamiliarApp(App):
             return
         try:
             quiet = quiet_now
+            turn_busy = self._agent_running or bool(getattr(self.agent, "is_turn_busy", False))
             reminders = should_fire_commitment_reminder(
-                agent_running=self._agent_running,
+                agent_running=turn_busy,
                 has_pending_input=not self._input_queue.empty(),
                 last_interaction=self._last_interaction,
                 now=time.time(),
@@ -619,7 +650,7 @@ class FamiliarApp(App):
             if not reminders:
                 return
             # Re-check the gate around the awaited run (input may have arrived).
-            if self._agent_running or not self._input_queue.empty():
+            if turn_busy or not self._input_queue.empty():
                 return
             # Record the fire BEFORE the turn: the cadence advances regardless of
             # the turn's outcome, and a mid-turn snooze reset survives intact.
@@ -662,8 +693,9 @@ class FamiliarApp(App):
         quiet_now = heartbeat.routine_state().quiet_hours if heartbeat else False
         self.desires.set_schedule_multiplier(0.0 if quiet_now else 1.0)
         now = time.time()
+        turn_busy = self._agent_running or bool(getattr(self.agent, "is_turn_busy", False))
         if not should_fire_idle_desire(
-            agent_running=self._agent_running,
+            agent_running=turn_busy,
             has_pending_input=not self._input_queue.empty(),
             quiet_hours=quiet_now,
             last_interaction=self._last_interaction,
@@ -676,7 +708,7 @@ class FamiliarApp(App):
         if dominant is None:
             return
         if not should_fire_idle_desire(
-            agent_running=self._agent_running,
+            agent_running=self._agent_running or bool(getattr(self.agent, "is_turn_busy", False)),
             has_pending_input=not self._input_queue.empty(),
             quiet_hours=quiet_now,
             last_interaction=self._last_interaction,
@@ -809,7 +841,10 @@ class FamiliarApp(App):
             stream.update("")
 
     def action_clear_history(self) -> None:
-        self.agent.clear_history()
+        self.run_worker(self._clear_history(), exclusive=False)
+
+    async def _clear_history(self) -> None:
+        await self.agent.clear_history_exclusive(source="tui-command")
         self._log_system(_t("history_cleared"))
 
     def action_cancel_turn(self) -> None:
@@ -870,6 +905,9 @@ class FamiliarApp(App):
                     await asyncio.wait_for(self._realtime_stt.stop(), timeout=2.0)
                 except (asyncio.TimeoutError, Exception):
                     pass
+            if self._telegram_channel is not None:
+                await self._telegram_channel.stop()
+            self._telegram_channel = None
             try:
                 await asyncio.wait_for(self.agent.close(), timeout=2.0)
             except (asyncio.TimeoutError, Exception):

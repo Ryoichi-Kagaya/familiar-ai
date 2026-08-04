@@ -134,6 +134,7 @@ class VoiceServer:
                         on_action=_on_action,
                         desires=self._desires,
                         excluded_tools=frozenset({"listen"}),
+                        turn_source="voice",
                     )
                     or ""
                 ).strip()

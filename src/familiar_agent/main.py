@@ -23,6 +23,7 @@ from .drive_executor import DriveActionExecutor
 from .image_input import ImageInputError, parse_image_command
 from .realtime_stt_session import create_realtime_stt_session
 from .setup import run_cli_setup_wizard
+from .telegram_bot import TelegramChannel
 from .wake import WakeListener, wait_input_or_wake
 from ._i18n import BANNER, _t
 from ._ui_helpers import (
@@ -80,7 +81,11 @@ def setup_logging(debug: bool = False) -> None:
     logging.info("Logging initialized. Level: %s, File: %s", logging.getLevelName(level), log_file)
 
 
-async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False) -> None:
+async def repl(
+    agent: EmbodiedAgent,
+    desires: DesireSystem,
+    debug: bool = False,
+) -> None:
     print(BANNER)
 
     if not agent.is_embedding_ready:
@@ -110,6 +115,9 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
     # so user input is captured even while the agent is busy.
     input_queue: asyncio.Queue[str | UserTurn | None] = asyncio.Queue()
     last_interaction_time: float = time.time()
+    current_profile = getattr(agent, "current_user", None)
+    current_profile_id = getattr(current_profile, "id", None)
+    surface_user_id = current_profile_id if isinstance(current_profile_id, str) else "default"
 
     async def _stdin_reader() -> None:
         """Read stdin continuously into the queue."""
@@ -125,6 +133,18 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                 print(f"\n  ⚠ {exc}")
 
     stdin_task = asyncio.create_task(_stdin_reader())
+
+    def _on_telegram_error(_exc: Exception) -> None:
+        print("\n  ⚠ Telegram channel stopped. Check the log for details.")
+
+    telegram_channel = TelegramChannel.from_config(
+        agent.config,
+        agent,
+        desires,
+        on_error=_on_telegram_error,
+    )
+    if telegram_channel is not None:
+        telegram_channel.start()
 
     # ── Realtime STT (hands-free voice input) ────────────────────────
     stt_session = create_realtime_stt_session()
@@ -163,7 +183,14 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                 for user_input in pending:
                     last_interaction_time = time.time()
                     await _handle_user(
-                        user_input, agent, desires, on_action, on_text, debug, input_queue
+                        user_input,
+                        agent,
+                        desires,
+                        on_action,
+                        on_text,
+                        debug,
+                        input_queue,
+                        user_id=surface_user_id,
                     )
                 continue
 
@@ -197,6 +224,7 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                     logging.getLogger(__name__).exception("sleep consolidation gate failed")
                 # Proactive commitment reminders fire independently of auto_desire
                 # (a baseline neighbour behaviour, toggled by FAMILIAR_PROACTIVE_REMINDERS).
+                turn_busy = bool(getattr(agent, "is_turn_busy", False))
                 store = getattr(agent, "_commitment_store", None)
                 if (
                     store is not None
@@ -206,7 +234,7 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                     try:
                         quiet = quiet_now
                         reminders = should_fire_commitment_reminder(
-                            agent_running=False,
+                            agent_running=turn_busy,
                             has_pending_input=not input_queue.empty(),
                             last_interaction=last_interaction_time,
                             now=time.time(),
@@ -231,6 +259,8 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                                 desires=desires,
                                 inner_voice=commitment_reminder_prompt(reminders),
                                 interrupt_queue=input_queue,
+                                user_id=surface_user_id,
+                                turn_source="repl-autonomous",
                             )
                         except (KeyboardInterrupt, EOFError, asyncio.CancelledError):
                             raise
@@ -249,7 +279,7 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                 desires.set_schedule_multiplier(0.0 if quiet_now else 1.0)
                 # Genuine idle — check desires, but respect cooldown after conversation
                 if not should_fire_idle_desire(
-                    agent_running=False,
+                    agent_running=turn_busy,
                     has_pending_input=not input_queue.empty(),
                     quiet_hours=quiet_now,
                     last_interaction=last_interaction_time,
@@ -275,9 +305,23 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                     except KeyError:
                         murmur = _t("desire_default")
                     print(f"\n{murmur}\n")
+
+                    async def run_social_turn(inner_voice: str) -> None:
+                        await agent.run(
+                            "",
+                            on_action=on_action,
+                            on_text=on_text,
+                            desires=desires,
+                            inner_voice=inner_voice,
+                            interrupt_queue=input_queue,
+                            user_id=surface_user_id,
+                            turn_source="repl-autonomous",
+                        )
+
                     result = await executor.dispatch(
                         desire_name,
                         last_interaction_time=last_interaction_time,
+                        run_social_turn=run_social_turn,
                         on_action=on_action,
                         on_text=on_text,
                         interrupt_queue=input_queue,
@@ -289,7 +333,14 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                     # Had pending input but no desire — process it as user message
                     for msg in pending_items:
                         await _handle_user(
-                            msg, agent, desires, on_action, on_text, debug, input_queue
+                            msg,
+                            agent,
+                            desires,
+                            on_action,
+                            on_text,
+                            debug,
+                            input_queue,
+                            user_id=surface_user_id,
                         )
                     continue
 
@@ -303,19 +354,35 @@ async def repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool = False)
                             buffered.append(item)
                     for msg in buffered:
                         await _handle_user(
-                            msg, agent, desires, on_action, on_text, debug, input_queue
+                            msg,
+                            agent,
+                            desires,
+                            on_action,
+                            on_text,
+                            debug,
+                            input_queue,
+                            user_id=surface_user_id,
                         )
                 continue
 
             if queued_input:
                 await _handle_user(
-                    queued_input, agent, desires, on_action, on_text, debug, input_queue
+                    queued_input,
+                    agent,
+                    desires,
+                    on_action,
+                    on_text,
+                    debug,
+                    input_queue,
+                    user_id=surface_user_id,
                 )
 
     except (KeyboardInterrupt, EOFError, asyncio.CancelledError):
         pass
     finally:
         stdin_task.cancel()
+        if telegram_channel is not None:
+            await telegram_channel.stop()
         if stt_session:
             try:
                 await asyncio.wait_for(stt_session.stop(), timeout=3.0)
@@ -339,6 +406,7 @@ async def _handle_user(
     on_text,
     debug: bool,
     interrupt_queue=None,
+    user_id: str | None = None,
 ) -> None:
     """Process a single user message."""
     user_turn = coerce_user_turn(user_input)
@@ -346,7 +414,7 @@ async def _handle_user(
     if text == "/quit" and not user_turn.images:
         raise EOFError
     elif text == "/clear" and not user_turn.images:
-        agent.clear_history()
+        await agent.clear_history_exclusive(source="repl-command")
         print(_t("repl_history_cleared"))
     elif text == "/desires" and not user_turn.images:
         if debug:
@@ -363,6 +431,8 @@ async def _handle_user(
             on_text=on_text,
             desires=desires,
             interrupt_queue=interrupt_queue,
+            user_id=user_id,
+            turn_source="repl",
         )
         if desires.curiosity_target:
             print(f"\n  [気になること: {desires.curiosity_target}]")
@@ -611,9 +681,7 @@ def main() -> None:
     use_gui = "--gui" in sys.argv
     use_voice_server = "--voice-server" in sys.argv
     use_telegram = "--telegram" in sys.argv
-    use_tui = (
-        "--no-tui" not in sys.argv and not use_gui and not use_voice_server and not use_telegram
-    )
+    use_tui = "--no-tui" not in sys.argv and not use_gui and not use_voice_server
 
     voice_port = 8090
     if "--port" in sys.argv:
@@ -647,6 +715,15 @@ def main() -> None:
             return
 
     config = AgentConfig()
+    telegram_config = getattr(config, "telegram", None)
+    if telegram_config is not None:
+        telegram_config.inbound_enabled = use_telegram
+    if use_telegram:
+        if telegram_config is None or not telegram_config.token:
+            print(
+                "Warning: --telegram flag set but TELEGRAM_BOT_TOKEN is not set. "
+                "Starting the selected interface without Telegram."
+            )
 
     if use_voice_server:
         from .voice_server import run_voice_server
@@ -656,62 +733,7 @@ def main() -> None:
         from .gui import run_gui
 
         desires = DesireSystem(companion_name=config.companion_name)
-        bg: list = []
-        if use_telegram:
-            token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-            if not token:
-                print(
-                    "Warning: --telegram flag set but TELEGRAM_BOT_TOKEN is not set. Starting GUI only."
-                )
-            else:
-                from .telegram_bot import run_telegram_bot
-                from .tools.camera import CameraTool, _PriorityPTZLock
-
-                # Both agents share one CameraTool to avoid dual RTSP connections.
-                # A shared _PriorityPTZLock serialises PTZ moves; GUI wins ties.
-                import dataclasses as _dc
-
-                shared_camera = None
-                if config.camera.host:
-                    cam = config.camera
-                    ptz_lock = _PriorityPTZLock()
-                    shared_camera = CameraTool(
-                        cam.host,
-                        cam.username,
-                        cam.password,
-                        cam.port,
-                        preview=cam.preview,
-                        ptz_host=cam.ptz_host,
-                        ptz_username=cam.ptz_username,
-                        ptz_password=cam.ptz_password,
-                        ptz_port=cam.ptz_port,
-                        ptz_lock=ptz_lock,
-                    )
-                tg_config = _dc.replace(config, tts=_dc.replace(config.tts, volume=0.0))
-                tg_agent = EmbodiedAgent(
-                    tg_config, shared_camera=shared_camera, camera_gui_priority=False
-                )
-                tg_desires = DesireSystem(companion_name=config.companion_name)
-                bg.append(run_telegram_bot(token, tg_agent, tg_desires))
-                run_gui(config, desires, background_coros=bg, shared_camera=shared_camera)
-                return
-        run_gui(config, desires, background_coros=bg or None)
-    elif use_telegram:
-        token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        if not token:
-            print("Error: TELEGRAM_BOT_TOKEN is not set in your .env file.")
-            sys.exit(1)
-        from .telegram_bot import run_telegram_bot
-
-        import dataclasses as _dc
-
-        tg_config = _dc.replace(config, tts=_dc.replace(config.tts, volume=0.0))
-        agent = EmbodiedAgent(tg_config)
-        desires = DesireSystem(companion_name=config.companion_name)
-        try:
-            asyncio.run(run_telegram_bot(token, agent, desires))
-        except KeyboardInterrupt:
-            pass
+        run_gui(config, desires)
     elif use_tui:
         agent = EmbodiedAgent(config)
         desires = DesireSystem(companion_name=config.companion_name)

@@ -17,11 +17,13 @@ import asyncio
 import base64
 import io
 import logging
-import os
 import re
+from collections.abc import Callable
+from typing import Any
 
 from familiar_runtime.models import ImageAttachment, UserTurn
 
+from .config import AgentConfig, TelegramConfig
 from .image_input import ImageInputError, normalize_image_bytes
 from .user_profile import UserRegistry
 
@@ -30,7 +32,8 @@ logger = logging.getLogger(__name__)
 _MAX_MSG_LEN = 4096  # Telegram hard limit
 _TELEGRAM_CHANNEL_CONTEXT = """\
 [Telegram text chat]
-- Your final reply and any `say` text are delivered to this Telegram chat.
+- Your final reply is delivered to this Telegram chat. Reply in the normal final channel;
+  `say` is intentionally unavailable on inbound Telegram turns because it controls room audio.
 - `speak` is a separate StackChan room-device action. Do not claim that a voice or reply tool is
   unavailable unless you called that tool in this turn and its result explicitly failed.
 - Never include tool protocol, private stage directions, or turn-control messages in the reply.
@@ -71,19 +74,38 @@ def _sanitize_telegram_text(text: str) -> str:
     return "" if _TURN_CONTROL_RE.fullmatch(clean) else clean
 
 
-def _parse_allowed_ids() -> set[int]:
-    raw = os.environ.get("TELEGRAM_ALLOWED_IDS", "").strip()
-    if not raw:
-        return set()
-    ids: set[int] = set()
-    for part in raw.split(","):
-        part = part.strip()
-        if part.isdigit():
-            ids.add(int(part))
-    return ids
+async def _run_telegram_agent_turn(
+    agent,
+    desires,
+    user_turn: UserTurn,
+    *,
+    profile_id: str | None,
+    on_image,
+) -> str:
+    """Run an inbound Telegram turn on the surface-owned shared agent."""
+    return (
+        await agent.run(
+            user_turn,
+            on_image=on_image,
+            desires=desires,
+            user_id=profile_id,
+            turn_source="telegram",
+            # The visible reply is delivered by this presentation boundary.
+            # Removing outbound Telegram prevents recursive/double sends while
+            # keeping the tool available to GUI/TUI/REPL and autonomous turns.
+            excluded_tools=frozenset({"say", "send_telegram_message"}),
+        )
+        or ""
+    ).strip()
 
 
-async def run_telegram_bot(token: str, agent, desires) -> None:
+async def run_telegram_bot(
+    token: str,
+    agent,
+    desires,
+    *,
+    allowed_ids: set[int] | None = None,
+) -> None:
     """Run the Telegram bot using long-polling until cancelled."""
     try:
         from telegram import Update
@@ -99,16 +121,13 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
             "python-telegram-bot is not installed. Run: uv pip install 'familiar-ai[telegram]'"
         ) from exc
 
-    allowed_ids = _parse_allowed_ids()
+    allowed_ids = set(allowed_ids or ())
     if allowed_ids:
         logger.info("Telegram: allowed user IDs: %s", allowed_ids)
     else:
         logger.info("Telegram: no ID allowlist — any user can chat")
 
     registry = UserRegistry()
-
-    # Serialize all agent turns so history stays consistent
-    _turn_lock = asyncio.Lock()
 
     def _is_allowed(user_id: int) -> bool:
         return not allowed_ids or user_id in allowed_ids
@@ -133,7 +152,11 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
             return
         if update.message is None:
             return
-        agent.clear_history()
+        clear_exclusive = getattr(agent, "clear_history_exclusive", None)
+        if callable(clear_exclusive):
+            await clear_exclusive(source="telegram-command")
+        else:
+            agent.clear_history()
         await update.message.reply_text("会話履歴をリセットしました。")
 
     async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -201,37 +224,25 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
 
         await update.message.chat.send_action("typing")  # type: ignore[union-attr]
 
-        say_chunks: list[str] = []
         captured_images: list[str] = []
-
-        def on_action(name: str, args: dict) -> None:
-            if name == "say":
-                t = args.get("text", "")
-                if isinstance(t, str) and t:
-                    say_chunks.append(t)
 
         def on_image(b64: str) -> None:
             captured_images.append(b64)
 
-        async with _turn_lock:
-            if profile_id:
-                await agent.switch_user(profile_id)
-            try:
-                final_text = (
-                    await agent.run(
-                        user_turn,
-                        on_action=on_action,
-                        on_image=on_image,
-                        desires=desires,
-                    )
-                    or ""
-                ).strip()
-            except Exception:
-                logger.exception("Agent error during Telegram turn")
-                await update.message.reply_text(  # type: ignore[union-attr]
-                    "エラーが発生しました。ログを確認してください。"
-                )
-                return
+        try:
+            final_text = await _run_telegram_agent_turn(
+                agent,
+                desires,
+                user_turn,
+                profile_id=profile_id,
+                on_image=on_image,
+            )
+        except Exception:
+            logger.exception("Agent error during Telegram turn")
+            await update.message.reply_text(  # type: ignore[union-attr]
+                "エラーが発生しました。ログを確認してください。"
+            )
+            return
 
         for b64 in captured_images:
             try:
@@ -242,17 +253,6 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
             except Exception:
                 logger.exception("Failed to send camera capture to Telegram")
 
-        # Prefer useful say() output; if it contained only internal narration,
-        # fall back to the final response instead of exposing the narration.
-        clean_say_chunks: list[str] = []
-        for chunk in say_chunks:
-            clean = _sanitize_telegram_text(chunk)
-            if clean != chunk.strip():
-                logger.info(
-                    "Telegram sanitized say output: raw=%r clean=%r", chunk[:500], clean[:500]
-                )
-            if clean:
-                clean_say_chunks.append(clean)
         clean_final = _sanitize_telegram_text(final_text)
         if clean_final != final_text.strip():
             logger.info(
@@ -260,10 +260,7 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
                 final_text[:500],
                 clean_final[:500],
             )
-        if clean_say_chunks:
-            response = " ".join(clean_say_chunks).strip()
-            response_source = "say"
-        elif clean_final and clean_final != "(no response)":
+        if clean_final and clean_final != "(no response)":
             response = clean_final
             response_source = "final_text"
         else:
@@ -272,8 +269,7 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
 
         if not response:
             logger.warning(
-                "Telegram reply suppressed after sanitization (say_chunks=%d, final=%r)",
-                len(say_chunks),
+                "Telegram reply suppressed after sanitization (final=%r)",
                 final_text[:300],
             )
             return
@@ -378,3 +374,89 @@ async def run_telegram_bot(token: str, agent, desires) -> None:
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
+
+
+TelegramErrorHandler = Callable[[Exception], None]
+
+
+class TelegramChannel:
+    """Own the inbound polling lifecycle for one presentation surface."""
+
+    def __init__(
+        self,
+        *,
+        token: str,
+        allowed_ids: set[int],
+        agent: Any,
+        desires: Any,
+        on_error: TelegramErrorHandler | None = None,
+    ) -> None:
+        self._token = token
+        self._allowed_ids = set(allowed_ids)
+        self._agent = agent
+        self._desires = desires
+        self._on_error = on_error
+        self._task: asyncio.Task[None] | None = None
+
+    @classmethod
+    def from_config(
+        cls,
+        config: AgentConfig,
+        agent: Any,
+        desires: Any,
+        *,
+        on_error: TelegramErrorHandler | None = None,
+    ) -> TelegramChannel | None:
+        telegram = getattr(config, "telegram", None)
+        if (
+            not isinstance(telegram, TelegramConfig)
+            or not telegram.inbound_enabled
+            or not telegram.token
+        ):
+            return None
+        return cls(
+            token=telegram.token,
+            allowed_ids=telegram.allowed_ids,
+            agent=agent,
+            desires=desires,
+            on_error=on_error,
+        )
+
+    @property
+    def is_running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    def start(self) -> None:
+        if self.is_running:
+            return
+        self._task = asyncio.create_task(self._run(), name="telegram-channel")
+
+    def cancel(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+
+    async def stop(self) -> None:
+        task, self._task = self._task, None
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _run(self) -> None:
+        try:
+            await run_telegram_bot(
+                self._token,
+                self._agent,
+                self._desires,
+                allowed_ids=self._allowed_ids,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - boundary reports channel failure
+            logger.exception("Telegram background channel failed")
+            if self._on_error is not None:
+                self._on_error(exc)

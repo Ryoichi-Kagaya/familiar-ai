@@ -147,6 +147,27 @@ class CodingConfig:
 
 
 @dataclass
+class TelegramConfig:
+    """Telegram transport settings and runtime channel activation."""
+
+    token: str = field(default_factory=lambda: os.environ.get("TELEGRAM_BOT_TOKEN", "").strip())
+    allowed_ids_raw: str = field(
+        default_factory=lambda: os.environ.get("TELEGRAM_ALLOWED_IDS", "").strip()
+    )
+    # Inbound polling is a launch-time choice (`--telegram`); outbound is
+    # available whenever a token exists.
+    inbound_enabled: bool = False
+
+    @property
+    def allowed_ids(self) -> set[int]:
+        return {
+            int(part)
+            for raw_part in self.allowed_ids_raw.split(",")
+            if (part := raw_part.strip()).isdigit()
+        }
+
+
+@dataclass
 class AgentConfig:
     # Agent display name shown in TUI
     agent_name: str = field(default_factory=lambda: os.environ.get("AGENT_NAME", "AI"))
@@ -324,3 +345,4 @@ class AgentConfig:
     stt: STTConfig = field(default_factory=STTConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     coding: CodingConfig = field(default_factory=CodingConfig)
+    telegram: TelegramConfig = field(default_factory=TelegramConfig)

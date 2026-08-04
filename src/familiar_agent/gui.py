@@ -98,6 +98,7 @@ from .setup import save_setup_config
 if TYPE_CHECKING:
     from familiar_agent.agent import EmbodiedAgent
     from familiar_agent.config import AgentConfig
+    from familiar_agent.telegram_bot import TelegramChannel
     from familiar_agent.desires import DesireSystem
     from familiar_agent.realtime_stt_session import RealtimeSttController
 
@@ -937,11 +938,16 @@ class FamiliarWindow(QMainWindow):
     """Main application window."""
 
     def __init__(
-        self, config: "AgentConfig", desires: "DesireSystem", *, shared_camera: "Any | None" = None
+        self,
+        config: "AgentConfig",
+        desires: "DesireSystem",
+        *,
+        shared_camera: "Any | None" = None,
     ) -> None:
         super().__init__()
         self._config = config
         self._shared_camera = shared_camera
+        self._telegram_channel: TelegramChannel | None = None
         self._agent: EmbodiedAgent | None = None
         self._desires = desires
         self._drive_executor: DriveActionExecutor | None = None
@@ -1822,6 +1828,7 @@ class FamiliarWindow(QMainWindow):
                     continue
                 agent_obj = getattr(self, "_agent", None)
                 agent_config = getattr(agent_obj, "config", None)
+                turn_busy = self._agent_running or bool(getattr(agent_obj, "is_turn_busy", False))
                 heartbeat = getattr(agent_obj, "_heartbeat", None)
                 quiet_now = heartbeat.routine_state().quiet_hours if heartbeat else False
                 # Nightly consolidation: a background job, never a turn — it
@@ -1832,7 +1839,7 @@ class FamiliarWindow(QMainWindow):
                         and bool(getattr(agent_config, "sleep_consolidation", False))
                         and should_run_sleep_consolidation(
                             enabled=True,
-                            agent_running=self._agent_running,
+                            agent_running=turn_busy,
                             has_pending_input=not self._input_queue.empty(),
                             quiet_hours=quiet_now,
                             now_dt=datetime.now(),
@@ -1854,7 +1861,7 @@ class FamiliarWindow(QMainWindow):
                     try:
                         quiet = quiet_now
                         reminders = should_fire_commitment_reminder(
-                            agent_running=self._agent_running,
+                            agent_running=turn_busy,
                             has_pending_input=not self._input_queue.empty(),
                             last_interaction=last_interaction,
                             now=now,
@@ -1862,7 +1869,7 @@ class FamiliarWindow(QMainWindow):
                             quiet_hours=quiet,
                             routine_store=getattr(agent_obj, "_routine_store", None),
                         )
-                        if reminders and self._input_queue.empty() and not self._agent_running:
+                        if reminders and self._input_queue.empty() and not turn_busy:
                             # Record the fire BEFORE the turn: the cadence advances
                             # regardless of the turn's outcome, and a mid-turn
                             # snooze reset survives intact.
@@ -1881,7 +1888,7 @@ class FamiliarWindow(QMainWindow):
                     continue
                 self._desires.set_schedule_multiplier(0.0 if quiet_now else 1.0)
                 if not should_fire_idle_desire(
-                    agent_running=self._agent_running,
+                    agent_running=turn_busy,
                     has_pending_input=not self._input_queue.empty(),
                     quiet_hours=quiet_now,
                     last_interaction=last_interaction,
@@ -2034,6 +2041,8 @@ class FamiliarWindow(QMainWindow):
                     desires=self._desires,
                     inner_voice=inner_voice,
                     interrupt_queue=self._input_queue,
+                    user_id=self._current_user_id,
+                    turn_source="gui-autonomous" if inner_voice else "gui",
                 )
             )
             final_text = await self._agent_task
@@ -2115,6 +2124,16 @@ class FamiliarWindow(QMainWindow):
                 start_mcp_early()
             self._agent = agent
             self._drive_executor = DriveActionExecutor(agent, self._desires)
+            from .telegram_bot import TelegramChannel  # noqa: PLC0415
+
+            self._telegram_channel = TelegramChannel.from_config(
+                config,
+                agent,
+                self._desires,
+                on_error=self._on_telegram_error,
+            )
+            if self._telegram_channel is not None:
+                self._telegram_channel.start()
             if not agent.is_embedding_ready:
                 self._set_startup_status(f"{_t('initializing')} memory...")
             self._agent_ready = True
@@ -2133,6 +2152,10 @@ class FamiliarWindow(QMainWindow):
             self._set_last_error(f"Agent initialization failed: {exc}")
             self._log.append_line(f"[error] Agent initialization failed: {exc}")
             self._set_input_enabled(False)
+
+    def _on_telegram_error(self, exc: Exception) -> None:
+        self._set_last_error(f"Telegram failed: {exc}")
+        self._log.append_line(f"[error] Telegram failed: {exc}")
 
     # ------------------------------------------------------------------
     # Cleanup
@@ -2182,6 +2205,9 @@ class FamiliarWindow(QMainWindow):
         self._lag_timer.stop()
         self._status_timer.stop()
         self._cancel_turn(reason="shutdown")
+        if self._telegram_channel is not None:
+            await self._telegram_channel.stop()
+        self._telegram_channel = None
         if self._realtime_stt_task and not self._realtime_stt_task.done():
             self._realtime_stt_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -2224,16 +2250,10 @@ class FamiliarWindow(QMainWindow):
 def run_gui(
     config: "AgentConfig",
     desires: "DesireSystem",
-    background_coros: "list[Any] | None" = None,
     *,
     shared_camera: "Any | None" = None,
 ) -> None:
-    """Launch the PySide6 GUI with qasync event loop.
-
-    background_coros: optional list of awaitables to schedule as asyncio tasks
-    on the qasync event loop (e.g. the Telegram bot coroutine).  They are
-    cancelled automatically when the Qt window closes.
-    """
+    """Launch the PySide6 GUI with qasync event loop."""
     import signal
 
     existing = QApplication.instance()
@@ -2255,17 +2275,8 @@ def run_gui(
             window.setWindowIcon(icon)
     window.show()
 
-    # Schedule background coroutines (e.g. Telegram bot) on the qasync loop
-    bg_tasks: list[asyncio.Task] = []
-    if background_coros:
-        for coro in background_coros:
-            bg_tasks.append(loop.create_task(coro))
-
     def _on_quit() -> None:
         window._ensure_shutdown_task()
-        for t in bg_tasks:
-            if not t.done():
-                t.cancel()
 
     qt_app.aboutToQuit.connect(_on_quit)
 
