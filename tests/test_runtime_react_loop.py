@@ -212,6 +212,37 @@ async def test_react_loop_allows_different_physical_actions() -> None:
 
 
 @pytest.mark.asyncio
+async def test_react_loop_single_use_tool_suppresses_different_second_call() -> None:
+    backend = _ScriptedBackend(
+        [
+            ModelTurnResult(
+                stop_reason="tool_use",
+                text="",
+                tool_calls=[ToolCall(id="tc1", name="say", input={"text": "first"})],
+            ),
+            ModelTurnResult(
+                stop_reason="tool_use",
+                text="",
+                tool_calls=[ToolCall(id="tc2", name="say", input={"text": "second"})],
+            ),
+            ModelTurnResult(stop_reason="end_turn", text="done"),
+        ]
+    )
+    tool = _RecordingActionTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    result = await ReActLoop(
+        backend=backend,
+        tools=registry,
+        single_use_tools={"say"},
+    ).run(system="sys", messages=[], max_tokens=100)
+
+    assert tool.calls == [{"text": "first"}]
+    assert [call.id for call in result.tool_calls] == ["tc1"]
+
+
+@pytest.mark.asyncio
 async def test_react_loop_allows_same_action_after_intervening_tool() -> None:
     backend = _ScriptedBackend(
         [

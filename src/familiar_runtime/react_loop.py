@@ -69,6 +69,7 @@ class ReActLoop:
         default_tool_timeout: float = 20.0,
         tool_timeouts: dict[str, float] | None = None,
         non_repeatable_tools: set[str] | frozenset[str] | None = None,
+        single_use_tools: set[str] | frozenset[str] | None = None,
         event_bus: EventBus | None = None,
         hooks: Sequence["RuntimeHook"] = (),
     ) -> None:
@@ -78,6 +79,7 @@ class ReActLoop:
         self._default_tool_timeout = default_tool_timeout
         self._tool_timeouts = tool_timeouts or {}
         self._non_repeatable_tools = frozenset(non_repeatable_tools or ())
+        self._single_use_tools = frozenset(single_use_tools or ())
         self._event_bus = event_bus
         self._hooks = list(hooks)
 
@@ -106,6 +108,7 @@ class ReActLoop:
         input_tokens = 0
         output_tokens = 0
         last_non_repeatable_signature: str | None = None
+        used_single_use_tools: set[str] = set()
 
         def emit(source: str, type: str, payload: dict[str, Any]) -> None:
             if self._event_bus is None:
@@ -133,6 +136,11 @@ class ReActLoop:
             if interrupt_source is not None and not interrupt_source.empty():
                 drained_raw = await interrupt_source.drain()
                 if drained_raw:
+                    # A newly arrived user message starts a fresh response
+                    # segment inside this run. Physical actions may therefore
+                    # be used again, including one new spoken reply.
+                    last_non_repeatable_signature = None
+                    used_single_use_tools.clear()
                     drained = [coerce_user_turn(turn) for turn in drained_raw]
                     drained_text = [turn.text for turn in drained]
                     joined = " / ".join(drained_text)
@@ -253,8 +261,12 @@ class ReActLoop:
                 # bookkeeping, tool_results layout) is unchanged.
                 duplicate_flags: list[bool] = []
                 for tool_call in result.tool_calls:
-                    duplicate = False
-                    if tool_call.name in self._non_repeatable_tools:
+                    duplicate = tool_call.name in used_single_use_tools
+                    if tool_call.name in self._single_use_tools:
+                        # Claim before awaiting execution: a timeout has an
+                        # ambiguous physical outcome, so retrying is unsafe.
+                        used_single_use_tools.add(tool_call.name)
+                    if not duplicate and tool_call.name in self._non_repeatable_tools:
                         signature = json.dumps(
                             [tool_call.name, tool_call.input],
                             ensure_ascii=False,
@@ -267,7 +279,7 @@ class ReActLoop:
                         # ambiguous physical outcome and must not make an
                         # immediate automatic retry safe.
                         last_non_repeatable_signature = signature
-                    else:
+                    elif tool_call.name not in self._single_use_tools:
                         # A different tool means later repetition may be an
                         # intentional follow-up to new information.
                         last_non_repeatable_signature = None

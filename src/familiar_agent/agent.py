@@ -3719,6 +3719,7 @@ class EmbodiedAgent:
                     name: self._tool_timeout_seconds(name) for name in turn_tool_names if name
                 },
                 non_repeatable_tools=_NON_REPEATABLE_ACTION_TOOLS,
+                single_use_tools={"say"},
                 hooks=[self._hook],
             )
             with latency.span("react_loop"):

@@ -1368,12 +1368,8 @@ async def test_brief_reply_ends_turn_after_say():
 
 
 @pytest.mark.asyncio
-async def test_normal_turn_stops_after_repeated_say():
-    """Two consecutive say() calls in a normal turn must inject the end reminder.
-
-    Guards the utterance loop where the model keeps re-speaking (e.g. padding
-    with "test") until max_iterations because say() resets non_say_streak.
-    """
+async def test_normal_turn_stops_and_suppresses_second_say():
+    """A normal conversational turn speaks once even if the model calls say twice."""
     agent = _make_agent(with_tts=True)
     # Long input (>80 chars) forces a normal, non-brief-reply turn so all tools
     # stay available and say() alone does not end the turn.
@@ -1402,6 +1398,7 @@ async def test_normal_turn_stops_after_repeated_say():
         for p in ps:
             p.stop()
 
+    agent._tts.call.assert_awaited_once_with("say", {"text": "調べてみるわ"})
     assert any("You already spoke. End your turn now." in t for t in _user_texts(agent))
 
 

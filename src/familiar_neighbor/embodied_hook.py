@@ -1117,12 +1117,11 @@ class EmbodiedAgentHook(RuntimeHookBase):
             # Brief-reply turns have only the say() tool; once spoken, stop.
             prep.non_say_streak = 0
             return ["You already spoke. End your turn now."]
-        if prep.say_streak >= 2:
-            # Normal turns keep say(); two consecutive say() calls with no work
-            # between them is an utterance loop (e.g. repeating "test" until
-            # max_iterations). Speaking again is not doing more — stop.
+        if prep.say_streak >= 1:
+            # A conversational response gets one spoken utterance. Tell the
+            # model to finish immediately so it does not interpret the next
+            # iteration as a request to call say() again.
             prep.non_say_streak = 0
-            prep.say_streak = 0
             return ["You already spoke. End your turn now."]
         if prep.non_say_streak >= 2 and not prep.say_used:
             prep.non_say_streak = 0

@@ -9,6 +9,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Limit `say` to one execution per user-input segment and end the model loop
+  immediately after speaking, preventing slightly different second utterances
+  from playing on every conversational turn.
 - Prevent GUI/TUI autonomous social turns from deadlocking indefinitely when
   their cancellable child task enters the shared cross-channel turn coordinator.
 - Suppress auto-desire turns across the GUI, TUI, and REPL during configured
