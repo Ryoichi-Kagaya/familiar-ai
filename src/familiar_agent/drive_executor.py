@@ -89,7 +89,38 @@ class DriveActionExecutor:
         on_text: Callable[[str], None] | None = None,
         interrupt_queue: Any = None,
     ) -> DriveActionResult:
-        """Route a desire inside the same exclusive scope as channel turns."""
+        """Route a desire without nesting a UI-owned social turn under the lock."""
+        from familiar_neighbor.mind.desires import DriveEffect
+
+        spec = self._desires._drive_specs.get(desire_name)
+        companion_here = self._companion_present(last_interaction_time)
+        starts_agent_turn = bool(
+            spec is not None
+            and companion_here
+            and spec.effect_type
+            in {
+                DriveEffect.EXPRESSIVE_SOLO,
+                DriveEffect.SOCIAL_INITIATION,
+                DriveEffect.ABSENT_CARE,
+            }
+        )
+
+        # Social paths enter the coordinator through agent.run() (directly or
+        # through the UI callback). GUI/TUI callbacks deliberately create a
+        # child task so their stop controls can cancel it. Holding the lock in
+        # this parent task first would make that child wait forever while the
+        # parent waits for the child. Non-turn effects still need the explicit
+        # scope so memory/camera actions cannot race a channel turn.
+        if starts_agent_turn:
+            return await self._dispatch(
+                desire_name,
+                last_interaction_time=last_interaction_time,
+                run_social_turn=run_social_turn,
+                on_action=on_action,
+                on_text=on_text,
+                interrupt_queue=interrupt_queue,
+            )
+
         get_coordinator = getattr(self._agent, "_get_turn_coordinator", None)
         if not callable(get_coordinator):
             return await self._dispatch(

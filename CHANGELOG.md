@@ -9,6 +9,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Prevent GUI/TUI autonomous social turns from deadlocking indefinitely when
+  their cancellable child task enters the shared cross-channel turn coordinator.
 - Suppress auto-desire turns across the GUI, TUI, and REPL during configured
   quiet hours, then refresh desire growth from the live schedule while idle so
   activity resumes after quiet hours end; nightly consolidation and urgent

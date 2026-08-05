@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -10,6 +11,7 @@ import pytest
 
 from familiar_agent.desires import DesireSystem
 from familiar_agent.drive_executor import ABSENCE_THRESHOLD, DriveActionExecutor
+from familiar_agent.turn_coordinator import TurnCoordinator, TurnRequest
 from familiar_neighbor.mind.desires import DriveEffect
 
 
@@ -222,6 +224,47 @@ async def test_social_drive_can_use_ui_turn_runner(
     assert result.fired is True
     run_social_turn.assert_awaited_once_with(desires._drive_specs["greet_companion"].prompt_text)
     mock_agent.run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ui_social_turn_child_task_does_not_deadlock_coordinator(
+    desires: DesireSystem,
+) -> None:
+    """GUI/TUI callbacks spawn a cancellable child task for the actual agent turn."""
+
+    async def run_request(_request: TurnRequest) -> str:
+        return "done"
+
+    async def switch_user(_user_id: str) -> str:
+        return "Kota"
+
+    coordinator = TurnCoordinator(runner=run_request, switch_user=switch_user)
+
+    class _Agent:
+        def _get_turn_coordinator(self) -> TurnCoordinator:
+            return coordinator
+
+        async def run(self, _text: str, **_kwargs) -> str:
+            return await coordinator.run(TurnRequest("", source="gui-autonomous"))
+
+    agent = _Agent()
+    executor = DriveActionExecutor(agent, desires)  # type: ignore[arg-type]
+
+    async def run_social_turn(_inner_voice: str) -> None:
+        child = asyncio.create_task(agent.run(""))
+        await child
+
+    result = await asyncio.wait_for(
+        executor.dispatch(
+            "greet_companion",
+            last_interaction_time=time.time(),
+            run_social_turn=run_social_turn,
+        ),
+        timeout=0.5,
+    )
+
+    assert result.fired is True
+    assert coordinator.is_busy is False
 
 
 # ---------------------------------------------------------------------------
