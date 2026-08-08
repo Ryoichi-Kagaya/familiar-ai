@@ -9,6 +9,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Redact RTSP usernames and passwords from camera startup and connection-error logs.
 - Keep multiple named go2rtc camera streams in one configuration and update an
   already-running go2rtc process without eagerly connecting to offline cameras,
   allowing primary and occasional travel-camera profiles to coexist quietly.

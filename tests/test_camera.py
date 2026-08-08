@@ -51,6 +51,49 @@ def _make_fake_frame(height: int = 480, width: int = 640) -> "np.ndarray":
     return np.zeros((height, width, 3), dtype=np.uint8)
 
 
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        (
+            "rtsp://camera-user:camera-password@192.0.2.10:554/stream1",
+            "rtsp://***:***@192.0.2.10:554/stream1",
+        ),
+        (
+            "rtsp://user:p@ssword@camera.example/live0",
+            "rtsp://***:***@camera.example/live0",
+        ),
+        ("rtsp://camera.example/live0", "rtsp://camera.example/live0"),
+        (0, 0),
+    ],
+)
+def test_redact_camera_source_removes_url_credentials(source, expected) -> None:
+    from familiar_agent.tools.camera import _redact_camera_source
+
+    assert _redact_camera_source(source) == expected
+
+
+def test_capture_loop_logs_redacted_source_but_opens_original_url() -> None:
+    import familiar_agent.tools.camera as camera_module
+
+    cam = _make_camera_tool()
+    cam._running = True
+    capture = MagicMock()
+    capture.isOpened.return_value = False
+
+    with (
+        patch.object(camera_module.cv2, "VideoCapture", return_value=capture) as open_capture,
+        patch.object(camera_module.logger, "error") as log_error,
+    ):
+        cam._capture_loop()
+
+    original_url = "rtsp://admin:password@192.168.1.100:554/stream1"
+    open_capture.assert_called_once_with(original_url, camera_module.cv2.CAP_FFMPEG)
+    log_error.assert_called_once_with(
+        "Failed to open camera source: %s",
+        "rtsp://***:***@192.168.1.100:554/stream1",
+    )
+
+
 def _make_mock_onvif_cam(profile_token: str = "profile_1"):
     """Return a MagicMock that mimics onvif-zeep-async >=4.x (all sync methods)."""
     mock_profile = MagicMock()

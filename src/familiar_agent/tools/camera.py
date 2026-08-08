@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 import cv2
 import onvif
@@ -21,6 +21,17 @@ from onvif import ONVIFCamera
 logger = logging.getLogger(__name__)
 
 CAPTURE_DIR = Path.home() / ".familiar_ai" / "captures"
+
+
+def _redact_camera_source(source: str | int) -> str | int:
+    """Remove URL userinfo before a camera source is written to logs."""
+    if not isinstance(source, str) or "://" not in source:
+        return source
+    parsed = urlsplit(source)
+    if "@" not in parsed.netloc:
+        return source
+    safe_netloc = f"***:***@{parsed.netloc.rsplit('@', 1)[1]}"
+    return urlunsplit(parsed._replace(netloc=safe_netloc))
 
 
 class _PriorityPTZLock:
@@ -143,6 +154,7 @@ class CameraTool:
     def _capture_loop(self):
         """Background thread to keep camera buffer fresh and optionally show preview."""
         source = self._get_stream_url()
+        log_source = _redact_camera_source(source)
 
         # Suppress ffmpeg C-level warnings (SEI type 764 spam from Tapo).
         # Cannot redirect stderr (breaks Textual TUI), so use OPENCV env vars instead.
@@ -157,11 +169,11 @@ class CameraTool:
             )
 
             if not self._cap.isOpened():
-                logger.error("Failed to open camera source: %s", source)
+                logger.error("Failed to open camera source: %s", log_source)
                 self._running = False
                 return
 
-            logger.info("Camera capture thread started for source: %s", source)
+            logger.info("Camera capture thread started for source: %s", log_source)
 
             _RETRY_INITIAL = 2.0  # seconds
             _RETRY_MAX = 300.0  # cap at 5 minutes
