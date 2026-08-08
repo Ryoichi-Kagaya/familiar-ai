@@ -17,6 +17,7 @@ from familiar_runtime.models import UserTurn, coerce_user_turn
 
 from .agent import EmbodiedAgent
 from .bootstrap import load_app_bootstrap, load_camera_profile
+from .camera_catalog import apply_default_camera, migrate_legacy_camera_catalog
 from .config import AgentConfig
 from .desires import DesireSystem
 from .drive_executor import DriveActionExecutor
@@ -747,6 +748,18 @@ def main() -> None:
         print(f"[camera] profile: {profile_path}")
 
     config = AgentConfig()
+    if camera_profile is None and hasattr(config, "camera"):
+        try:
+            camera_catalog = migrate_legacy_camera_catalog(
+                config.camera,
+                search_dir=bootstrap.env_path.parent,
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}")
+            sys.exit(2)
+        if camera_catalog is not None:
+            config.camera_catalog = camera_catalog
+            apply_default_camera(config, camera_catalog)
     telegram_config = getattr(config, "telegram", None)
     if telegram_config is not None:
         telegram_config.inbound_enabled = use_telegram

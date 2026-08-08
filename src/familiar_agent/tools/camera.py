@@ -76,6 +76,8 @@ class CameraTool:
         ptz_password: str | None = None,
         ptz_port: int | None = None,
         ptz_lock: _PriorityPTZLock | None = None,
+        connection: str = "warm",
+        camera_id: str = "main",
     ):
         self.host = host
         self.username = username
@@ -92,6 +94,8 @@ class CameraTool:
         self._profile_token: str | None = None
         self._ptz_connect_failed_at: float = 0.0
         self._ptz_lock = ptz_lock
+        self.connection = connection
+        self.camera_id = camera_id
 
         self._cap: cv2.VideoCapture | None = None
         self._last_frame: Any = None
@@ -99,8 +103,11 @@ class CameraTool:
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
 
-        # Start background capture thread
-        self.start()
+        # The default camera stays warm for instant captures. Additional
+        # cameras are on-demand so an offline endpoint is touched only when
+        # the model explicitly asks to see through it.
+        if self.connection == "warm":
+            self.start()
 
     @property
     def is_pan_tilt_available(self) -> bool:
@@ -307,14 +314,40 @@ class CameraTool:
 
     async def capture(self) -> tuple[str | None, str | None]:
         """Get the latest frame from the background thread. Returns (base64_jpeg, saved_path)."""
-        frame = None
-        with self._lock:
-            if self._last_frame is not None:
-                frame = self._last_frame.copy()
+        if self.connection == "on_demand":
+            frame = await asyncio.to_thread(self._capture_once)
+        else:
+            frame = None
+            with self._lock:
+                if self._last_frame is not None:
+                    frame = self._last_frame.copy()
 
         if frame is None:
-            logger.warning("No frame available from capture thread.")
+            logger.warning("No frame available for camera %s.", self.camera_id)
             return None, None
+
+        return self._encode_and_save_frame(frame)
+
+    def _capture_once(self) -> Any:
+        """Open an on-demand source, read one frame, and immediately release it."""
+        source = self._get_stream_url()
+        backend = cv2.CAP_FFMPEG if isinstance(source, str) else cv2.CAP_ANY
+        os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "-8"
+        os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
+        if isinstance(source, str) and source.startswith("rtsp://"):
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|timeout;5000000"
+        cap = cv2.VideoCapture(source, backend)
+        try:
+            if not cap.isOpened():
+                return None
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            ok, frame = cap.read()
+            return frame if ok else None
+        finally:
+            cap.release()
+
+    def _encode_and_save_frame(self, frame: Any) -> tuple[str | None, str | None]:
+        """Encode one BGR frame for the model and persist the observation."""
 
         try:
             # Resize for AI (standardizing input size)
@@ -335,7 +368,7 @@ class CameraTool:
             # Save to disk
             CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            save_path = CAPTURE_DIR / f"capture_{timestamp}.jpg"
+            save_path = CAPTURE_DIR / f"capture_{self.camera_id}_{timestamp}.jpg"
             save_path.write_bytes(data)
 
             return b64, str(save_path)

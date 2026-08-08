@@ -5,10 +5,14 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
 
 from ._i18n import _t
+
+if TYPE_CHECKING:
+    from .camera_catalog import CameraCatalog
 
 load_dotenv()
 
@@ -339,6 +343,7 @@ class AgentConfig:
     daemon_socket: str = field(default_factory=lambda: os.environ.get("FAMILIAR_DAEMON_SOCKET", ""))
 
     max_tokens: int = 4096
+    camera_catalog: CameraCatalog | None = field(default=None, repr=False)
     camera: CameraConfig = field(default_factory=CameraConfig)
     mobility: MobilityConfig = field(default_factory=MobilityConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)

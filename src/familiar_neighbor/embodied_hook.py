@@ -950,7 +950,7 @@ class EmbodiedAgentHook(RuntimeHookBase):
             and not prep.is_desire_turn
             and not prep.brief_reply_turn
             and not prep.see_succeeded
-            and any(t.get("name") == "see" for t in prep.turn_tools)
+            and any(t.get("name") in {"see", "see_camera"} for t in prep.turn_tools)
         ):
             if looks_like_fresh_perception_claim(result.text or ""):
                 prep.reality_retried = True
@@ -962,7 +962,7 @@ class EmbodiedAgentHook(RuntimeHookBase):
                     retry=True,
                     inject_user_message=(
                         "[REALITY] You describe seeing something, but you did not "
-                        "look this turn. Either call see() now and describe what is "
+                        "look this turn. Either call see() or see_camera() now and describe what is "
                         "actually there, or rephrase honestly as memory ('I "
                         "remember…') or uncertainty."
                     ),
@@ -1035,7 +1035,7 @@ class EmbodiedAgentHook(RuntimeHookBase):
             return None
         agent = self._agent
 
-        if call.name == "see":
+        if call.name in {"see", "see_camera"}:
             prep.camera_used = True
             # camera_used means "a capture was attempted" (the observation
             # pipeline keys on it); the reality gate and grounding need
@@ -1051,8 +1051,8 @@ class EmbodiedAgentHook(RuntimeHookBase):
                 prep.observation_action_input = dict(call.input)
             prep.pending_view_action_name = None
             prep.pending_view_action_input = None
-        elif call.name in {"look", "walk"}:
-            prep.pending_view_action_name = call.name
+        elif call.name in {"look", "look_camera", "walk"}:
+            prep.pending_view_action_name = "look" if call.name == "look_camera" else call.name
             prep.pending_view_action_input = dict(call.input)
         if call.name == "say":
             prep.say_used = True

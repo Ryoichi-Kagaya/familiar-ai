@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "default_camera": "main",
+  "cameras": [
+    {
+      "id": "main",
+      "label": "普段のカメラ",
+      "host": "192.168.1.100",
+      "username": "camera-user",
+      "password": "camera-password",
+      "onvif_port": 2020,
+      "preview": false,
+      "ptz_host": "",
+      "ptz_username": "",
+      "ptz_password": "",
+      "ptz_port": null,
+      "go2rtc_stream": "tapo_cam",
+      "tapo_password": "",
+      "tapo_hash": "",
+      "connection": "warm"
+    },
+    {
+      "id": "travel",
+      "label": "外出用カメラ",
+      "host": "172.20.10.10",
+      "username": "camera-user",
+      "password": "camera-password",
+      "onvif_port": 2020,
+      "preview": false,
+      "ptz_host": "",
+      "ptz_username": "",
+      "ptz_password": "",
+      "ptz_port": null,
+      "go2rtc_stream": "tapo_cam_remote",
+      "tapo_password": "",
+      "tapo_hash": "",
+      "connection": "on_demand"
+    }
+  ]
+}

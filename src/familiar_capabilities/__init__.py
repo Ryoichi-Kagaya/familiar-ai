@@ -7,7 +7,7 @@ the calling convention.
 """
 
 from .art_critique import ArtCritiqueCapability
-from .camera import CameraCapability
+from .camera import CameraCapability, MultiCameraCapability
 from .coding import CodingCapability
 from .commitments import CommitmentCapability
 from .delegation import DelegationCapability
@@ -24,6 +24,7 @@ from .voice import VoiceCapability
 __all__ = [
     "ArtCritiqueCapability",
     "CameraCapability",
+    "MultiCameraCapability",
     "CodingCapability",
     "CommitmentCapability",
     "DelegationCapability",

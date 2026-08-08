@@ -29,7 +29,9 @@ if TYPE_CHECKING:
 
 ACTION_ICONS: dict[str, str] = {
     "see": "👀",
+    "see_camera": "👀",
     "look": "🔄",
+    "look_camera": "🔄",
     "look_left": "◀️",
     "look_right": "▶️",
     "look_up": "🔼",
@@ -55,7 +57,7 @@ def format_action(name: str, tool_input: dict) -> str:
     """
     icon = ACTION_ICONS.get(name, "⚙")
 
-    if name == "look":
+    if name in {"look", "look_camera"}:
         direction = tool_input.get("direction", "")
         key = {
             "left": "look_left",
@@ -66,7 +68,13 @@ def format_action(name: str, tool_input: dict) -> str:
         dir_icon = ACTION_ICONS.get(key, icon)
         deg = tool_input.get("degrees", "")
         suffix = f"({deg}°)" if deg else ""
-        return f"{dir_icon} {_t(key)}{suffix}"
+        camera = str(tool_input.get("camera", "")).strip()
+        camera_suffix = f" [{camera}]" if camera else ""
+        return f"{dir_icon} {_t(key)}{suffix}{camera_suffix}"
+
+    if name == "see_camera":
+        camera = str(tool_input.get("camera", "?")).strip() or "?"
+        return f"{icon} see [{camera}]"
 
     if name == "walk":
         direction = tool_input.get("direction", "?")

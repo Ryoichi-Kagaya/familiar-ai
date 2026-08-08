@@ -26,7 +26,9 @@ class _FakeLegacyTool:
     def get_tool_definitions(self) -> list[dict[str, Any]]:
         return self._defs
 
-    async def call(self, name: str, tool_input: dict[str, Any], **_kw: Any) -> tuple[str, str | None]:
+    async def call(
+        self, name: str, tool_input: dict[str, Any], **_kw: Any
+    ) -> tuple[str, str | None]:
         self.last_call = (name, tool_input)
         return f"ok:{name}", None
 
@@ -65,6 +67,51 @@ async def test_camera_capability_exposes_see_and_look() -> None:
     result = await cap.call("see", {"angle": 0})
     assert result.text == "ok:see"
     assert fake.last_call == ("see", {"angle": 0})
+
+
+@pytest.mark.asyncio
+async def test_multi_camera_capability_selects_named_camera() -> None:
+    from familiar_capabilities import MultiCameraCapability
+
+    main = _FakeLegacyTool([])
+    travel = _FakeLegacyTool([])
+    cap = MultiCameraCapability(  # type: ignore[arg-type]
+        {"main": main, "travel": travel},
+        {"main": "普段", "travel": "外出用"},
+    )
+
+    assert _spec_names(cap) == {"see_camera", "look_camera"}
+    see_schema = next(spec for spec in cap.specs() if spec.name == "see_camera").input_schema
+    assert see_schema["properties"]["camera"]["enum"] == ["main", "travel"]
+
+    result = await cap.call("see_camera", {"camera": "travel"})
+
+    assert travel.last_call == ("see", {})
+    assert main.last_call is None
+    assert result.metadata["camera_id"] == "travel"
+    assert result.text.startswith("[外出用]")
+
+
+@pytest.mark.asyncio
+async def test_multi_camera_capability_routes_ptz_and_rejects_unknown_camera() -> None:
+    from familiar_capabilities import MultiCameraCapability
+
+    travel = _FakeLegacyTool([])
+    cap = MultiCameraCapability(  # type: ignore[arg-type]
+        {"travel": travel},
+        {"travel": "外出用"},
+    )
+
+    moved = await cap.call(
+        "look_camera",
+        {"camera": "travel", "direction": "left", "degrees": 45},
+    )
+    missing = await cap.call("see_camera", {"camera": "missing"})
+
+    assert travel.last_call == ("look", {"direction": "left", "degrees": 45})
+    assert moved.success is True
+    assert missing.success is False
+    assert missing.error == "camera_not_found"
 
 
 @pytest.mark.asyncio
@@ -127,6 +174,7 @@ def test_capabilities_package_exports_all_adapters() -> None:
 
     assert {
         "CameraCapability",
+        "MultiCameraCapability",
         "CodingCapability",
         "MCPCapability",
         "MemoryCapability",

@@ -96,7 +96,7 @@ from .tools.tom import ToMTool
 from .tools.mobility import MobilityTool
 from .tools.stt import STTTool
 from .tools.telegram import TelegramTool, TelegramTransport
-from .tools.tts import TTSTool
+from .tools.tts import TTSTool, sync_go2rtc_streams
 from .turn_coordinator import TurnCoordinator, TurnRequest
 from ._i18n import _t
 from ._ui_helpers import night_key_for
@@ -112,6 +112,7 @@ from familiar_capabilities import (
     MCPCapability,
     MemoryCapability,
     MobilityCapability,
+    MultiCameraCapability,
     RoutineCapability,
     SelfLedgerCapability,
     TelegramCapability,
@@ -159,7 +160,9 @@ def affect_to_emotion(affect: AffectiveState | None) -> str:
 _DEFAULT_TOOL_TIMEOUT = 20.0
 _TOOL_TIMEOUTS: dict[str, float] = {
     "see": 12.0,
+    "see_camera": 12.0,
     "look": 8.0,
+    "look_camera": 8.0,
     "walk": 12.0,
     "say": 60.0,
     "remember": 20.0,
@@ -185,7 +188,9 @@ _BRIEF_REPLY_TOOL_NAMES = frozenset({"say"})
 # ambiguous timeout/failure: the first request may already have reached the
 # device. ReActLoop pairs a synthetic result with a repeated model request
 # without executing it again.
-_NON_REPEATABLE_ACTION_TOOLS = frozenset({"say", "speak", "walk", "look", "move_head"})
+_NON_REPEATABLE_ACTION_TOOLS = frozenset(
+    {"say", "speak", "walk", "look", "look_camera", "move_head"}
+)
 _BRIEF_GREETING_PATTERNS = (
     r"^おはよ",
     r"^こんにちは",
@@ -672,6 +677,9 @@ class EmbodiedAgent:
         self._coherence_retried: bool = False
 
         self._camera: CameraTool | None = shared_camera
+        self._cameras: dict[str, CameraTool] = {}
+        self._camera_labels: dict[str, str] = {}
+        self._default_camera_id = "main"
         self._camera_gui_priority = camera_gui_priority
         self._mobility: MobilityTool | None = None
         self._tts: TTSTool | None = None
@@ -1102,20 +1110,47 @@ class EmbodiedAgent:
                     pass
 
     def _init_tools(self) -> None:
-        cam = self.config.camera
-        # Allow camera if host is present and not already provided via shared_camera.
-        if cam.host and self._camera is None:
-            self._camera = CameraTool(
-                cam.host,
-                cam.username,
-                cam.password,
-                cam.port,
-                preview=cam.preview,
-                ptz_host=cam.ptz_host,
-                ptz_username=cam.ptz_username,
-                ptz_password=cam.ptz_password,
-                ptz_port=cam.ptz_port,
-            )
+        catalog = getattr(self.config, "camera_catalog", None)
+        if catalog is not None:
+            self._default_camera_id = catalog.default_camera
+            for profile in catalog.cameras:
+                if profile.id == self._default_camera_id and self._camera is not None:
+                    camera = self._camera
+                else:
+                    camera = CameraTool(
+                        profile.host,
+                        profile.username,
+                        profile.password,
+                        profile.onvif_port,
+                        preview=profile.preview,
+                        ptz_host=profile.ptz_host or profile.host,
+                        ptz_username=profile.ptz_username or profile.username,
+                        ptz_password=profile.ptz_password or profile.password,
+                        ptz_port=profile.ptz_port or profile.onvif_port,
+                        connection=profile.connection,
+                        camera_id=profile.id,
+                    )
+                self._cameras[profile.id] = camera
+                self._camera_labels[profile.id] = profile.label
+            self._camera = self._cameras.get(self._default_camera_id)
+        else:
+            cam = self.config.camera
+            # Allow camera if host is present and not already provided via shared_camera.
+            if cam.host and self._camera is None:
+                self._camera = CameraTool(
+                    cam.host,
+                    cam.username,
+                    cam.password,
+                    cam.port,
+                    preview=cam.preview,
+                    ptz_host=cam.ptz_host,
+                    ptz_username=cam.ptz_username,
+                    ptz_password=cam.ptz_password,
+                    ptz_port=cam.ptz_port,
+                )
+            if self._camera is not None:
+                self._cameras["main"] = self._camera
+                self._camera_labels["main"] = "Primary camera"
 
         mob = self.config.mobility
         if mob.api_key and mob.device_id:
@@ -1124,6 +1159,11 @@ class EmbodiedAgent:
             )
 
         tts = self.config.tts
+        if catalog is not None:
+            sync_go2rtc_streams(
+                tts.go2rtc_url,
+                {profile.go2rtc_stream: profile.go2rtc_sources() for profile in catalog.cameras},
+            )
         if tts.elevenlabs_api_key:
             self._tts = TTSTool(
                 tts.elevenlabs_api_key,
@@ -1180,9 +1220,11 @@ class EmbodiedAgent:
     def _build_tool_registry(self) -> ToolRegistry:
         """Build the per-turn tool registry from configured providers."""
         registry = ToolRegistry()
+        cameras = getattr(self, "_cameras", {})
+        camera_labels = getattr(self, "_camera_labels", {})
 
         def _record_embodied_action(name: str, tool_input: dict[str, Any]) -> None:
-            if name == "look":
+            if name in {"look", "look_camera"}:
                 self._exploration.record_move(
                     tool_input.get("direction", "center"),
                     tool_input.get("degrees", 30),
@@ -1192,6 +1234,15 @@ class EmbodiedAgent:
             registry.register(
                 CameraCapability(
                     self._camera,
+                    before_call=_record_embodied_action,
+                    gui_priority=self._camera_gui_priority,
+                )
+            )
+        if len(cameras) > 1:
+            registry.register(
+                MultiCameraCapability(
+                    cameras,
+                    camera_labels,
                     before_call=_record_embodied_action,
                     gui_priority=self._camera_gui_priority,
                 )
@@ -1410,6 +1461,18 @@ class EmbodiedAgent:
         )
 
         parts = [eyes_desc]
+
+        cameras = getattr(self, "_cameras", {})
+        camera_labels = getattr(self, "_camera_labels", {})
+        if len(cameras) > 1:
+            camera_choices = ", ".join(
+                f"{camera_id}={camera_labels.get(camera_id, camera_id)}"
+                for camera_id in sorted(cameras)
+            )
+            parts.append(
+                "    (part :id named_eyes :tool see_camera\n"
+                f'      :desc "Choose another camera by id: {camera_choices}.")'
+            )
 
         # Neck (look)
         if self._camera and self._camera.is_pan_tilt_available:
@@ -3457,7 +3520,12 @@ class EmbodiedAgent:
 
     async def close(self) -> None:
         """Clean up resources. Bounded by timeouts to avoid hanging on exit."""
-        if self._camera:
+        closed_cameras: set[int] = set()
+        for camera in getattr(self, "_cameras", {}).values():
+            if id(camera) not in closed_cameras:
+                camera.close()
+                closed_cameras.add(id(camera))
+        if self._camera and id(self._camera) not in closed_cameras:
             self._camera.close()
 
         await self._drain_background_tasks()

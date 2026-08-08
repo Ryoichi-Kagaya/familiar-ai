@@ -46,6 +46,8 @@ def _make_agent(
     agent._art_critique_tool = art_critique
 
     agent._camera = None
+    agent._cameras = {}
+    agent._camera_labels = {}
     agent._camera_gui_priority = False
     agent._mobility = None
     agent._tts = None
@@ -55,6 +57,8 @@ def _make_agent(
         cam = MagicMock()
         cam.call = AsyncMock(return_value=("I see a room", "base64img"))
         agent._camera = cam
+        agent._cameras["main"] = cam
+        agent._camera_labels["main"] = "Primary camera"
 
     if with_mobility:
         mob = MagicMock()
@@ -152,6 +156,22 @@ async def test_execute_tool_routes_see_to_camera():
     assert result == "I see a room"
     assert img == ["base64img"]
     agent._camera.call.assert_awaited_once_with("see", {}, gui=False)
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_routes_see_camera_to_selected_camera():
+    agent = _make_agent(with_camera=True)
+    travel = MagicMock()
+    travel.call = AsyncMock(return_value=("I see the travel view", ["travel-image"]))
+    agent._cameras["travel"] = travel
+    agent._camera_labels["travel"] = "外出用"
+
+    result, images = await agent._execute_tool("see_camera", {"camera": "travel"})
+
+    assert result.startswith("[外出用]")
+    assert images == ["travel-image"]
+    travel.call.assert_awaited_once_with("see", {}, gui=False)
+    agent._camera.call.assert_not_awaited()
 
 
 @pytest.mark.asyncio

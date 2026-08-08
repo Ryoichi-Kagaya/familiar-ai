@@ -36,6 +36,8 @@ def _make_camera_tool(host: str = "192.168.1.100"):
         cam._profile_token = None
         cam._ptz_connect_failed_at = 0.0
         cam._ptz_lock = None
+        cam.connection = "warm"
+        cam.camera_id = "main"
         cam._cap = None
         cam._last_frame = None
         cam._running = False
@@ -131,6 +133,43 @@ async def test_capture_resizes_large_frame():
     # Decode and verify the JPEG was produced (resize didn't crash)
     decoded = base64.b64decode(b64)
     assert decoded[:2] == b"\xff\xd8"
+
+
+def test_on_demand_camera_does_not_start_background_capture() -> None:
+    from familiar_agent.tools.camera import CameraTool
+
+    with patch.object(CameraTool, "start") as start:
+        CameraTool(
+            "172.20.10.10",
+            "admin",
+            "secret",
+            connection="on_demand",
+            camera_id="travel",
+        )
+
+    start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_on_demand_capture_opens_source_only_for_request(tmp_path) -> None:
+    import familiar_agent.tools.camera as camera_module
+
+    cam = _make_camera_tool("172.20.10.10")
+    cam.connection = "on_demand"
+    cam.camera_id = "travel"
+    cam._capture_once = MagicMock(return_value=_make_fake_frame())
+
+    original_dir = camera_module.CAPTURE_DIR
+    camera_module.CAPTURE_DIR = tmp_path
+    try:
+        b64, path = await cam.capture()
+    finally:
+        camera_module.CAPTURE_DIR = original_dir
+
+    assert b64 is not None
+    assert path is not None
+    assert "capture_travel_" in path
+    cam._capture_once.assert_called_once_with()
 
 
 # ---------------------------------------------------------------------------

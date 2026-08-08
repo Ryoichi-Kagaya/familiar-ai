@@ -29,6 +29,11 @@ class TestFormatAction:
         result = format_action("see", {})
         assert "👀" in result
 
+    def test_see_camera_includes_selected_camera(self):
+        result = format_action("see_camera", {"camera": "travel"})
+        assert "👀" in result
+        assert "travel" in result
+
     def test_look_left_uses_direction_icon(self):
         result = format_action("look", {"direction": "left"})
         assert "◀️" in result
@@ -53,6 +58,13 @@ class TestFormatAction:
         result = format_action("look", {"direction": "left", "degrees": 90})
         assert "90" in result
         assert "°" in result
+
+    def test_look_camera_includes_direction_and_selected_camera(self):
+        result = format_action(
+            "look_camera", {"camera": "travel", "direction": "right", "degrees": 30}
+        )
+        assert "▶️" in result
+        assert "travel" in result
 
     def test_walk_with_direction_and_duration(self):
         result = format_action("walk", {"direction": "forward", "duration": 5})
