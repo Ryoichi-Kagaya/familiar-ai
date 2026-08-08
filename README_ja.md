@@ -284,6 +284,9 @@ uv run familiar-discover-cameras --scan
    CAMERA_PASSWORD=your-local-pass
    ```
 
+Tailscale経由の2台目を、既存カメラ設定を残したまま使う場合は、
+[TapoカメラをTailscale越しに使う](docs/tapo-tailscale.md) を参照してください。
+
 ### Wi-Fi カメラ（Eufy C220）
 
 [Eufy C220 — Amazon日本](https://www.amazon.co.jp/dp/B0CQQQ5NZ1/)

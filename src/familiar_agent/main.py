@@ -16,7 +16,7 @@ from typing import cast
 from familiar_runtime.models import UserTurn, coerce_user_turn
 
 from .agent import EmbodiedAgent
-from .bootstrap import load_app_bootstrap
+from .bootstrap import load_app_bootstrap, load_camera_profile
 from .config import AgentConfig
 from .desires import DesireSystem
 from .drive_executor import DriveActionExecutor
@@ -646,6 +646,21 @@ def _run_repl(agent: EmbodiedAgent, desires: DesireSystem, debug: bool) -> None:
             pass
 
 
+def _camera_profile_from_argv(argv: list[str]) -> Path | None:
+    """Return the optional camera profile path from familiar's loose CLI flags."""
+    for index, arg in enumerate(argv):
+        if arg == "--camera-profile":
+            if index + 1 >= len(argv) or argv[index + 1].startswith("--"):
+                raise ValueError("--camera-profile requires a file path")
+            return Path(argv[index + 1])
+        if arg.startswith("--camera-profile="):
+            value = arg.partition("=")[2]
+            if not value:
+                raise ValueError("--camera-profile requires a file path")
+            return Path(value)
+    return None
+
+
 def main() -> None:
     # Suppress noisy HuggingFace Hub / transformers output before any imports
     os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
@@ -689,6 +704,12 @@ def main() -> None:
         with contextlib.suppress(IndexError, ValueError):
             voice_port = int(sys.argv[port_idx + 1])
 
+    try:
+        camera_profile = _camera_profile_from_argv(sys.argv[1:])
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        sys.exit(2)
+
     bootstrap = load_app_bootstrap()
 
     if bootstrap.migrated:
@@ -713,6 +734,17 @@ def main() -> None:
         if bootstrap.needs_setup:
             print("Setup incomplete: API_KEY is still missing.")
             return
+
+    if camera_profile is not None:
+        try:
+            profile_path, loaded_keys = load_camera_profile(camera_profile)
+        except FileNotFoundError as exc:
+            print(f"Error: {exc}")
+            sys.exit(2)
+        if not loaded_keys:
+            print(f"Error: camera profile has no supported settings: {profile_path}")
+            sys.exit(2)
+        print(f"[camera] profile: {profile_path}")
 
     config = AgentConfig()
     telegram_config = getattr(config, "telegram", None)

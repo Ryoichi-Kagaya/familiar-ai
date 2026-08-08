@@ -6,6 +6,7 @@ ME.md
 
 # Environment & secrets
 .env
+.env.*
 *.env
 
 # Python

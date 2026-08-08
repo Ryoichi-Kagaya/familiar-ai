@@ -31,6 +31,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   `CAMERA_TAPO_PASSWORD` or `CAMERA_TAPO_HASH` is configured.
 
 ### Added
+- Camera-only dotenv profiles via `--camera-profile`, plus a separate second-camera launcher
+  and a least-privilege Tailscale subnet-router setup guide for remote Tapo cameras.
 - Outbound Telegram messaging as an agent tool: GUI, TUI, REPL, and autonomous turns can call
   `send_telegram_message` for a profile linked through `/register`; recipients remain constrained
   by `TELEGRAM_ALLOWED_IDS`. Inbound Telegram is now an additive channel on the exact GUI/TUI/REPL
