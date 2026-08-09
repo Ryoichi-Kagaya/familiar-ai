@@ -10,9 +10,6 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Redact RTSP usernames and passwords from camera startup and connection-error logs.
-- Keep multiple named go2rtc camera streams in one configuration and update an
-  already-running go2rtc process without eagerly connecting to offline cameras,
-  allowing primary and occasional travel-camera profiles to coexist quietly.
 - Limit `say` to one execution per user-input segment and end the model loop
   immediately after speaking, preventing slightly different second utterances
   from playing on every conversational turn.
@@ -35,12 +32,10 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   `CAMERA_TAPO_PASSWORD` or `CAMERA_TAPO_HASH` is configured.
 
 ### Added
-- Persistent `~/.familiar_ai/cameras.json` multi-camera catalogs with one-time
-  migration from `.env` / `.env.camera-*`, stable `see_camera` and
+- Persistent `~/.familiar_ai/cameras.json` multi-camera catalogs with stable `see_camera` and
   `look_camera` selector tools, a warm default camera, and lazy on-demand
   connections for additional or intermittently offline cameras.
-- Camera-only dotenv profiles via `--camera-profile`, plus a separate second-camera launcher
-  and a least-privilege Tailscale subnet-router setup guide for remote Tapo cameras.
+- A least-privilege Tailscale subnet-router setup guide for remote Tapo cameras.
 - Outbound Telegram messaging as an agent tool: GUI, TUI, REPL, and autonomous turns can call
   `send_telegram_message` for a profile linked through `/register`; recipients remain constrained
   by `TELEGRAM_ALLOWED_IDS`. Inbound Telegram is now an additive channel on the exact GUI/TUI/REPL

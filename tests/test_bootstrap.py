@@ -1,15 +1,8 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-import pytest
-
-from familiar_agent.bootstrap import (
-    ACTIVE_CAMERA_PROFILE_ENV,
-    load_app_bootstrap,
-    load_camera_profile,
-)
+from familiar_agent.bootstrap import load_app_bootstrap
 
 
 def _clear_runtime_env(monkeypatch) -> None:
@@ -54,48 +47,3 @@ def test_load_app_bootstrap_migrates_legacy_anthropic_env(tmp_path: Path, monkey
     assert "API_KEY=sk-ant-old" in content
     assert "MODEL=claude-haiku" in content
     assert "PLATFORM=anthropic" in content
-
-
-def test_load_camera_profile_overlays_only_camera_settings(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("API_KEY", "keep-main-key")
-    monkeypatch.setenv("CAMERA_HOST", "192.168.1.10")
-    profile_path = tmp_path / "camera.env"
-    profile_path.write_text(
-        "CAMERA_HOST=192.168.50.20\n"
-        "CAMERA_PASSWORD=remote-secret\n"
-        "TTS_OUTPUT=remote\n"
-        "API_KEY=must-not-load\n",
-        encoding="utf-8",
-    )
-
-    resolved, loaded = load_camera_profile(profile_path)
-
-    assert resolved == profile_path.resolve()
-    assert loaded == ["CAMERA_HOST", "CAMERA_PASSWORD", "TTS_OUTPUT"]
-    assert os.environ["CAMERA_HOST"] == "192.168.50.20"
-    assert os.environ["CAMERA_PASSWORD"] == "remote-secret"
-    assert os.environ["TTS_OUTPUT"] == "remote"
-    assert os.environ["API_KEY"] == "keep-main-key"
-    assert os.environ[ACTIVE_CAMERA_PROFILE_ENV] == str(profile_path.resolve())
-
-
-def test_load_camera_profile_clears_primary_camera_values_not_in_profile(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.setenv("CAMERA_PTZ_HOST", "192.168.1.11")
-    monkeypatch.setenv("CAMERA_TAPO_PASSWORD", "primary-cloud-secret")
-    monkeypatch.setenv("TAPO_CAMERA_HOST", "192.168.1.10")
-    profile_path = tmp_path / "camera.env"
-    profile_path.write_text("CAMERA_HOST=192.168.50.20\n", encoding="utf-8")
-
-    load_camera_profile(profile_path)
-
-    assert os.environ["CAMERA_HOST"] == "192.168.50.20"
-    assert "CAMERA_PTZ_HOST" not in os.environ
-    assert "CAMERA_TAPO_PASSWORD" not in os.environ
-    assert "TAPO_CAMERA_HOST" not in os.environ
-
-
-def test_load_camera_profile_rejects_missing_file(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError, match="Camera profile not found"):
-        load_camera_profile(tmp_path / "missing.env")

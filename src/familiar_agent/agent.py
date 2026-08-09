@@ -96,7 +96,7 @@ from .tools.tom import ToMTool
 from .tools.mobility import MobilityTool
 from .tools.stt import STTTool
 from .tools.telegram import TelegramTool, TelegramTransport
-from .tools.tts import TTSTool, sync_go2rtc_streams
+from .tools.tts import TTSTool
 from .turn_coordinator import TurnCoordinator, TurnRequest
 from ._i18n import _t
 from ._ui_helpers import night_key_for
@@ -679,7 +679,6 @@ class EmbodiedAgent:
         self._camera: CameraTool | None = shared_camera
         self._cameras: dict[str, CameraTool] = {}
         self._camera_labels: dict[str, str] = {}
-        self._default_camera_id = "main"
         self._camera_gui_priority = camera_gui_priority
         self._mobility: MobilityTool | None = None
         self._tts: TTSTool | None = None
@@ -1112,9 +1111,8 @@ class EmbodiedAgent:
     def _init_tools(self) -> None:
         catalog = getattr(self.config, "camera_catalog", None)
         if catalog is not None:
-            self._default_camera_id = catalog.default_camera
             for profile in catalog.cameras:
-                if profile.id == self._default_camera_id and self._camera is not None:
+                if profile.id == catalog.default_camera and self._camera is not None:
                     camera = self._camera
                 else:
                     camera = CameraTool(
@@ -1132,7 +1130,7 @@ class EmbodiedAgent:
                     )
                 self._cameras[profile.id] = camera
                 self._camera_labels[profile.id] = profile.label
-            self._camera = self._cameras.get(self._default_camera_id)
+            self._camera = self._cameras.get(catalog.default_camera)
         else:
             cam = self.config.camera
             # Allow camera if host is present and not already provided via shared_camera.
@@ -1159,11 +1157,6 @@ class EmbodiedAgent:
             )
 
         tts = self.config.tts
-        if catalog is not None:
-            sync_go2rtc_streams(
-                tts.go2rtc_url,
-                {profile.go2rtc_stream: profile.go2rtc_sources() for profile in catalog.cameras},
-            )
         if tts.elevenlabs_api_key:
             self._tts = TTSTool(
                 tts.elevenlabs_api_key,

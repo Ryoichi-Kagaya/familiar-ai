@@ -6,41 +6,11 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dotenv import dotenv_values, load_dotenv
+from dotenv import load_dotenv
 
 from .setup import migrate_legacy_env_file
 
 _FAI_DIR = Path.home() / ".familiar_ai"
-ACTIVE_CAMERA_PROFILE_ENV = "FAMILIAR_ACTIVE_CAMERA_PROFILE"
-
-_CAMERA_PROFILE_KEYS = {
-    "CAMERA_HOST",
-    "CAMERA_USERNAME",
-    "CAMERA_PASSWORD",
-    "CAMERA_ONVIF_PORT",
-    "CAMERA_PREVIEW",
-    "CAMERA_PTZ_HOST",
-    "CAMERA_PTZ_USERNAME",
-    "CAMERA_PTZ_PASSWORD",
-    "CAMERA_PTZ_PORT",
-    "CAMERA_RTSP_PATH",
-    "CAMERA_TAPO_PASSWORD",
-    "CAMERA_TAPO_HASH",
-    "GO2RTC_URL",
-    "GO2RTC_STREAM",
-    "STT_INPUT",
-    "TTS_OUTPUT",
-}
-
-# These predate the canonical CAMERA_* names but are still accepted by CameraConfig.
-# Clear them when switching profiles so an omitted profile value cannot silently fall
-# back to the primary camera from the main .env.
-_LEGACY_CAMERA_KEYS = {
-    "TAPO_CAMERA_HOST",
-    "TAPO_USERNAME",
-    "TAPO_PASSWORD",
-    "TAPO_ONVIF_PORT",
-}
 
 
 def _migrate_legacy_user_files() -> None:
@@ -64,34 +34,6 @@ def resolve_env_path() -> Path:
     if root_env.exists():
         return root_env
     return Path.cwd() / ".env"
-
-
-def load_camera_profile(path: Path) -> tuple[Path, list[str]]:
-    """Overlay camera-only settings from a dotenv profile.
-
-    The main ``.env`` remains authoritative for model credentials, persona, memory,
-    and autonomy settings. This makes it safe to switch physical cameras without
-    duplicating or replacing the familiar's primary configuration.
-    """
-    resolved = path.expanduser()
-    if not resolved.is_absolute():
-        resolved = Path.cwd() / resolved
-    resolved = resolved.resolve()
-    if not resolved.is_file():
-        raise FileNotFoundError(f"Camera profile not found: {resolved}")
-
-    values = dotenv_values(resolved)
-    for key in _CAMERA_PROFILE_KEYS | _LEGACY_CAMERA_KEYS:
-        os.environ.pop(key, None)
-
-    loaded: list[str] = []
-    for key in sorted(_CAMERA_PROFILE_KEYS):
-        value = values.get(key)
-        if value is not None:
-            os.environ[key] = value
-            loaded.append(key)
-    os.environ[ACTIVE_CAMERA_PROFILE_ENV] = str(resolved)
-    return resolved, loaded
 
 
 @dataclass

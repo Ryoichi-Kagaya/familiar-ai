@@ -68,7 +68,7 @@ from ._ui_helpers import (
     should_fire_idle_desire,
     should_run_sleep_consolidation,
 )
-from .bootstrap import ACTIVE_CAMERA_PROFILE_ENV, resolve_env_path
+from .bootstrap import resolve_env_path
 from .drive_executor import DriveActionExecutor
 from .user_profile import UserRegistry
 from .diagnostics import (
@@ -1549,15 +1549,6 @@ class FamiliarWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _open_settings(self) -> None:
-        active_camera_profile = os.environ.get(ACTIVE_CAMERA_PROFILE_ENV, "").strip()
-        if active_camera_profile:
-            QMessageBox.information(
-                self,
-                "Camera profile active",
-                "The second-camera profile is active. To keep the primary .env unchanged, "
-                f"edit this camera profile directly and restart:\n{active_camera_profile}",
-            )
-            return
         config = getattr(self, "_config", None) or getattr(
             getattr(self, "_agent", None), "config", None
         )

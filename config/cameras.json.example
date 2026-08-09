@@ -14,9 +14,6 @@
       "ptz_username": "",
       "ptz_password": "",
       "ptz_port": null,
-      "go2rtc_stream": "tapo_cam",
-      "tapo_password": "",
-      "tapo_hash": "",
       "connection": "warm"
     },
     {
@@ -31,9 +28,6 @@
       "ptz_username": "",
       "ptz_password": "",
       "ptz_port": null,
-      "go2rtc_stream": "tapo_cam_remote",
-      "tapo_password": "",
-      "tapo_hash": "",
       "connection": "on_demand"
     }
   ]

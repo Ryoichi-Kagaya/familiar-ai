@@ -79,12 +79,8 @@ advertiseされた `<CAMERA_LAN_IP>/32` を承認します。
 
 ## 4. 複数カメラを登録する
 
-初回起動時、既存の `.env` とリポジトリ直下の `.env.camera-*` は自動的に
-`~/.familiar_ai/cameras.json` へ移行されます。以後はこのJSONがカメラ設定の正本です。
-保存時のパーミッションは `0600` になります。
-
-手動で作る場合は [サンプル](../config/cameras.json.example) をコピーし、次のように
-設定します。
+[サンプル](../config/cameras.json.example) を `~/.familiar_ai/cameras.json` へコピーし、
+次のように設定します。パスワードを含むため、作成後は `chmod 600` で保護してください。
 
 ```json
 {
@@ -98,7 +94,6 @@ advertiseされた `<CAMERA_LAN_IP>/32` を承認します。
       "username": "camera-user",
       "password": "camera-password",
       "onvif_port": 2020,
-      "go2rtc_stream": "tapo_cam",
       "connection": "warm"
     },
     {
@@ -108,7 +103,6 @@ advertiseされた `<CAMERA_LAN_IP>/32` を承認します。
       "username": "camera-user",
       "password": "camera-password",
       "onvif_port": 2020,
-      "go2rtc_stream": "tapo_cam_remote",
       "connection": "on_demand"
     }
   ]
@@ -118,11 +112,10 @@ advertiseされた `<CAMERA_LAN_IP>/32` を承認します。
 - `default_camera`: 従来の `see()` / `look()` が使うカメラID。
 - `connection: "warm"`: 起動中ずっと映像を待機。既定カメラ向け。
 - `connection: "on_demand"`: `see_camera` の実行時だけ接続。外出用・予備向け。
-- `tapo_password` / `tapo_hash`: カメラスピーカーを使う場合だけ設定。
 - `FAMILIAR_CAMERAS_CONFIG`: JSONを別の場所へ置く場合のパス指定。
 
-3台目以降も `cameras` 配列へ同じ形式で追加できます。`id` と
-`go2rtc_stream` はカメラごとに一意にしてください。
+3台目以降も `cameras` 配列へ同じ形式で追加できます。`id` はカメラごとに一意に
+してください。
 
 ## 5. 疎通確認と起動
 
@@ -142,23 +135,8 @@ timeout 3 bash -c '</dev/tcp/<CAMERA_LAN_IP>/2020' && echo 'ONVIF OK'
 - `see_camera(camera="travel")`: 指定カメラをその場で接続して撮影。
 - `look_camera(camera="travel", direction="left")`: 指定カメラのPTZ。
 
-従来の一時的なdotenv切り替えも互換機能として残っています。
-
-```bash
-FAMILIAR_CAMERA_PROFILE=/path/to/camera.env ./run-remote-camera.sh --gui
-./run.sh --camera-profile /path/to/camera.env --gui
-```
-
-`--camera-profile` はカメラ・go2rtc・カメラ音声に関係する設定だけを一時的に切り替え、
-その起動では複数カメラJSONを使いません。
-プロファイルにないカメラ設定は1台目から引き継がず、既定値へ戻ります。一方、
-APIキー、モデル、人格、記憶、自律性などは既存 `.env` の設定を維持します。
-プロファイル起動中は、1台目の `.env` を誤って上書きしないようGUIの設定保存を
-停止します。2台目の値を変えるときは `.env.camera-remote` を直接編集してください。
-
-JSON内の全 `go2rtc_stream` は既存のgo2rtc設定を消さずに同期されます。登録しただけでは
-カメラへ接続せず、映像取得やカメラスピーカー再生でそのストリームを使ったときだけ
-接続します。このため、普段オフラインの外出用カメラを登録したままでも、未使用中に
+`on_demand` のカメラは、登録しただけでは接続されません。映像取得や首振りを要求した
+ときだけ接続するため、普段オフラインの外出用カメラを登録したままでも、未使用中に
 接続エラーを繰り返すことはありません。
 
 ## 切り分け
