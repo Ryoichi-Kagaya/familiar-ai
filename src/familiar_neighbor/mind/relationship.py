@@ -92,8 +92,7 @@ class RelationshipTracker:
         try:
             db = self._ensure_db()
             row = db.execute(
-                "SELECT value_json FROM relationship_state WHERE state_key = ?",
-                (self._user_id,)
+                "SELECT value_json FROM relationship_state WHERE state_key = ?", (self._user_id,)
             ).fetchone()
         except Exception as e:
             logger.warning("Could not load relationship state from SQLite: %s", e)

@@ -45,10 +45,10 @@ def parse_schedule_config(path: Path | None) -> list[QuietHoursRule]:
         elif key == "quiet_hours_end":
             ends.setdefault(0, int(value))
         elif key.startswith("quiet_hours_start_"):
-            idx = int(key[len("quiet_hours_start_"):])
+            idx = int(key[len("quiet_hours_start_") :])
             starts[idx] = int(value)
         elif key.startswith("quiet_hours_end_"):
-            idx = int(key[len("quiet_hours_end_"):])
+            idx = int(key[len("quiet_hours_end_") :])
             ends[idx] = int(value)
     if not starts and not ends:
         return [QuietHoursRule()]

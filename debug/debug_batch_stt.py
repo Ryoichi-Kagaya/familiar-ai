@@ -97,7 +97,9 @@ else:
         audio_streams = [s for s in container.streams if s.type == "audio"]
         if audio_streams:
             s = audio_streams[0]
-            ok(f"RTSP audio stream found: codec={s.codec_context.name}  rate={s.codec_context.sample_rate} Hz")
+            ok(
+                f"RTSP audio stream found: codec={s.codec_context.name}  rate={s.codec_context.sample_rate} Hz"
+            )
         else:
             warn("RTSP stream opened but has no audio track")
         container.close()

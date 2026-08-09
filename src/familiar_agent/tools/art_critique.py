@@ -195,9 +195,7 @@ class ArtCritiqueStore:
 
         # Also save to observations for semantic search
         if observation_memory and critique_text:
-            obs_content = (
-                f"[美術批評] {artist_name}「{title}」— {critique_text[:400]}"
-            )
+            obs_content = f"[美術批評] {artist_name}「{title}」— {critique_text[:400]}"
             observation_memory.save(
                 obs_content,
                 kind="observation",
@@ -410,16 +408,8 @@ class ArtCritiqueStore:
         for idx in range(1, 8):
             sa = scores_a_map.get(idx)
             sb = scores_b_map.get(idx)
-            diff_degree = (
-                (sa["motivation_degree"] - sb["motivation_degree"])
-                if sa and sb
-                else None
-            )
-            diff_achievement = (
-                (sa["achievement"] - sb["achievement"])
-                if sa and sb
-                else None
-            )
+            diff_degree = (sa["motivation_degree"] - sb["motivation_degree"]) if sa and sb else None
+            diff_achievement = (sa["achievement"] - sb["achievement"]) if sa and sb else None
             comparison.append(
                 {
                     "motivation_index": idx,
@@ -434,9 +424,7 @@ class ArtCritiqueStore:
             )
 
         # Find motivations with largest difference
-        diffs_with_data = [
-            c for c in comparison if c["diff_achievement"] is not None
-        ]
+        diffs_with_data = [c for c in comparison if c["diff_achievement"] is not None]
         diffs_with_data.sort(key=lambda x: abs(x["diff_achievement"]), reverse=True)  # type: ignore[arg-type]
         largest_diff = diffs_with_data[:3] if diffs_with_data else []
 
@@ -478,11 +466,17 @@ class ArtCritiqueTool:
                             "properties": {
                                 "title": {"type": "string", "description": "作品タイトル"},
                                 "artist_name": {"type": "string", "description": "アーティスト名"},
-                                "year": {"type": "string", "description": "制作年（例: '1888', 'c.1920'）"},
+                                "year": {
+                                    "type": "string",
+                                    "description": "制作年（例: '1888', 'c.1920'）",
+                                },
                                 "medium": {"type": "string", "description": "素材・技法"},
                                 "dimensions": {"type": "string", "description": "寸法"},
                                 "collection": {"type": "string", "description": "所蔵先"},
-                                "description": {"type": "string", "description": "作品の簡単な説明"},
+                                "description": {
+                                    "type": "string",
+                                    "description": "作品の簡単な説明",
+                                },
                                 "image_ref": {"type": "string", "description": "画像パスまたはURL"},
                             },
                             "required": ["title", "artist_name"],
@@ -520,7 +514,11 @@ class ArtCritiqueTool:
                                         "description": "この動機についての補足メモ",
                                     },
                                 },
-                                "required": ["motivation_index", "motivation_degree", "achievement"],
+                                "required": [
+                                    "motivation_index",
+                                    "motivation_degree",
+                                    "achievement",
+                                ],
                             },
                         },
                         "personal_resonance": {
@@ -574,8 +572,14 @@ class ArtCritiqueTool:
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "title_a": {"type": "string", "description": "作品Aのタイトル（部分一致可）"},
-                        "title_b": {"type": "string", "description": "作品Bのタイトル（部分一致可）"},
+                        "title_a": {
+                            "type": "string",
+                            "description": "作品Aのタイトル（部分一致可）",
+                        },
+                        "title_b": {
+                            "type": "string",
+                            "description": "作品Bのタイトル（部分一致可）",
+                        },
                     },
                     "required": ["title_a", "title_b"],
                 },
@@ -658,9 +662,7 @@ class ArtCritiqueTool:
                 missing = tool_input["title_a"] if not a["artist"] else tool_input["title_b"]
                 return f"「{missing}」の批評記録が見つかりません。", []
 
-            lines = [
-                f"比較: 「{a['title']}」({a['artist']}) vs 「{b['title']}」({b['artist']})"
-            ]
+            lines = [f"比較: 「{a['title']}」({a['artist']}) vs 「{b['title']}」({b['artist']})"]
             for c in result["comparison"]:
                 keys = [k for k in c if k.endswith("_degree") or k.endswith("_achievement")]
                 vals = " | ".join(f"{k}={c[k]}" for k in keys if c[k] is not None)

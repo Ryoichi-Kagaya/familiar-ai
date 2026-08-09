@@ -27,7 +27,7 @@ PORTS_TO_TRY = [PTZ_PORT] + [p for p in (2020, 8080, 80) if p != PTZ_PORT]
 
 
 def sep(title: str) -> None:
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  {title}")
     print("=" * 60)
 
@@ -132,7 +132,9 @@ async def check_ptz_capabilities(ptz: object, token: str) -> None:
     try:
         configs = await asyncio.to_thread(ptz.GetConfigurations)  # type: ignore[union-attr]
         for cfg in configs:
-            info(f"Config name: {getattr(cfg, 'Name', '?')!r}  token: {getattr(cfg, 'token', '?')!r}")
+            info(
+                f"Config name: {getattr(cfg, 'Name', '?')!r}  token: {getattr(cfg, 'token', '?')!r}"
+            )
             limits = getattr(cfg, "PanTiltLimits", None)
             if limits:
                 r = getattr(limits, "Range", None)
@@ -140,12 +142,20 @@ async def check_ptz_capabilities(ptz: object, token: str) -> None:
                     xr = getattr(r, "XRange", None)
                     yr = getattr(r, "YRange", None)
                     if xr:
-                        info(f"  Pan  (x) range : Min={getattr(xr, 'Min', '?')}  Max={getattr(xr, 'Max', '?')}")
+                        info(
+                            f"  Pan  (x) range : Min={getattr(xr, 'Min', '?')}  Max={getattr(xr, 'Max', '?')}"
+                        )
                     if yr:
-                        info(f"  Tilt (y) range : Min={getattr(yr, 'Min', '?')}  Max={getattr(yr, 'Max', '?')}")
+                        info(
+                            f"  Tilt (y) range : Min={getattr(yr, 'Min', '?')}  Max={getattr(yr, 'Max', '?')}"
+                        )
                         y_min = getattr(yr, "Min", None)
                         y_max = getattr(yr, "Max", None)
-                        if y_min is not None and y_max is not None and float(y_min) == float(y_max) == 0.0:
+                        if (
+                            y_min is not None
+                            and y_max is not None
+                            and float(y_min) == float(y_max) == 0.0
+                        ):
                             warn("Tilt range is 0–0: this camera may NOT support tilt!")
             else:
                 warn("No PanTiltLimits in configuration (tilt may be unsupported)")
@@ -163,7 +173,9 @@ async def check_ptz_capabilities(ptz: object, token: str) -> None:
         if pos:
             pt = getattr(pos, "PanTilt", None)
             if pt:
-                info(f"Current position — Pan(x)={getattr(pt, 'x', '?')}  Tilt(y)={getattr(pt, 'y', '?')}")
+                info(
+                    f"Current position — Pan(x)={getattr(pt, 'x', '?')}  Tilt(y)={getattr(pt, 'y', '?')}"
+                )
             else:
                 warn("Position.PanTilt not present in GetStatus response")
         ok("GetStatus succeeded")
@@ -179,9 +191,13 @@ async def check_ptz_capabilities(ptz: object, token: str) -> None:
             if supported:
                 rel_spaces = getattr(supported, "RelativePanTiltTranslationSpace", [])
                 if rel_spaces:
-                    ok(f"  RelativeMove PanTilt spaces: {[getattr(s, 'URI', s) for s in rel_spaces]}")
+                    ok(
+                        f"  RelativeMove PanTilt spaces: {[getattr(s, 'URI', s) for s in rel_spaces]}"
+                    )
                 else:
-                    warn("  No RelativePanTiltTranslationSpace — RelativeMove may not be supported!")
+                    warn(
+                        "  No RelativePanTiltTranslationSpace — RelativeMove may not be supported!"
+                    )
         ok("GetNodes succeeded")
     except Exception as e:
         ng(f"GetNodes failed: {e}")
@@ -220,7 +236,7 @@ async def try_tilt_move(ptz: object, token: str) -> None:
     # We test both so you can see which actually moves the camera.
 
     moves: list[tuple[str, float]] = [
-        ("camera.py 'up'   (y = -0.111, should tilt UP)",   -10 / 90.0),
+        ("camera.py 'up'   (y = -0.111, should tilt UP)", -10 / 90.0),
         ("camera.py 'down' (y = +0.111, should tilt DOWN)", +10 / 90.0),
     ]
 

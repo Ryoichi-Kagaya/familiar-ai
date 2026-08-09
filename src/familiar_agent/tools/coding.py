@@ -40,11 +40,15 @@ class CodingTool:
         p = Path(os.path.expanduser(path))
         if p.is_absolute():
             return p
-        base = Path(os.path.expanduser(self._config.workdir)) if self._config.workdir else Path.cwd()
+        base = (
+            Path(os.path.expanduser(self._config.workdir)) if self._config.workdir else Path.cwd()
+        )
         return base / p
 
     def _workdir(self) -> Path:
-        return Path(os.path.expanduser(self._config.workdir)) if self._config.workdir else Path.cwd()
+        return (
+            Path(os.path.expanduser(self._config.workdir)) if self._config.workdir else Path.cwd()
+        )
 
     # ── tool definitions ──────────────────────────────────────────────────
 

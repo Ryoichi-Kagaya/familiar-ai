@@ -34,6 +34,7 @@ if not DOTENV_PATH.exists():
 # python-dotenv が使える場合は使う、なければ手動パース
 try:
     from dotenv import load_dotenv
+
     load_dotenv(dotenv_path=DOTENV_PATH)
     print(f"[OK] dotenv で読み込み: {DOTENV_PATH}")
 except ImportError:
@@ -168,6 +169,7 @@ print("  [確認] StdioServerParameters の cwd サポート:")
 try:
     from mcp import StdioServerParameters
     import inspect
+
     sig = inspect.signature(StdioServerParameters)
     if "cwd" in sig.parameters:
         print("    [OK] cwd パラメータあり → familiar-ai は cwd を渡せます")
@@ -184,7 +186,9 @@ MCP_SEQUENCE = [
     (
         1,
         {
-            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
             "params": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
@@ -203,7 +207,9 @@ MCP_SEQUENCE = [
     (
         3,
         {
-            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
             # 引数なし（familiar-ai が使う方法）
             # .env の GITHUB_DISCUSS_REPO が "owner/repo" 合体形式の場合、
             # main.py の call_tool は _parse_repo_info() を使わず
@@ -214,7 +220,9 @@ MCP_SEQUENCE = [
     (
         4,
         {
-            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
             # 引数で owner/repo を明示（ワークアラウンド）
             "params": {
                 "name": "get_discussions",
@@ -298,9 +306,7 @@ async def run_mcp_session():
                     print(f"    [ERROR] id={expected_id} のレスポンスがタイムアウト")
                     break
                 try:
-                    line_bytes = await asyncio.wait_for(
-                        proc.stdout.readline(), timeout=remaining
-                    )
+                    line_bytes = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
                 except asyncio.TimeoutError:
                     print(f"    [ERROR] id={expected_id} のレスポンスがタイムアウト")
                     break
@@ -363,48 +369,58 @@ if fai_json.exists():
     gd_cfg = cfg.get("mcpServers", {}).get("github-discuss", {})
     args = gd_cfg.get("args", [])
     if "~/github-discuss" in args:
-        checks.append((
-            "WARN",
-            ".familiar-ai.json の --project に '~/github-discuss' を使用しています。\n"
-            "       Windows では ~ が展開されないことがあります。\n"
-            "       → 絶対パス 'C:/Users/Blue-/github-discuss' に変更を検討してください。"
-        ))
+        checks.append(
+            (
+                "WARN",
+                ".familiar-ai.json の --project に '~/github-discuss' を使用しています。\n"
+                "       Windows では ~ が展開されないことがあります。\n"
+                "       → 絶対パス 'C:/Users/Blue-/github-discuss' に変更を検討してください。",
+            )
+        )
     cwd_val = gd_cfg.get("cwd", "")
     if cwd_val:
         cwd_path = Path(cwd_val)
         if cwd_path.exists():
             checks.append(("OK", f".familiar-ai.json の cwd が設定されています: {cwd_val}"))
         else:
-            checks.append((
-                "ERROR",
-                f".familiar-ai.json の cwd が存在しません: {cwd_val}\n"
-                f"       → パスを確認してください"
-            ))
+            checks.append(
+                (
+                    "ERROR",
+                    f".familiar-ai.json の cwd が存在しません: {cwd_val}\n"
+                    f"       → パスを確認してください",
+                )
+            )
     else:
-        checks.append((
-            "WARN",
-            ".familiar-ai.json の github-discuss に 'cwd' が設定されていません。\n"
-            "       uv はプロジェクトルートを検出できず、github-discuss-mcp が起動しない可能性があります。\n"
-            "       → 'cwd': 'C:/Users/Blue-/github-discuss' を追加してください。"
-        ))
+        checks.append(
+            (
+                "WARN",
+                ".familiar-ai.json の github-discuss に 'cwd' が設定されていません。\n"
+                "       uv はプロジェクトルートを検出できず、github-discuss-mcp が起動しない可能性があります。\n"
+                "       → 'cwd': 'C:/Users/Blue-/github-discuss' を追加してください。",
+            )
+        )
 
     if "env" not in gd_cfg:
-        checks.append((
-            "INFO",
-            ".familiar-ai.json の github-discuss に 'env' セクションがありません。\n"
-            "       .env の自動検出に依存しています。"
-        ))
+        checks.append(
+            (
+                "INFO",
+                ".familiar-ai.json の github-discuss に 'env' セクションがありません。\n"
+                "       .env の自動検出に依存しています。",
+            )
+        )
 else:
     checks.append(("WARN", f".familiar-ai.json が見つかりません: {fai_json}"))
 
 # Private Key ファイルの確認（再掲）
 if pem_path and not Path(pem_path).exists():
-    checks.append((
-        "ERROR",
-        f"GITHUB_APP_PRIVATE_KEY のファイルが存在しません:\n"
-        f"       {pem_path}\n"
-        f"       → Personal Access Token 認証 (GITHUB_TOKEN) に切り替えるか、パスを修正してください。"
-    ))
+    checks.append(
+        (
+            "ERROR",
+            f"GITHUB_APP_PRIVATE_KEY のファイルが存在しません:\n"
+            f"       {pem_path}\n"
+            f"       → Personal Access Token 認証 (GITHUB_TOKEN) に切り替えるか、パスを修正してください。",
+        )
+    )
 
 if not checks:
     print("  特に問題は検出されませんでした。")
