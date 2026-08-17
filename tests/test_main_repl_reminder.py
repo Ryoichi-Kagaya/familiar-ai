@@ -101,6 +101,7 @@ async def test_repl_reminder_fires_with_auto_desire_off(
     kwargs = agent.run.await_args.kwargs
     assert agent.run.await_args.args[0] == ""
     assert "meds" in kwargs["inner_voice"]
+    assert kwargs["on_text"] is None
     # mark_reminded advanced the cadence
     assert store.list_open()[0].reminder_count == 1
     store.close()

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from ..config import TelegramConfig
@@ -24,6 +25,13 @@ TelegramSender = Callable[[int, str], Awaitable[None]]
 CurrentUserId = Callable[[], str]
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _TelegramDelivery:
+    profile: UserProfile
+    chat_id: int
+    text: str
 
 
 class TelegramTransport:
@@ -132,18 +140,15 @@ class TelegramTool:
             (profile for profile in self._registry.list_users() if profile.id == user_id), None
         )
 
-    async def call(self, name: str, tool_input: dict) -> tuple[str, None]:
-        if name != "send_telegram_message":
-            return f"Unknown Telegram tool: {name}", None
-
+    def _prepare_delivery(self, tool_input: dict) -> _TelegramDelivery | str:
+        """Validate tool input and resolve one concrete Telegram destination."""
         text = tool_input.get("text", "")
         if not isinstance(text, str) or not text.strip():
-            return "Telegram message was not sent: text must not be empty.", None
+            return "Telegram message was not sent: text must not be empty."
         text = text.strip()
         if len(text) > _MAX_TOOL_TEXT_LENGTH:
             return (
-                f"Telegram message was not sent: text exceeds {_MAX_TOOL_TEXT_LENGTH} characters.",
-                None,
+                f"Telegram message was not sent: text exceeds {_MAX_TOOL_TEXT_LENGTH} characters."
             )
 
         raw_user_id = tool_input.get("user_id")
@@ -152,44 +157,57 @@ class TelegramTool:
         elif isinstance(raw_user_id, str) and raw_user_id.strip():
             user_id = raw_user_id.strip()
         else:
-            return "Telegram message was not sent: user_id must be a profile ID.", None
+            return "Telegram message was not sent: user_id must be a profile ID."
 
         profile = self._resolve_profile(user_id)
         if profile is None:
-            return f"Telegram message was not sent: user profile '{user_id}' does not exist.", None
+            return f"Telegram message was not sent: user profile '{user_id}' does not exist."
         if profile.telegram_id is None:
-            return (
-                f"Telegram message was not sent: profile '{user_id}' has no linked Telegram account.",
-                None,
-            )
+            return f"Telegram message was not sent: profile '{user_id}' has no linked Telegram account."
         if self._allowed_ids and profile.telegram_id not in self._allowed_ids:
             return (
                 f"Telegram message was not sent: profile '{user_id}' is not in "
-                "TELEGRAM_ALLOWED_IDS.",
-                None,
+                "TELEGRAM_ALLOWED_IDS."
             )
+        return _TelegramDelivery(profile=profile, chat_id=profile.telegram_id, text=text)
 
-        sent_chunks = 0
-        chunk_count = (len(text) + _MAX_MESSAGE_LENGTH - 1) // _MAX_MESSAGE_LENGTH
+    def _record_sent_chunk(self, chat_id: int, chunk: str) -> None:
+        if self._history is None:
+            return
         try:
-            for start in range(0, len(text), _MAX_MESSAGE_LENGTH):
-                chunk = text[start : start + _MAX_MESSAGE_LENGTH]
-                await self._sender(profile.telegram_id, chunk)
-                if self._history is not None:
-                    try:
-                        self._history.record_agent(profile.telegram_id, chunk)
-                    except Exception:  # noqa: BLE001 - history is observability only
-                        logger.warning("Failed to record outbound Telegram message", exc_info=True)
+            self._history.record_agent(chat_id, chunk)
+        except Exception:  # noqa: BLE001 - history is observability only
+            logger.warning("Failed to record outbound Telegram message", exc_info=True)
+
+    async def _send_delivery(self, delivery: _TelegramDelivery) -> str:
+        """Send all chunks and return the model-visible delivery result."""
+        sent_chunks = 0
+        chunks = [
+            delivery.text[start : start + _MAX_MESSAGE_LENGTH]
+            for start in range(0, len(delivery.text), _MAX_MESSAGE_LENGTH)
+        ]
+        try:
+            for chunk in chunks:
+                await self._sender(delivery.chat_id, chunk)
+                self._record_sent_chunk(delivery.chat_id, chunk)
                 sent_chunks += 1
         except Exception as exc:  # noqa: BLE001 - tool errors must return to the agent
             error_name = type(exc).__name__
             if sent_chunks:
                 return (
-                    f"Telegram message was partially sent to {profile.name} "
-                    f"({sent_chunks}/{chunk_count} chunks; {error_name}). Do not resend the "
-                    "whole message because that would duplicate delivered text.",
-                    None,
+                    f"Telegram message was partially sent to {delivery.profile.name} "
+                    f"({sent_chunks}/{len(chunks)} chunks; {error_name}). Do not resend the "
+                    "whole message because that would duplicate delivered text."
                 )
-            return f"Telegram message failed for {profile.name} ({error_name}).", None
+            return f"Telegram message failed for {delivery.profile.name} ({error_name})."
 
-        return f"Telegram message sent to {profile.name} ({profile.id}).", None
+        return f"Telegram message sent to {delivery.profile.name} ({delivery.profile.id})."
+
+    async def call(self, name: str, tool_input: dict) -> tuple[str, None]:
+        if name != "send_telegram_message":
+            return f"Unknown Telegram tool: {name}", None
+
+        delivery = self._prepare_delivery(tool_input)
+        if isinstance(delivery, str):
+            return delivery, None
+        return await self._send_delivery(delivery), None

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from familiar_agent._ui_helpers import (
     ACTION_ICONS,
+    TurnOutputState,
     commitment_reminder_prompt,
     decide_idle_action,
     desire_tick_prompt,
@@ -17,6 +18,27 @@ from familiar_agent._ui_helpers import (
     should_fire_idle_desire,
 )
 from familiar_runtime.commitments import SQLiteCommitmentStore
+
+
+# ---------------------------------------------------------------------------
+# TurnOutputState tests
+# ---------------------------------------------------------------------------
+
+
+class TestTurnOutputState:
+    def test_regular_turn_surfaces_model_text_until_say(self):
+        state = TurnOutputState.from_inner_voice("")
+
+        assert state.surface_model_text
+        state.mark_say()
+        assert not state.surface_model_text
+
+    def test_autonomous_turn_keeps_model_text_private(self):
+        state = TurnOutputState.from_inner_voice("内的な独り言")
+
+        assert not state.surface_model_text
+        state.mark_say()
+        assert not state.surface_model_text
 
 
 # ---------------------------------------------------------------------------

@@ -256,7 +256,7 @@ async def repl(
                             await agent.run(
                                 "",
                                 on_action=on_action,
-                                on_text=on_text,
+                                on_text=None,
                                 desires=desires,
                                 inner_voice=commitment_reminder_prompt(reminders),
                                 interrupt_queue=input_queue,
@@ -311,7 +311,7 @@ async def repl(
                         await agent.run(
                             "",
                             on_action=on_action,
-                            on_text=on_text,
+                            on_text=None,
                             desires=desires,
                             inner_voice=inner_voice,
                             interrupt_queue=input_queue,

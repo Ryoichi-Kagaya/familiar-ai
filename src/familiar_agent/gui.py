@@ -61,6 +61,7 @@ from ._i18n import _t
 from ._ui_helpers import (
     DESIRE_COOLDOWN,
     IDLE_CHECK_INTERVAL,
+    TurnOutputState,
     commitment_reminder_prompt,
     format_action,
     format_tool_result,
@@ -128,11 +129,6 @@ _UI_FONT_STACK = (
 )
 _MONO_FONT_STACK = "'Cascadia Mono', 'Consolas', 'Courier New', monospace"
 _FONT_SCALE = 1.5
-
-
-def _should_surface_model_text(*, inner_voice: str, say_fired: bool) -> bool:
-    """Return whether model text belongs in the visible GUI conversation."""
-    return not inner_voice and not say_fired
 
 
 # Semantic accent colors not in the Monokai base palette
@@ -1999,10 +1995,10 @@ class FamiliarWindow(QMainWindow):
                 _update_thinking_status()
             self._refresh_status_card()
 
-        say_fired = False
+        output_state = TurnOutputState.from_inner_voice(inner_voice)
 
         def on_text(chunk: str) -> None:
-            if not _should_surface_model_text(inner_voice=inner_voice, say_fired=say_fired):
+            if not output_state.surface_model_text:
                 # Autonomous text is the agent's private monologue. Only an
                 # explicit say() action is allowed to cross the GUI boundary.
                 return
@@ -2010,11 +2006,10 @@ class FamiliarWindow(QMainWindow):
             self._stream.append_chunk(chunk)
 
         def on_action(name: str, tool_input: dict) -> None:
-            nonlocal say_fired
             if name == "say":
                 # Discard pre-say text, then commit each say() immediately so
                 # multiple calls all appear in order rather than overwriting.
-                say_fired = True
+                output_state.mark_say()
                 self._stream.commit_and_clear()
                 raw = str(tool_input.get("text", ""))
                 clean = re.sub(r"\[.*?\]", "", raw).strip()
@@ -2055,7 +2050,7 @@ class FamiliarWindow(QMainWindow):
             # When say() was called, the spoken content is already in the log
             # (clean, tags stripped). Suppress final_text to avoid the LLM's
             # post-say text echo (same content with raw audio tags) appearing again.
-            if _should_surface_model_text(inner_voice=inner_voice, say_fired=say_fired):
+            if output_state.surface_model_text:
                 display = committed.strip() or final_text.strip()
                 if display and display != "(no response)":
                     self._log.append_line(f"[{self._agent_display_name}] {display}")

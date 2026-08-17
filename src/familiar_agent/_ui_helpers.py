@@ -3,6 +3,7 @@
 This module is the single source of truth for:
   - ACTION_ICONS: icon mapping for tool calls
   - format_action(): human-readable tool-call label
+  - TurnOutputState: visibility state for one local-surface agent turn
   - should_fire_idle_desire(): shared gate for autonomous desire turns
   - desire_tick_prompt(): extract the current dominant desire prompt (UI-agnostic)
 
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ._i18n import _t
@@ -21,6 +23,34 @@ if TYPE_CHECKING:
     from familiar_runtime.commitments import Commitment, SQLiteCommitmentStore
 
     from .desires import DesireSystem
+
+
+# ---------------------------------------------------------------------------
+# Turn output visibility
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class TurnOutputState:
+    """Track whether raw model text may cross a local UI boundary.
+
+    Autonomous ``inner_voice`` text is private. A ``say`` tool call remains
+    visible because each surface renders that explicit action separately.
+    """
+
+    autonomous: bool
+    say_fired: bool = False
+
+    @classmethod
+    def from_inner_voice(cls, inner_voice: str) -> TurnOutputState:
+        return cls(autonomous=bool(inner_voice))
+
+    @property
+    def surface_model_text(self) -> bool:
+        return not self.autonomous and not self.say_fired
+
+    def mark_say(self) -> None:
+        self.say_fired = True
 
 
 # ---------------------------------------------------------------------------
