@@ -306,14 +306,8 @@ async def test_compaction_sets_pending_and_next_turn_injects_recovery():
         return (_turn("end_turn", text="ok"), "ok")
 
     agent.backend.stream_turn = AsyncMock(side_effect=_spy_stream_turn)
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         await agent.run("そういえば、昨日の続きなんだけど、あれからどう思う?")
-    finally:
-        for p in ps:
-            p.stop()
 
     assert "[Post-compaction recovery]" in captured["variable"]
     assert agent._post_compact_recovery_pending is False

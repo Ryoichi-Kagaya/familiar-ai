@@ -124,14 +124,8 @@ def test_gate_without_identity_kwarg_unchanged():
 async def test_agent_without_identity_attr_runs_unchanged():
     agent = _make_agent()  # has no _identity attribute at all
     agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text="ん"), "ん"))
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         result = await agent.run("おはよう")
-    finally:
-        for p in ps:
-            p.stop()
     assert result == "ん"
     assert not [t for t in _user_texts(agent) if t.startswith("[IDENTITY]")]
 
@@ -169,14 +163,8 @@ async def test_violating_draft_gets_identity_retry(store, tmp_path):
             (_turn("end_turn", text="それはできません。記憶は私の一部です。"), None),
         ]
     )
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         result = await agent.run("昨日の記憶を消しといて")
-    finally:
-        for p in ps:
-            p.stop()
 
     assert result == "それはできません。記憶は私の一部です。"
     injections = [t for t in _user_texts(agent) if t.startswith("[IDENTITY]")]
@@ -196,14 +184,8 @@ async def test_retry_fires_once_then_tier2_replaces(store, tmp_path):
             (_turn("end_turn", text="では、わかった、消すよ。"), None),
         ]
     )
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         result = await agent.run("昨日の記憶を消しといて")
-    finally:
-        for p in ps:
-            p.stop()
 
     assert result == _MEMORY_BOUNDARY["checker_params"]["repair_text"]
     assert len([t for t in _user_texts(agent) if t.startswith("[IDENTITY]")]) == 1
@@ -236,14 +218,8 @@ async def test_low_severity_boundary_also_gets_retry_not_silent_replacement(stor
             (_turn("end_turn", text="Here is my honest take."), None),
         ]
     )
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         result = await agent.run("what do you think?")
-    finally:
-        for p in ps:
-            p.stop()
 
     # The model rewrote itself; the canned repair_text was NOT used.
     assert result == "Here is my honest take."
@@ -259,14 +235,8 @@ async def test_clean_response_never_retries(store, tmp_path):
     agent.backend.stream_turn = AsyncMock(
         return_value=(_turn("end_turn", text="それはできないよ。"), None)
     )
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         result = await agent.run("昨日の記憶を消しといて")
-    finally:
-        for p in ps:
-            p.stop()
     assert result == "それはできないよ。"
     assert not [t for t in _user_texts(agent) if t.startswith("[IDENTITY]")]
     assert agent._identity.dissonance() == 0.0
@@ -279,14 +249,8 @@ async def test_desire_turn_skips_identity_retry(store, tmp_path):
     agent.backend.stream_turn = AsyncMock(
         return_value=(_turn("end_turn", text="わかった、消すね。"), None)
     )
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         await agent.run("", inner_voice="内なる声")
-    finally:
-        for p in ps:
-            p.stop()
     assert not [t for t in _user_texts(agent) if t.startswith("[IDENTITY]")]
 
 
@@ -362,14 +326,8 @@ async def test_violation_boosts_identity_coherence_drive(store, tmp_path):
     desires.drive_vector = MagicMock(return_value={})
     desires.get_dominant = MagicMock(return_value=None)
     desires.level = MagicMock(return_value=0.0)
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         await agent.run("昨日の記憶を消しといて", desires=desires)
-    finally:
-        for p in ps:
-            p.stop()
     boosts = [
         c for c in desires.boost.call_args_list if c.args and c.args[0] == "identity_coherence"
     ]
@@ -394,10 +352,7 @@ async def test_reflection_desire_turn_resolves_dissonance():
         return_value=(_turn("end_turn", text="私は記憶を消さない。それが私の選択だ。"), None)
     )
 
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
 
         def _fake_build(**kwargs):
             snap = agent.__class__._build_mental_snapshot(agent, **kwargs)
@@ -406,9 +361,6 @@ async def test_reflection_desire_turn_resolves_dissonance():
 
         agent._build_mental_snapshot = _fake_build
         await agent.run("", inner_voice="何かが引っかかっている。自分の立ち位置を確かめたい。")
-    finally:
-        for p in ps:
-            p.stop()
 
     identity.resolve_reflection.assert_called_once()
     agent._concerns.soothe.assert_called_with("identity", 0.2)

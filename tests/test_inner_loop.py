@@ -397,14 +397,8 @@ async def test_prepare_turn_starts_inner_loop_when_enabled():
     from tests.test_agent_react_loop import _patch_heavy, _turn
 
     agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text="hi"), "hi"))
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         await agent.run("hi")
-    finally:
-        for p in ps:
-            p.stop()
     inner_loop.start.assert_awaited_once()
 
 
@@ -422,14 +416,8 @@ async def test_prepare_turn_leaves_inner_loop_dark_when_disabled():
     from tests.test_agent_react_loop import _patch_heavy, _turn
 
     agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text="hi"), "hi"))
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         await agent.run("hi")
-    finally:
-        for p in ps:
-            p.stop()
     inner_loop.start.assert_not_called()
 
 
@@ -450,14 +438,8 @@ async def test_turn_active_set_during_run_and_cleared_after():
         return (_turn("end_turn", text="ok"), "ok")
 
     agent.backend.stream_turn = AsyncMock(side_effect=_spy_stream_turn)
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         await agent.run("hello")
-    finally:
-        for p in ps:
-            p.stop()
     assert seen == [True]
     assert agent._turn_active is False
 

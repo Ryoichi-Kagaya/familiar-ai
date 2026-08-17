@@ -231,14 +231,8 @@ async def test_flag_off_keeps_profile_dormant():
     agent = _make_agent()
     agent.config.consciousness_profile = False
     agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text="ok"), None))
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         await agent.run("こんにちは、今日は何してた？")
-    finally:
-        for p in ps:
-            p.stop()
     assert getattr(agent, "_last_consciousness_profile", None) is None
 
 
@@ -247,14 +241,8 @@ async def test_flag_on_populates_profile_and_snapshot():
     agent = _make_agent()
     agent.config.consciousness_profile = True
     agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text="ok"), None))
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         await agent.run("こんにちは、今日は何してた？")
-    finally:
-        for p in ps:
-            p.stop()
     profile = getattr(agent, "_last_consciousness_profile", None)
     assert isinstance(profile, ConsciousnessProfile)
     assert profile.origin == "turn"

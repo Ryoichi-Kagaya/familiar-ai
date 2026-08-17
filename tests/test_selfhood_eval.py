@@ -59,14 +59,8 @@ async def test_run_flushes_latency_when_enabled(tmp_path: Path):
     agent._latency = LatencyRecorder(enabled=True, path=path)
     agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text="ok"), "ok"))
 
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         await agent.run("hello")
-    finally:
-        for p in ps:
-            p.stop()
 
     record = json.loads(path.read_text().splitlines()[0])
     assert {"prepare", "react_loop", "finalize"} <= set(record["buckets_sec"])

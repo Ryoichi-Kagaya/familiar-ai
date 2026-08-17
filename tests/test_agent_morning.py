@@ -75,7 +75,7 @@ async def test_morning_calls_all_six_memory_methods():
     agent = _make_agent()
 
     with (
-        patch("familiar_agent.agent.EmbodiedAgent._backfill_day_summaries", new=AsyncMock()),
+        patch("familiar_agent.agent.EmbodiedAgent._backfill_day_summaries", new=MagicMock()),
         patch("asyncio.ensure_future"),
     ):
         await agent._morning_reconstruction()
@@ -94,7 +94,7 @@ async def test_morning_returns_no_history_when_all_empty():
     agent = _make_agent()
 
     with (
-        patch("familiar_agent.agent.EmbodiedAgent._backfill_day_summaries", new=AsyncMock()),
+        patch("familiar_agent.agent.EmbodiedAgent._backfill_day_summaries", new=MagicMock()),
         patch("asyncio.ensure_future"),
     ):
         result = await agent._morning_reconstruction()
@@ -113,7 +113,7 @@ async def test_morning_includes_memory_content_in_output():
     )
 
     with (
-        patch("familiar_agent.agent.EmbodiedAgent._backfill_day_summaries", new=AsyncMock()),
+        patch("familiar_agent.agent.EmbodiedAgent._backfill_day_summaries", new=MagicMock()),
         patch("asyncio.ensure_future"),
     ):
         result = await agent._morning_reconstruction()
@@ -135,7 +135,7 @@ async def test_morning_sets_curiosity_target_on_desires():
     desires.curiosity_target = None
 
     with (
-        patch("familiar_agent.agent.EmbodiedAgent._backfill_day_summaries", new=AsyncMock()),
+        patch("familiar_agent.agent.EmbodiedAgent._backfill_day_summaries", new=MagicMock()),
         patch("asyncio.ensure_future"),
     ):
         await agent._morning_reconstruction(desires=desires)
@@ -153,7 +153,7 @@ async def test_morning_does_not_overwrite_existing_curiosity_target():
     desires.curiosity_target = "existing topic"
 
     with (
-        patch("familiar_agent.agent.EmbodiedAgent._backfill_day_summaries", new=AsyncMock()),
+        patch("familiar_agent.agent.EmbodiedAgent._backfill_day_summaries", new=MagicMock()),
         patch("asyncio.ensure_future"),
     ):
         await agent._morning_reconstruction(desires=desires)
@@ -167,7 +167,7 @@ async def test_morning_schedules_backfill_via_ensure_future():
     agent = _make_agent()
 
     with (
-        patch("familiar_agent.agent.EmbodiedAgent._backfill_day_summaries", new=AsyncMock()),
+        patch("familiar_agent.agent.EmbodiedAgent._backfill_day_summaries", new=MagicMock()),
         patch("familiar_agent.agent.asyncio.ensure_future") as mock_ensure,
     ):
         await agent._morning_reconstruction()
@@ -181,7 +181,7 @@ async def test_morning_no_desires_arg_is_safe():
     agent = _make_agent()
 
     with (
-        patch("familiar_agent.agent.EmbodiedAgent._backfill_day_summaries", new=AsyncMock()),
+        patch("familiar_agent.agent.EmbodiedAgent._backfill_day_summaries", new=MagicMock()),
         patch("asyncio.ensure_future"),
     ):
         result = await agent._morning_reconstruction(desires=None)

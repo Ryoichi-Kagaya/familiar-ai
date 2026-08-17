@@ -53,14 +53,8 @@ async def test_silent_reply_gets_one_voice_retry_then_speaks():
         ]
     )
 
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         result = await agent.run(_CHATTY_INPUT)
-    finally:
-        for p in ps:
-            p.stop()
 
     assert result == "大変だったね。"
     assert len(_voice_injections(agent)) == 1
@@ -78,14 +72,8 @@ async def test_gate_fires_at_most_once_per_turn():
         ]
     )
 
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         result = await agent.run(_CHATTY_INPUT)
-    finally:
-        for p in ps:
-            p.stop()
 
     assert result == "still silent"
     assert len(_voice_injections(agent)) == 1
@@ -98,14 +86,8 @@ async def test_no_gate_when_flag_off():
     agent.config.auto_say = False
     agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text="quiet"), None))
 
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         result = await agent.run(_CHATTY_INPUT)
-    finally:
-        for p in ps:
-            p.stop()
 
     assert result == "quiet"
     assert _voice_injections(agent) == []
@@ -118,14 +100,8 @@ async def test_no_gate_without_tts():
     agent.config.auto_say = False
     agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text="quiet"), None))
 
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         await agent.run(_CHATTY_INPUT)
-    finally:
-        for p in ps:
-            p.stop()
 
     assert _voice_injections(agent) == []
 
@@ -141,14 +117,8 @@ async def test_no_gate_when_say_already_used():
         ]
     )
 
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         result = await agent.run(_CHATTY_INPUT)
-    finally:
-        for p in ps:
-            p.stop()
 
     assert result == "どうかな。"
     assert _voice_injections(agent) == []
@@ -162,14 +132,8 @@ async def test_no_gate_on_desire_turn():
         return_value=(_turn("end_turn", text="内面の独白のようなもの"), None)
     )
 
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         await agent.run("", inner_voice="内なる衝動")
-    finally:
-        for p in ps:
-            p.stop()
 
     assert _voice_injections(agent) == []
 
@@ -180,14 +144,8 @@ async def test_no_gate_on_brief_turn():
     agent = _gate_agent()
     agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text="おはよう。"), None))
 
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         await agent.run("おはよう")
-    finally:
-        for p in ps:
-            p.stop()
 
     assert _voice_injections(agent) == []
 

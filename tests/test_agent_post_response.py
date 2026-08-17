@@ -2,12 +2,31 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from familiar_agent.agent import EmbodiedAgent
 from familiar_agent.post_response import PostResponsePipeline
+
+
+def _isolated_pipeline() -> tuple[SimpleNamespace, PostResponsePipeline]:
+    """Build a pipeline with every unrelated stage stubbed out."""
+    agent = SimpleNamespace(
+        _capture_companion_thread=AsyncMock(),
+        _maybe_adapt_values=AsyncMock(),
+        _maybe_update_identity=AsyncMock(),
+        _self_state=None,
+    )
+    pipeline = PostResponsePipeline(agent, generate_plan_fn=AsyncMock(return_value=""))
+    pipeline._process_observation = AsyncMock()
+    pipeline._persist_conversation = AsyncMock(return_value="neutral")
+    pipeline._update_relationship = MagicMock()
+    pipeline._persist_curiosity = AsyncMock(return_value=None)
+    pipeline._update_continuity = MagicMock()
+    pipeline._refresh_deferred_context = AsyncMock()
+    return agent, pipeline
 
 
 @pytest.mark.asyncio
@@ -117,3 +136,44 @@ async def test_deferred_turn_context_updates_cache_and_frustration_drive() -> No
     assert agent._cached_companion_mood == "frustrated"
     assert agent._cached_temporal_ctx == "temporal"
     desires.boost.assert_called_once_with("worry_companion", 0.3)
+
+
+@pytest.mark.parametrize(
+    ("user_input", "is_desire_turn", "expected_calls"), [("明日プレゼン", False, 1), ("", True, 0)]
+)
+@pytest.mark.asyncio
+async def test_companion_thread_capture_only_runs_for_conversation(
+    user_input: str,
+    is_desire_turn: bool,
+    expected_calls: int,
+) -> None:
+    agent, pipeline = _isolated_pipeline()
+
+    await pipeline.run(
+        user_input=user_input,
+        final_text="返事",
+        camera_used=False,
+        observation_action_name=None,
+        observation_action_input=None,
+        companion_mood="engaged",
+        is_desire_turn=is_desire_turn,
+        desires=None,
+    )
+
+    assert agent._capture_companion_thread.await_count == expected_calls
+
+
+def test_continuity_updates_concerns_and_self_state() -> None:
+    agent = MagicMock()
+    signal = SimpleNamespace(action_name="look", agency_error=0.62, external_surprise=0.18)
+    agent._prediction.last_signal.return_value = signal
+    pipeline = PostResponsePipeline(agent, generate_plan_fn=AsyncMock(return_value=""))
+
+    pipeline._update_continuity(
+        emotion="tender",
+        companion_mood="frustrated",
+        curiosity="The window light still feels important.",
+    )
+
+    agent._concerns.update_from_turn.assert_called_once()
+    agent._self_state.apply_turn_context.assert_called_once()

@@ -147,14 +147,8 @@ def _gate_agent(**kwargs):
 
 
 async def _run(agent, text=_CLAIM_INPUT):
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         return await agent.run(text)
-    finally:
-        for p in ps:
-            p.stop()
 
 
 def _reality_injections(agent) -> list[str]:
@@ -253,14 +247,8 @@ async def test_desire_turn_not_recorded_in_grounding():
     agent.backend.stream_turn = AsyncMock(
         return_value=(_turn("end_turn", text="静かな時間に少し考えごとをしていた。"), None)
     )
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         await agent.run("", inner_voice="内省の時間")
-    finally:
-        for p in ps:
-            p.stop()
     assert not agent._grounding._turns  # nothing recorded
 
 
@@ -287,14 +275,8 @@ async def test_no_gate_on_non_claim_reply():
 async def test_no_gate_on_desire_turn():
     agent = _gate_agent()
     agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text=_CLAIM_REPLY), None))
-    ps = _patch_heavy()
-    for p in ps:
-        p.start()
-    try:
+    with _patch_heavy():
         await agent.run("", inner_voice="外を見たい気持ちが高まっている")
-    finally:
-        for p in ps:
-            p.stop()
     assert _reality_injections(agent) == []
 
 
