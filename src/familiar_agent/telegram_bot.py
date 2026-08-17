@@ -25,6 +25,7 @@ from familiar_runtime.models import ImageAttachment, UserTurn
 
 from .config import AgentConfig, TelegramConfig
 from .image_input import ImageInputError, normalize_image_bytes
+from .telegram_history import TelegramHistory
 from .user_profile import UserRegistry
 
 logger = logging.getLogger(__name__)
@@ -50,9 +51,14 @@ _TURN_CONTROL_RE = re.compile(
 )
 
 
-def _telegram_user_text(speaker_name: str, user_input: str) -> str:
+def _telegram_user_text(
+    speaker_name: str,
+    user_input: str,
+    history_context: str = "",
+) -> str:
     """Add channel semantics that distinguish chat replies from room speech."""
-    return f"{_TELEGRAM_CHANNEL_CONTEXT}\n[{speaker_name}]: {user_input}"
+    history = f"\n{history_context}\n" if history_context else ""
+    return f"{_TELEGRAM_CHANNEL_CONTEXT}{history}\n[{speaker_name}]: {user_input}"
 
 
 def _sanitize_telegram_text(text: str) -> str:
@@ -128,6 +134,9 @@ async def run_telegram_bot(
         logger.info("Telegram: no ID allowlist — any user can chat")
 
     registry = UserRegistry()
+    history = getattr(agent, "telegram_history", None)
+    if not isinstance(history, TelegramHistory):
+        history = None
 
     def _is_allowed(user_id: int) -> bool:
         return not allowed_ids or user_id in allowed_ids
@@ -152,6 +161,8 @@ async def run_telegram_bot(
             return
         if update.message is None:
             return
+        if history is not None and update.effective_user is not None:
+            history.clear(update.effective_user.id)
         clear_exclusive = getattr(agent, "clear_history_exclusive", None)
         if callable(clear_exclusive):
             await clear_exclusive(source="telegram-command")
@@ -219,8 +230,16 @@ async def run_telegram_bot(
     ) -> None:
         """Execute one agent turn and send the response back."""
         tg_user = update.effective_user
-        speaker_name, profile_id = _resolve_speaker(tg_user) if tg_user else ("unknown", None)
-        user_turn = UserTurn(text=_telegram_user_text(speaker_name, user_input), images=images)
+        if tg_user is None:
+            return
+        speaker_name, profile_id = _resolve_speaker(tg_user)
+        chat_id = tg_user.id
+        history_context = history.render(chat_id) if history is not None else ""
+        user_turn = UserTurn(
+            text=_telegram_user_text(speaker_name, user_input, history_context), images=images
+        )
+        if history is not None:
+            history.record_user(chat_id, user_input)
 
         await update.message.chat.send_action("typing")  # type: ignore[union-attr]
 
@@ -277,7 +296,10 @@ async def run_telegram_bot(
         logger.info("Telegram reply (%s): %r", response_source, response[:500])
 
         for i in range(0, len(response), _MAX_MSG_LEN):
-            await update.message.reply_text(response[i : i + _MAX_MSG_LEN])  # type: ignore[union-attr]
+            chunk = response[i : i + _MAX_MSG_LEN]
+            await update.message.reply_text(chunk)  # type: ignore[union-attr]
+            if history is not None:
+                history.record_agent(chat_id, chunk)
 
         desires.satisfy("greet_companion")
 

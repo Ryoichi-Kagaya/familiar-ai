@@ -96,6 +96,7 @@ from .tools.tom import ToMTool
 from .tools.mobility import MobilityTool
 from .tools.stt import STTTool
 from .tools.telegram import TelegramTool, TelegramTransport
+from .telegram_history import TelegramHistory
 from .tools.tts import TTSTool
 from .turn_coordinator import TurnCoordinator, TurnRequest
 from ._i18n import _t
@@ -685,6 +686,7 @@ class EmbodiedAgent:
         self._stt: STTTool | None = None
         self._telegram: TelegramTool | None = None
         self._telegram_transport: TelegramTransport | None = None
+        self._telegram_history = TelegramHistory()
         self._me_md: str = self._load_me_md()  # loaded once; restart to pick up changes
         self._memory = ObservationMemory()
         self._memory_worker = MemoryJobWorker(self._memory)
@@ -1191,6 +1193,7 @@ class EmbodiedAgent:
                 self._user_registry,
                 current_user_id=lambda: self._current_user.id,
                 transport=self._telegram_transport,
+                history=self._telegram_history,
             )
 
         # World model: persistent scene entity tracker (Phase 1)
@@ -3932,6 +3935,11 @@ class EmbodiedAgent:
     def stt(self) -> STTTool | None:
         """Speech-to-text tool, or None if not configured."""
         return self._stt
+
+    @property
+    def telegram_history(self) -> TelegramHistory:
+        """Recent inbound/outbound Telegram messages for the bot boundary."""
+        return self._telegram_history
 
     def clear_history(self) -> None:
         """Clear conversation history (start fresh)."""

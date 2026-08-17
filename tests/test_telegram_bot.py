@@ -24,6 +24,17 @@ def test_telegram_context_distinguishes_chat_reply_and_stackchan_speech() -> Non
     assert text.endswith("[かがや]: どう？")
 
 
+def test_telegram_context_includes_recent_channel_history() -> None:
+    text = _telegram_user_text(
+        "かがや",
+        "返事するね",
+        "[Recent Telegram conversation — oldest first]\nAgent (Telegram): さっき送ったよ",
+    )
+
+    assert "Agent (Telegram): さっき送ったよ" in text
+    assert text.endswith("[かがや]: 返事するね")
+
+
 def test_telegram_sanitizer_preserves_voice_failure_narration_for_observability() -> None:
     text = (
         "（声のツールが今回使えへんみたいやー今回は声に出せんかった。）\n\n"

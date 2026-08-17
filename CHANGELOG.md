@@ -30,6 +30,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - Restore local speaker fallback when go2rtc camera playback fails, preserve
   manual go2rtc configs, and generate the Tapo speaker backchannel when
   `CAMERA_TAPO_PASSWORD` or `CAMERA_TAPO_HASH` is configured.
+- Preserve recent Telegram messages per chat and include them in inbound turns,
+  so replies to proactive or autonomous Telegram messages retain their context;
+  `/clear` also clears that Telegram transcript.
 
 ### Added
 - Persistent `~/.familiar_ai/cameras.json` multi-camera catalogs with stable `see_camera` and

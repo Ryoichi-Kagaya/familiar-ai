@@ -9,10 +9,12 @@ Telegram account to a familiar user profile.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ..config import TelegramConfig
+from ..telegram_history import TelegramHistory
 from ..user_profile import UserProfile, UserRegistry
 
 _MAX_MESSAGE_LENGTH = 4096
@@ -20,6 +22,8 @@ _MAX_TOOL_TEXT_LENGTH = _MAX_MESSAGE_LENGTH * 4
 
 TelegramSender = Callable[[int, str], Awaitable[None]]
 CurrentUserId = Callable[[], str]
+
+logger = logging.getLogger(__name__)
 
 
 class TelegramTransport:
@@ -68,6 +72,7 @@ class TelegramTool:
         allowed_ids: set[int] | None = None,
         sender: TelegramSender | None = None,
         transport: TelegramTransport | None = None,
+        history: TelegramHistory | None = None,
     ) -> None:
         self._config = config
         self._registry = registry
@@ -75,6 +80,7 @@ class TelegramTool:
         self._allowed_ids = config.allowed_ids if allowed_ids is None else set(allowed_ids)
         self._transport = transport or TelegramTransport(config.token)
         self._sender = sender or self._transport.send
+        self._history = history
 
     def _linked_profiles(self) -> list[UserProfile]:
         return [
@@ -167,7 +173,13 @@ class TelegramTool:
         chunk_count = (len(text) + _MAX_MESSAGE_LENGTH - 1) // _MAX_MESSAGE_LENGTH
         try:
             for start in range(0, len(text), _MAX_MESSAGE_LENGTH):
-                await self._sender(profile.telegram_id, text[start : start + _MAX_MESSAGE_LENGTH])
+                chunk = text[start : start + _MAX_MESSAGE_LENGTH]
+                await self._sender(profile.telegram_id, chunk)
+                if self._history is not None:
+                    try:
+                        self._history.record_agent(profile.telegram_id, chunk)
+                    except Exception:  # noqa: BLE001 - history is observability only
+                        logger.warning("Failed to record outbound Telegram message", exc_info=True)
                 sent_chunks += 1
         except Exception as exc:  # noqa: BLE001 - tool errors must return to the agent
             error_name = type(exc).__name__

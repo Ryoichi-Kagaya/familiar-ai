@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from familiar_agent.config import TelegramConfig
+from familiar_agent.telegram_history import TelegramHistory
 from familiar_agent.tools.telegram import TelegramTool, TelegramTransport
 from familiar_agent.user_profile import UserRegistry
 from familiar_capabilities import TelegramCapability
@@ -27,6 +28,17 @@ def test_telegram_config_allowed_ids_ignores_invalid_entries() -> None:
     config = TelegramConfig(allowed_ids_raw="123, nope, 456, -7, ")
 
     assert config.allowed_ids == {123, 456}
+
+
+def test_telegram_history_persists_only_the_bounded_snapshot(tmp_path: Path) -> None:
+    path = tmp_path / "telegram.jsonl"
+    history = TelegramHistory(path, max_messages=2)
+    history.record_user(12345, "最初")
+    history.record_agent(12345, "次")
+    history.record_user(12345, "最後")
+
+    assert "最初" not in history.render(12345)
+    assert path.read_text(encoding="utf-8").count("\n") == 2
 
 
 def test_telegram_capability_exposes_linked_profiles(tmp_path: Path) -> None:
@@ -66,6 +78,37 @@ async def test_send_telegram_message_defaults_to_current_user(tmp_path: Path) ->
     assert result == "Telegram message sent to コウタ (default)."
     assert image is None
     assert sent == [(12345, "ただいま")]
+
+
+@pytest.mark.asyncio
+async def test_send_telegram_message_records_delivered_text_for_future_replies(
+    tmp_path: Path,
+) -> None:
+    registry = _linked_registry(tmp_path)
+    history = TelegramHistory(tmp_path / "telegram.jsonl")
+
+    async def sender(chat_id: int, text: str) -> None:
+        assert chat_id == 12345
+        assert text == "あとで話そ"
+
+    tool = TelegramTool(
+        TelegramConfig(token="token"),
+        registry,
+        current_user_id=lambda: "default",
+        allowed_ids=set(),
+        sender=sender,
+        history=history,
+    )
+
+    await tool.call("send_telegram_message", {"text": "あとで話そ"})
+
+    assert "Agent (Telegram): あとで話そ" in history.render(12345)
+
+    history.clear(12345)
+    assert history.render(12345) == ""
+    assert "Agent (Telegram): あとで話そ" not in TelegramHistory(
+        tmp_path / "telegram.jsonl"
+    ).render(12345)
 
 
 @pytest.mark.asyncio
