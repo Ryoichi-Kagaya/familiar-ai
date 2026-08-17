@@ -33,6 +33,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - Preserve recent Telegram messages per chat and include them in inbound turns,
   so replies to proactive or autonomous Telegram messages retain their context;
   `/clear` also clears that Telegram transcript.
+- Keep autonomous inner-voice text out of the GUI conversation and `chat.log`;
+  only explicit `say()` output crosses that presentation boundary.
 
 ### Added
 - Persistent `~/.familiar_ai/cameras.json` multi-camera catalogs with stable `see_camera` and

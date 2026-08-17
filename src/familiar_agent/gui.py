@@ -129,6 +129,12 @@ _UI_FONT_STACK = (
 _MONO_FONT_STACK = "'Cascadia Mono', 'Consolas', 'Courier New', monospace"
 _FONT_SCALE = 1.5
 
+
+def _should_surface_model_text(*, inner_voice: str, say_fired: bool) -> bool:
+    """Return whether model text belongs in the visible GUI conversation."""
+    return not inner_voice and not say_fired
+
+
 # Semantic accent colors not in the Monokai base palette
 _ACCENT_MIC = "#7C3AED"
 
@@ -1996,10 +2002,9 @@ class FamiliarWindow(QMainWindow):
         say_fired = False
 
         def on_text(chunk: str) -> None:
-            if say_fired:
-                # Discard post-say text: LLMs often re-emit say() content as plain
-                # text after the tool call (with audio tags intact). Suppressing it
-                # prevents the raw tagged text from appearing below the clean version.
+            if not _should_surface_model_text(inner_voice=inner_voice, say_fired=say_fired):
+                # Autonomous text is the agent's private monologue. Only an
+                # explicit say() action is allowed to cross the GUI boundary.
                 return
             self._stream.clear_status()
             self._stream.append_chunk(chunk)
@@ -2050,7 +2055,7 @@ class FamiliarWindow(QMainWindow):
             # When say() was called, the spoken content is already in the log
             # (clean, tags stripped). Suppress final_text to avoid the LLM's
             # post-say text echo (same content with raw audio tags) appearing again.
-            if not say_fired:
+            if _should_surface_model_text(inner_voice=inner_voice, say_fired=say_fired):
                 display = committed.strip() or final_text.strip()
                 if display and display != "(no response)":
                     self._log.append_line(f"[{self._agent_display_name}] {display}")

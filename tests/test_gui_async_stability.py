@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from familiar_agent.gui import ChatLog, FamiliarWindow
+from familiar_agent.gui import ChatLog, FamiliarWindow, _should_surface_model_text
 
 
 class _FakeCloseEvent:
@@ -204,6 +204,13 @@ async def test_gui_idle_desire_dispatches_without_logging_murmur(monkeypatch):
     assert callable(call.kwargs["run_social_turn"])
     win._log.append_line.assert_not_called()
     win._desires.satisfy.assert_not_called()
+
+
+def test_gui_autonomous_turn_text_is_not_a_chat_message():
+    """Private autonomous model text must not be surfaced as GUI chat output."""
+    assert not _should_surface_model_text(inner_voice="内的な独り言", say_fired=False)
+    assert _should_surface_model_text(inner_voice="", say_fired=False)
+    assert not _should_surface_model_text(inner_voice="", say_fired=True)
 
 
 @pytest.mark.asyncio
