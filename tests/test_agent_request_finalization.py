@@ -11,6 +11,11 @@ import pytest
 
 from familiar_agent.agent import EmbodiedAgent
 from familiar_agent.turn_coordinator import TurnRequest
+from familiar_agent.turn_finalization import (
+    TurnFinalizer,
+    coerce_request_user_turn,
+    extract_continuation_status,
+)
 from familiar_runtime.models import ImageAttachment, UserTurn
 
 
@@ -22,7 +27,7 @@ def test_coerce_request_user_turn_merges_legacy_images() -> None:
         user_images=[base64.b64encode(b"legacy").decode("ascii")],
     )
 
-    turn = EmbodiedAgent._coerce_request_user_turn(request)
+    turn = coerce_request_user_turn(request)
 
     assert turn.text == "caption"
     assert [image.data for image in turn.images] == [b"current", b"legacy"]
@@ -39,7 +44,7 @@ def test_coerce_request_user_turn_merges_legacy_images() -> None:
     ],
 )
 def test_extract_continuation_status(model_text: str, visible_text: str, status: str) -> None:
-    assert EmbodiedAgent._extract_continuation_status(model_text) == (visible_text, status)
+    assert extract_continuation_status(model_text) == (visible_text, status)
 
 
 @pytest.mark.asyncio
@@ -60,7 +65,7 @@ async def test_force_final_response_uses_tool_free_retry() -> None:
         mental_ctx="mental",
     )
 
-    result = await agent._force_final_response(prep=prep, on_text=None)
+    result = await TurnFinalizer(agent).force_final_response(prep=prep, on_text=None)
 
     assert result == "forced answer"
     assert agent.messages[-1]["content"].startswith("Please summarize")

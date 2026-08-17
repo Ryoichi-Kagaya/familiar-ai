@@ -7,14 +7,16 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from familiar_agent.agent import EmbodiedAgent
+from familiar_agent.post_response import PostResponsePipeline
 
 
 @pytest.mark.asyncio
 async def test_post_response_pipeline_runs_stages_in_order_and_flushes() -> None:
     agent = EmbodiedAgent.__new__(EmbodiedAgent)
+    pipeline = PostResponsePipeline(agent, generate_plan_fn=AsyncMock(return_value=""))
     order: list[str] = []
 
-    agent._process_observation_after_response = AsyncMock(
+    pipeline._process_observation = AsyncMock(
         side_effect=lambda **kwargs: order.append("observation")
     )
 
@@ -22,8 +24,8 @@ async def test_post_response_pipeline_runs_stages_in_order_and_flushes() -> None
         order.append("conversation")
         return "tender"
 
-    agent._persist_conversation_after_response = AsyncMock(side_effect=persist_conversation)
-    agent._update_relationship_after_response = MagicMock(
+    pipeline._persist_conversation = AsyncMock(side_effect=persist_conversation)
+    pipeline._update_relationship = MagicMock(
         side_effect=lambda **kwargs: order.append("relationship")
     )
 
@@ -31,23 +33,20 @@ async def test_post_response_pipeline_runs_stages_in_order_and_flushes() -> None
         order.append("curiosity")
         return "window light"
 
-    agent._persist_curiosity_after_response = AsyncMock(side_effect=persist_curiosity)
+    pipeline._persist_curiosity = AsyncMock(side_effect=persist_curiosity)
     agent._capture_companion_thread = AsyncMock(
         side_effect=lambda *args: order.append("companion_thread")
     )
-    agent._update_continuity_after_response = MagicMock(
-        side_effect=lambda **kwargs: order.append("continuity")
-    )
+    pipeline._update_continuity = MagicMock(side_effect=lambda **kwargs: order.append("continuity"))
     agent._maybe_adapt_values = AsyncMock(side_effect=lambda **kwargs: order.append("values"))
     agent._maybe_update_identity = AsyncMock(side_effect=lambda **kwargs: order.append("identity"))
-    agent._refresh_deferred_turn_context = AsyncMock(
+    pipeline._refresh_deferred_context = AsyncMock(
         side_effect=lambda **kwargs: order.append("deferred_context")
     )
     agent._self_state = MagicMock()
     agent._self_state.flush = MagicMock(side_effect=lambda: order.append("flush"))
 
-    await EmbodiedAgent._run_post_response_pipeline(
-        agent,
+    await pipeline.run(
         user_input="どう見えた？",
         final_text="窓の光が気になった。",
         camera_used=True,
@@ -75,15 +74,13 @@ async def test_post_response_pipeline_runs_stages_in_order_and_flushes() -> None
 @pytest.mark.asyncio
 async def test_post_response_pipeline_stops_after_failure_but_still_flushes() -> None:
     agent = EmbodiedAgent.__new__(EmbodiedAgent)
-    agent._process_observation_after_response = AsyncMock()
-    agent._persist_conversation_after_response = AsyncMock(
-        side_effect=RuntimeError("memory unavailable")
-    )
-    agent._update_relationship_after_response = MagicMock()
+    pipeline = PostResponsePipeline(agent, generate_plan_fn=AsyncMock(return_value=""))
+    pipeline._process_observation = AsyncMock()
+    pipeline._persist_conversation = AsyncMock(side_effect=RuntimeError("memory unavailable"))
+    pipeline._update_relationship = MagicMock()
     agent._self_state = MagicMock()
 
-    await EmbodiedAgent._run_post_response_pipeline(
-        agent,
+    await pipeline.run(
         user_input="hello",
         final_text="hi",
         camera_used=False,
@@ -94,7 +91,7 @@ async def test_post_response_pipeline_stops_after_failure_but_still_flushes() ->
         desires=None,
     )
 
-    agent._update_relationship_after_response.assert_not_called()
+    pipeline._update_relationship.assert_not_called()
     agent._self_state.flush.assert_called_once_with()
 
 
@@ -107,8 +104,9 @@ async def test_deferred_turn_context_updates_cache_and_frustration_drive() -> No
     agent._infer_companion_mood = AsyncMock(return_value="frustrated")
     agent._online_temporal_context = AsyncMock(return_value="temporal")
     desires = MagicMock()
+    pipeline = PostResponsePipeline(agent, generate_plan_fn=AsyncMock(return_value=""))
 
-    await agent._refresh_deferred_turn_context(
+    await pipeline._refresh_deferred_context(
         user_input="今日はしんどい",
         is_desire_turn=False,
         desires=desires,
