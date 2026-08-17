@@ -120,7 +120,7 @@ from familiar_capabilities import (
     ToMCapability,
     VoiceCapability,
 )
-from familiar_neighbor.embodied_hook import EmbodiedAgentHook
+from familiar_neighbor.embodied_hook import EmbodiedAgentHook, PreparedTurn
 from familiar_neighbor.mind.person_model import PersonModelTracker
 from familiar_neighbor.prompts import assemble_neighbor_system_prompt
 from familiar_runtime.commitments import SQLiteCommitmentStore
@@ -918,6 +918,209 @@ class EmbodiedAgent:
                 task.cancel()
             await asyncio.gather(*still_pending, return_exceptions=True)
 
+    async def _process_observation_after_response(
+        self,
+        *,
+        final_text: str,
+        camera_used: bool,
+        observation_action_name: str | None,
+        observation_action_input: dict | None,
+        desires: DesireSystem | None,
+    ) -> None:
+        """Persist a camera observation and feed prediction/exploration state."""
+        if not camera_used:
+            return
+
+        recent_obs = await self._memory.recall_async(final_text[:200], n=6, kind="observation")
+        past_scores = [memory.get("score", 0.5) for memory in recent_obs[:3]]
+        novelty = 1.0 - (sum(past_scores) / len(past_scores)) if past_scores else 0.8
+        novelty = max(0.0, min(1.0, novelty))
+        self._exploration.record_novelty(novelty)
+        if desires is not None:
+            desires.boost("look_around", novelty * 0.3)
+
+        if self._scene is not None:
+            scene_events = await self._scene.update(
+                final_text[:500],
+                self._scene_backend,
+                prediction_engine=self._prediction,
+                action_name=observation_action_name,
+                action_input=observation_action_input,
+            )
+            _react_to_scene_events(scene_events, desires)
+            pred_signal = self._prediction.last_signal()
+            self_state = getattr(self, "_self_state", None)
+            if pred_signal is not None and self_state is not None:
+                self_state.apply_prediction_feedback(
+                    external_surprise=pred_signal.external_surprise,
+                    agency_error=pred_signal.agency_error,
+                    action_name=pred_signal.action_name,
+                )
+            pred_coalition = self._prediction.as_coalition()
+            if pred_coalition is not None:
+                self._workspace.apply_prediction_error(pred_coalition.novelty)
+
+        await self._memory.save_async(
+            final_text[:500],
+            direction="観察",
+            kind="observation",
+            dedupe_key=self._memory_dedupe_key("observation", final_text[:500]),
+            materialize_now=False,
+        )
+
+    async def _persist_conversation_after_response(
+        self,
+        *,
+        user_input: str,
+        final_text: str,
+        is_desire_turn: bool,
+    ) -> str:
+        """Persist the exchange and update slow self-model state."""
+        emotion = await self._infer_emotion(final_text)
+        self._update_mood(emotion)
+        summary = await self._summarize_exchange(user_input, final_text)
+        await self._memory.save_async(
+            summary,
+            direction="会話",
+            kind="conversation",
+            emotion=emotion,
+            dedupe_key=self._memory_dedupe_key("conversation", summary),
+            materialize_now=False,
+        )
+
+        await self._update_self_model(final_text, emotion)
+        await self._maybe_update_self_narrative(
+            user_input=user_input,
+            final_text=final_text,
+            emotion=emotion,
+            is_desire_turn=is_desire_turn,
+        )
+        return emotion
+
+    def _update_relationship_after_response(
+        self,
+        *,
+        user_input: str,
+        is_desire_turn: bool,
+        desires: DesireSystem | None,
+    ) -> None:
+        """Record a human exchange and react to explicit worry signals."""
+        if is_desire_turn or not user_input:
+            return
+
+        self._relationship.record_conversation()
+        if desires is None:
+            return
+        worry_boost = detect_worry_signal(user_input)
+        if worry_boost > 0.0:
+            desires.boost("worry_companion", worry_boost)
+            logger.debug(
+                "Worry signal detected (%.2f): boosting worry_companion",
+                worry_boost,
+            )
+
+    async def _persist_curiosity_after_response(
+        self,
+        *,
+        final_text: str,
+        camera_used: bool,
+        desires: DesireSystem | None,
+    ) -> str | None:
+        """Extract and persist visual curiosity when a desire system is active."""
+        if desires is None or not camera_used:
+            return None
+
+        curiosity = await self.extract_curiosity(final_text)
+        if not curiosity:
+            return None
+        desires.curiosity_target = curiosity
+        desires.boost("look_around", 0.3)
+        await self._memory.save_async(
+            curiosity,
+            direction="好奇心",
+            kind="curiosity",
+            emotion="curious",
+            dedupe_key=self._memory_dedupe_key("curiosity", curiosity),
+            materialize_now=False,
+        )
+        logger.info("Curiosity persisted: %s", curiosity)
+        return curiosity
+
+    def _update_continuity_after_response(
+        self,
+        *,
+        emotion: str,
+        companion_mood: str,
+        curiosity: str | None,
+    ) -> None:
+        """Feed the turn outcome into concern and self-continuity state."""
+        pred_signal = self._prediction.last_signal()
+        concerns = getattr(self, "_concerns", None)
+        if concerns is not None:
+            concerns.update_from_turn(
+                turn_index=self._turn_count,
+                emotion=emotion,
+                companion_mood=companion_mood,
+                curiosity=curiosity,
+                prediction_signal=pred_signal,
+            )
+
+        self_state = getattr(self, "_self_state", None)
+        if self_state is not None:
+            self_state.apply_turn_context(
+                emotion=emotion,
+                companion_mood=companion_mood,
+                curiosity=curiosity,
+                prediction_signal=pred_signal,
+            )
+
+    async def _refresh_deferred_turn_context(
+        self,
+        *,
+        user_input: str,
+        is_desire_turn: bool,
+        desires: DesireSystem | None,
+    ) -> None:
+        """Compute and cache context consumed by the next turn."""
+        try:
+            tape_backend = self._tape_backend()
+            tool_names = [tool["name"] for tool in self._all_tool_defs] if tape_backend else []
+            deferred_plan_task = (
+                generate_plan(tape_backend, user_input, tool_names)
+                if tape_backend and not is_desire_turn and user_input.strip()
+                else _noop_str()
+            )
+            (
+                deferred_plan,
+                deferred_workspace,
+                deferred_mood,
+                deferred_temporal,
+            ) = await asyncio.gather(
+                deferred_plan_task,
+                self._gather_workspace_context(desires=desires),
+                self._infer_companion_mood(user_input),
+                self._online_temporal_context(desires=desires),
+            )
+            self._cached_plan_ctx = deferred_plan
+            self._cached_workspace_ctx = deferred_workspace
+            self._cached_companion_mood = deferred_mood
+            self._cached_temporal_ctx = deferred_temporal
+            if desires is not None and deferred_mood == "frustrated":
+                desires.boost("worry_companion", 0.3)
+                logger.debug("Companion mood frustrated: boosting worry_companion")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Deferred pre-response caching failed: %s", exc)
+
+    @staticmethod
+    def _flush_store(store: Any) -> None:
+        """Best-effort flush a store that supports deferred persistence."""
+        if store is None or not hasattr(store, "flush"):
+            return
+        try:
+            store.flush()
+        except Exception:  # noqa: BLE001
+            pass
+
     async def _run_post_response_pipeline(
         self,
         *,
@@ -934,121 +1137,38 @@ class EmbodiedAgent:
         if not final_text or final_text == "(no response)":
             return
 
-        emotion = "neutral"
-
         try:
-            if camera_used:
-                recent_obs = await self._memory.recall_async(
-                    final_text[:200], n=6, kind="observation"
-                )
-                past_scores = [m.get("score", 0.5) for m in recent_obs[:3]]
-                if past_scores:
-                    avg_similarity = sum(past_scores) / len(past_scores)
-                    novelty = 1.0 - avg_similarity
-                else:
-                    novelty = 0.8
-                novelty = max(0.0, min(1.0, novelty))
-                self._exploration.record_novelty(novelty)
-                if desires is not None:
-                    desires.boost("look_around", novelty * 0.3)
-                if self._scene is not None:
-                    scene_events = await self._scene.update(
-                        final_text[:500],
-                        self._scene_backend,
-                        prediction_engine=self._prediction,
-                        action_name=observation_action_name,
-                        action_input=observation_action_input,
-                    )
-                    _react_to_scene_events(scene_events, desires)
-                    pred_signal = self._prediction.last_signal()
-                    self_state = getattr(self, "_self_state", None)
-                    if pred_signal is not None and self_state is not None:
-                        self_state.apply_prediction_feedback(
-                            external_surprise=pred_signal.external_surprise,
-                            agency_error=pred_signal.agency_error,
-                            action_name=pred_signal.action_name,
-                        )
-                    pred_coalition = self._prediction.as_coalition()
-                    if pred_coalition is not None:
-                        self._workspace.apply_prediction_error(pred_coalition.novelty)
-                await self._memory.save_async(
-                    final_text[:500],
-                    direction="観察",
-                    kind="observation",
-                    dedupe_key=self._memory_dedupe_key("observation", final_text[:500]),
-                    materialize_now=False,
-                )
-
-            emotion = await self._infer_emotion(final_text)
-            self._update_mood(emotion)
-            summary = await self._summarize_exchange(user_input, final_text)
-            await self._memory.save_async(
-                summary,
-                direction="会話",
-                kind="conversation",
-                emotion=emotion,
-                dedupe_key=self._memory_dedupe_key("conversation", summary),
-                materialize_now=False,
+            await self._process_observation_after_response(
+                final_text=final_text,
+                camera_used=camera_used,
+                observation_action_name=observation_action_name,
+                observation_action_input=observation_action_input,
+                desires=desires,
             )
-
-            await self._update_self_model(final_text, emotion)
-            await self._maybe_update_self_narrative(
+            emotion = await self._persist_conversation_after_response(
                 user_input=user_input,
                 final_text=final_text,
-                emotion=emotion,
                 is_desire_turn=is_desire_turn,
             )
-
-            if not is_desire_turn and user_input:
-                self._relationship.record_conversation()
-
-            if desires is not None and not is_desire_turn and user_input:
-                worry_boost = detect_worry_signal(user_input)
-                if worry_boost > 0.0:
-                    desires.boost("worry_companion", worry_boost)
-                    logger.debug(
-                        "Worry signal detected (%.2f): boosting worry_companion",
-                        worry_boost,
-                    )
-
-            curiosity: str | None = None
-            if desires is not None and camera_used:
-                curiosity = await self.extract_curiosity(final_text)
-                if curiosity:
-                    desires.curiosity_target = curiosity
-                    desires.boost("look_around", 0.3)
-                    await self._memory.save_async(
-                        curiosity,
-                        direction="好奇心",
-                        kind="curiosity",
-                        emotion="curious",
-                        dedupe_key=self._memory_dedupe_key("curiosity", curiosity),
-                        materialize_now=False,
-                    )
-                    logger.info("Curiosity persisted: %s", curiosity)
+            self._update_relationship_after_response(
+                user_input=user_input,
+                is_desire_turn=is_desire_turn,
+                desires=desires,
+            )
+            curiosity = await self._persist_curiosity_after_response(
+                final_text=final_text,
+                camera_used=camera_used,
+                desires=desires,
+            )
 
             if user_input and not is_desire_turn:
                 await self._capture_companion_thread(user_input, desires)
 
-            pred_signal = self._prediction.last_signal()
-            concerns = getattr(self, "_concerns", None)
-            if concerns is not None:
-                concerns.update_from_turn(
-                    turn_index=self._turn_count,
-                    emotion=emotion,
-                    companion_mood=companion_mood,
-                    curiosity=curiosity,
-                    prediction_signal=pred_signal,
-                )
-
-            self_state = getattr(self, "_self_state", None)
-            if self_state is not None:
-                self_state.apply_turn_context(
-                    emotion=emotion,
-                    companion_mood=companion_mood,
-                    curiosity=curiosity,
-                    prediction_signal=pred_signal,
-                )
+            self._update_continuity_after_response(
+                emotion=emotion,
+                companion_mood=companion_mood,
+                curiosity=curiosity,
+            )
 
             await self._maybe_adapt_values(
                 user_input=user_input,
@@ -1065,36 +1185,11 @@ class EmbodiedAgent:
                 final_text=final_text,
                 is_desire_turn=is_desire_turn,
             )
-
-            # ── Deferred pre-response work (results cached for next turn) ──
-            try:
-                tape_backend = self._tape_backend()
-                tool_names = [t["name"] for t in self._all_tool_defs] if tape_backend else []
-                deferred_plan_task = (
-                    generate_plan(tape_backend, user_input, tool_names)
-                    if tape_backend and not is_desire_turn and user_input.strip()
-                    else _noop_str()
-                )
-                (
-                    deferred_plan,
-                    deferred_workspace,
-                    deferred_mood,
-                    deferred_temporal,
-                ) = await asyncio.gather(
-                    deferred_plan_task,
-                    self._gather_workspace_context(desires=desires),
-                    self._infer_companion_mood(user_input),
-                    self._online_temporal_context(desires=desires),
-                )
-                self._cached_plan_ctx = deferred_plan
-                self._cached_workspace_ctx = deferred_workspace
-                self._cached_companion_mood = deferred_mood
-                self._cached_temporal_ctx = deferred_temporal
-                if desires is not None and deferred_mood == "frustrated":
-                    desires.boost("worry_companion", 0.3)
-                    logger.debug("Companion mood frustrated: boosting worry_companion")
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Deferred pre-response caching failed: %s", exc)
+            await self._refresh_deferred_turn_context(
+                user_input=user_input,
+                is_desire_turn=is_desire_turn,
+                desires=desires,
+            )
 
         except Exception as exc:  # noqa: BLE001
             logger.warning("Post-response pipeline failed: %s", exc)
@@ -1103,12 +1198,7 @@ class EmbodiedAgent:
             # deltas (apply_turn_context above) must be durable once the
             # post-response pipeline ends — this is what makes the
             # defer_saves docstring ("never a real turn's state") true.
-            self_state = getattr(self, "_self_state", None)
-            if self_state is not None and hasattr(self_state, "flush"):
-                try:
-                    self_state.flush()
-                except Exception:  # noqa: BLE001
-                    pass
+            self._flush_store(getattr(self, "_self_state", None))
 
     def _init_camera_tools(self) -> None:
         """Initialize the configured camera catalog or legacy primary camera."""
@@ -3616,12 +3706,7 @@ class EmbodiedAgent:
     def _flush_deferred_state(self) -> None:
         """Persist state deferred by dense recurrence after producers stop."""
         for store_name in ("_self_state", "_attention_schema"):
-            store = getattr(self, store_name, None)
-            if store is not None and hasattr(store, "flush"):
-                try:
-                    store.flush()
-                except Exception:  # noqa: BLE001
-                    pass
+            self._flush_store(getattr(self, store_name, None))
 
     async def _close_memory(self) -> None:
         """Close the synchronous memory store without blocking the event loop."""
@@ -3763,6 +3848,202 @@ class EmbodiedAgent:
     def active_turn_source(self) -> str | None:
         return self._get_turn_coordinator().active_source
 
+    @staticmethod
+    def _coerce_request_user_turn(request: TurnRequest) -> UserTurn:
+        """Normalize current and legacy image inputs into one user turn."""
+        user_turn = coerce_user_turn(request.user_input)
+        if not request.user_images:
+            return user_turn
+        legacy_images = tuple(
+            ImageAttachment.from_base64(image_data) for image_data in request.user_images
+        )
+        return UserTurn(
+            text=user_turn.text,
+            images=(*user_turn.images, *legacy_images),
+            sent_at=user_turn.sent_at,
+        )
+
+    def _check_identity_response(
+        self,
+        *,
+        user_text: str,
+        candidate_response: str,
+    ) -> tuple[Any | None, list[Any]]:
+        """Run the identity backstop without making it a turn-fatal dependency."""
+        identity = getattr(self, "_identity", None)
+        if identity is None or not candidate_response or candidate_response == "(no response)":
+            return identity, []
+        try:
+            violations = identity.check_response(
+                user_text=user_text,
+                candidate_response=candidate_response,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Identity response check failed: %s", exc)
+            return identity, []
+        return identity, violations
+
+    def _apply_meta_gate(
+        self,
+        *,
+        user_text: str,
+        candidate_response: str,
+        social_policy: SocialPolicyDecision,
+        identity_violations: list[Any],
+    ) -> str:
+        """Apply deterministic final-response repair when the monitor requests it."""
+        gate_method = getattr(self._meta_monitor, "gate_response", None)
+        if not callable(gate_method):
+            return candidate_response
+        maybe_gate = gate_method(
+            user_text=user_text,
+            candidate_response=candidate_response,
+            social_policy=social_policy,
+            last_error=self._last_tool_error,
+            identity_violations=identity_violations or None,
+        )
+        if (
+            isinstance(maybe_gate, MetaGateDecision)
+            and maybe_gate.needs_repair
+            and maybe_gate.repaired_response
+        ):
+            return maybe_gate.repaired_response
+        return candidate_response
+
+    def _record_identity_violation_effects(
+        self,
+        *,
+        identity: Any | None,
+        identity_violations: list[Any],
+        desires: DesireSystem | None,
+    ) -> None:
+        """Persist dissonance and raise reflection pressure after a violation."""
+        if identity is None or not identity_violations:
+            return
+
+        top = identity_violations[0]
+        try:
+            identity.record_violation(top, turn_index=self._turn_count)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Identity violation record failed: %s", exc)
+        if desires is not None:
+            desires.boost("identity_coherence", 0.3 + 0.4 * top.severity)
+        concerns = getattr(self, "_concerns", None)
+        if concerns is not None:
+            try:
+                concerns.activate(
+                    f"Something I hold was strained: {top.statement[:80]}",
+                    category="identity",
+                    intensity=0.4 + 0.5 * top.severity,
+                    turn_index=self._turn_count,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+    @staticmethod
+    def _extract_continuation_status(final_text: str) -> tuple[str, str]:
+        """Remove a trailing continuation marker and return its runtime status."""
+        status_match = re.search(r"(?:^|\n)(DONE|CONTINUE:[^\n]+|DEFER:[^\n]+)\s*$", final_text)
+        if not status_match:
+            return final_text, "DONE"
+        visible_text = final_text[: status_match.start(1)].rstrip() or "(no response)"
+        return visible_text, status_match.group(1)
+
+    async def _auto_say_final_response(
+        self,
+        *,
+        prep: PreparedTurn,
+        final_text: str,
+        on_action: Callable[[str, dict], None] | None,
+    ) -> None:
+        """Speak a final reply when configured and no explicit say call occurred."""
+        if not (
+            getattr(self.config, "auto_say", False)
+            and self._tts
+            and not prep.say_used
+            and final_text
+            and final_text != "(no response)"
+        ):
+            return
+        if on_action:
+            on_action("say", {"text": final_text})
+        await self._tts.call("say", {"text": final_text})
+
+    async def _commit_end_turn_response(
+        self,
+        *,
+        prep: PreparedTurn,
+        user_input: str,
+        final_text: str,
+        desires: DesireSystem | None,
+        on_action: Callable[[str, dict], None] | None,
+    ) -> str:
+        """Repair, surface, and commit a successful end-turn response."""
+        identity, identity_violations = self._check_identity_response(
+            user_text=user_input,
+            candidate_response=final_text,
+        )
+        final_text = self._apply_meta_gate(
+            user_text=user_input,
+            candidate_response=final_text,
+            social_policy=prep.social_policy,
+            identity_violations=identity_violations,
+        )
+        self._record_identity_violation_effects(
+            identity=identity,
+            identity_violations=identity_violations,
+            desires=desires,
+        )
+
+        final_text, continuation_status = self._extract_continuation_status(final_text)
+        self._heartbeat.apply_status(continuation_status)
+        self._coherence_retried = False
+
+        await self._auto_say_final_response(
+            prep=prep,
+            final_text=final_text,
+            on_action=on_action,
+        )
+        await self._hook.commit_after_end_turn(
+            prep=prep,
+            user_input=user_input,
+            final_text=final_text,
+            is_desire_turn=prep.is_desire_turn,
+            desires=desires,
+        )
+        return final_text
+
+    async def _force_final_response(
+        self,
+        *,
+        prep: PreparedTurn,
+        on_text: Callable[[str], None] | None,
+    ) -> str:
+        """Request a final tool-free answer after an unexpected loop stop."""
+        logger.warning(
+            "Reached max iterations (%d). Forcing final response.",
+            prep.turn_max_iterations,
+        )
+        self.messages.append(
+            self.backend.make_user_message(
+                "Please summarize what you found and provide your final answer now."
+            )
+        )
+        result, _ = await self._stream_with_retry(
+            system=self._system_prompt(
+                morning_ctx=prep.morning_ctx,
+                plan_ctx=prep.plan_ctx,
+                continuity_ctx=prep.continuity_ctx,
+                workspace_ctx=prep.workspace_ctx,
+                mental_ctx=prep.mental_ctx,
+            ),
+            messages=self.messages,
+            tools=[],
+            max_tokens=prep.turn_max_tokens,
+            on_text=on_text,
+        )
+        return result.text or "(max iterations reached)"
+
     async def _run_request(self, request: TurnRequest) -> str:
         """Run one conversation turn with the agent loop.
 
@@ -3775,7 +4056,6 @@ class EmbodiedAgent:
         lifecycle methods; finalisation (meta-gate repair, continuation
         status, auto-say, commit) stays here.
         """
-        user_input = request.user_input
         on_action = request.on_action
         on_text = request.on_text
         on_image = request.on_image
@@ -3785,17 +4065,7 @@ class EmbodiedAgent:
         inner_voice = request.inner_voice
         interrupt_queue = request.interrupt_queue
         excluded_tools = request.excluded_tools
-        user_images = request.user_images
-        user_turn = coerce_user_turn(user_input)
-        if user_images:
-            legacy_images = tuple(
-                ImageAttachment.from_base64(image_data) for image_data in user_images
-            )
-            user_turn = UserTurn(
-                text=user_turn.text,
-                images=(*user_turn.images, *legacy_images),
-                sent_at=user_turn.sent_at,
-            )
+        user_turn = self._coerce_request_user_turn(request)
         user_input_text = user_turn.text
         ctx = TurnContext(user_input=user_input_text, profile="neighbor")
         ctx.metadata["turn_source"] = request.source
@@ -3885,118 +4155,20 @@ class EmbodiedAgent:
 
             finalize_started = time.perf_counter()
             if run_result.stop_reason == "end_turn":
-                final_text = run_result.final_text
-
-                # Identity backstop (tier 2): the in-loop retry is the primary
-                # defence; compute remaining violations once and let the
-                # meta-gate replace a still-violating reply outright.
-                identity = getattr(self, "_identity", None)
-                identity_violations: list[Any] = []
-                if identity is not None and final_text and final_text != "(no response)":
-                    try:
-                        identity_violations = identity.check_response(
-                            user_text=user_input_text,
-                            candidate_response=final_text,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("Identity response check failed: %s", exc)
-
-                gate_method = getattr(self._meta_monitor, "gate_response", None)
-                gate: MetaGateDecision | None = None
-                if callable(gate_method):
-                    maybe_gate = gate_method(
-                        user_text=user_input_text,
-                        candidate_response=final_text,
-                        social_policy=prep.social_policy,
-                        last_error=self._last_tool_error,
-                        identity_violations=identity_violations or None,
-                    )
-                    if isinstance(maybe_gate, MetaGateDecision):
-                        gate = maybe_gate
-                if gate is not None and gate.needs_repair and gate.repaired_response:
-                    final_text = gate.repaired_response
-
-                # A violation — even a repaired one — leaves dissonance behind
-                # and raises the drive to reflect on it later.
-                if identity is not None and identity_violations:
-                    top = identity_violations[0]
-                    try:
-                        identity.record_violation(top, turn_index=self._turn_count)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("Identity violation record failed: %s", exc)
-                    if desires is not None:
-                        desires.boost("identity_coherence", 0.3 + 0.4 * top.severity)
-                    concerns = getattr(self, "_concerns", None)
-                    if concerns is not None:
-                        try:
-                            concerns.activate(
-                                f"Something I hold was strained: {top.statement[:80]}",
-                                category="identity",
-                                intensity=0.4 + 0.5 * top.severity,
-                                turn_index=self._turn_count,
-                            )
-                        except Exception:  # noqa: BLE001
-                            pass
-
-                continuation_status = "DONE"
-                status_match = re.search(
-                    r"(?:^|\n)(DONE|CONTINUE:[^\n]+|DEFER:[^\n]+)\s*$", final_text
-                )
-                if status_match:
-                    continuation_status = status_match.group(1)
-                    final_text = final_text[: status_match.start(1)].rstrip() or "(no response)"
-                self._heartbeat.apply_status(continuation_status)
-
-                self._coherence_retried = False
-
-                # Auto-say: if the model wrote text but never called say(), speak it aloud.
-                _auto_say_enabled = getattr(self.config, "auto_say", False)
-                if (
-                    _auto_say_enabled
-                    and self._tts
-                    and not prep.say_used
-                    and final_text
-                    and final_text != "(no response)"
-                ):
-                    if on_action:
-                        on_action("say", {"text": final_text})
-                    await self._tts.call("say", {"text": final_text})
-
-                await self._hook.commit_after_end_turn(
+                return await self._commit_end_turn_response(
                     prep=prep,
                     user_input=user_input_text,
-                    final_text=final_text,
-                    is_desire_turn=prep.is_desire_turn,
+                    final_text=run_result.final_text,
                     desires=desires,
+                    on_action=on_action,
                 )
-
-                return final_text
 
             # max_iterations (or an unexpected stop reason): force a final,
             # tool-free response so the turn always ends with words.
-            logger.warning(
-                "Reached max iterations (%d). Forcing final response.",
-                prep.turn_max_iterations,
-            )
-            self.messages.append(
-                self.backend.make_user_message(
-                    "Please summarize what you found and provide your final answer now."
-                )
-            )
-            result, _ = await self._stream_with_retry(
-                system=self._system_prompt(
-                    morning_ctx=prep.morning_ctx,
-                    plan_ctx=prep.plan_ctx,
-                    continuity_ctx=prep.continuity_ctx,
-                    workspace_ctx=prep.workspace_ctx,
-                    mental_ctx=prep.mental_ctx,
-                ),
-                messages=self.messages,
-                tools=[],
-                max_tokens=prep.turn_max_tokens,
+            return await self._force_final_response(
+                prep=prep,
                 on_text=on_text,
             )
-            return result.text or "(max iterations reached)"
         finally:
             self._restore_backend_after_turn(prep.backend_turn_snapshot)
             if main_messages is not None:
