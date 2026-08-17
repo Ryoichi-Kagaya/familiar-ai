@@ -1110,7 +1110,8 @@ class EmbodiedAgent:
                 except Exception:  # noqa: BLE001
                     pass
 
-    def _init_tools(self) -> None:
+    def _init_camera_tools(self) -> None:
+        """Initialize the configured camera catalog or legacy primary camera."""
         catalog = getattr(self.config, "camera_catalog", None)
         if catalog is not None:
             for profile in catalog.cameras:
@@ -1152,6 +1153,8 @@ class EmbodiedAgent:
                 self._cameras["main"] = self._camera
                 self._camera_labels["main"] = "Primary camera"
 
+    def _init_mobility_and_tts_tools(self) -> None:
+        """Initialize mobility and speech-output tools."""
         mob = self.config.mobility
         if mob.api_key and mob.device_id:
             self._mobility = MobilityTool(
@@ -1169,12 +1172,8 @@ class EmbodiedAgent:
                 volume=tts.volume,
             )
 
-        cfg_path = _resolve_config_path()
-        if cfg_path.exists():
-            self._mcp = MCPClientManager(cfg_path)
-        elif os.environ.get("MCP_CONFIG"):
-            logger.warning("MCP_CONFIG points to non-existent file: %s", cfg_path)
-
+    def _init_stt_tool(self) -> None:
+        """Initialize the local audio-input tool."""
         stt_cfg = self.config.stt
         if stt_cfg.elevenlabs_api_key:
             cam = self.config.camera
@@ -1185,6 +1184,16 @@ class EmbodiedAgent:
                 stt_cfg.elevenlabs_api_key, stt_cfg.language, rtsp_url, stt_cfg.input
             )
 
+    def _init_mcp_client(self) -> None:
+        """Initialize MCP when its configuration file exists."""
+        cfg_path = _resolve_config_path()
+        if cfg_path.exists():
+            self._mcp = MCPClientManager(cfg_path)
+        elif os.environ.get("MCP_CONFIG"):
+            logger.warning("MCP_CONFIG points to non-existent file: %s", cfg_path)
+
+    def _init_telegram_tool(self) -> None:
+        """Initialize the shared Telegram transport and outbound tool."""
         telegram_config = self.config.telegram
         if telegram_config.token:
             self._telegram_transport = TelegramTransport(telegram_config.token)
@@ -1196,6 +1205,8 @@ class EmbodiedAgent:
                 history=self._telegram_history,
             )
 
+    def _init_scene_tracker(self) -> None:
+        """Open the persistent world-model tracker."""
         # World model: persistent scene entity tracker (Phase 1)
         # Reuses the same SQLite DB as ObservationMemory via a separate connection.
         import sqlite3 as _sqlite3
@@ -1209,28 +1220,37 @@ class EmbodiedAgent:
         except Exception as exc:
             logger.warning("SceneTracker init failed: %s", exc)
 
+    def _init_tools(self) -> None:
+        """Initialize external tools in dependency and lifecycle order."""
+        self._init_camera_tools()
+        self._init_mobility_and_tts_tools()
+        self._init_mcp_client()
+        self._init_stt_tool()
+        self._init_telegram_tool()
+        self._init_scene_tracker()
+
     @property
     def _all_tool_defs(self) -> list[dict]:
         return self._build_tool_registry().tool_defs()
 
-    def _build_tool_registry(self) -> ToolRegistry:
-        """Build the per-turn tool registry from configured providers."""
-        registry = ToolRegistry()
+    def _record_embodied_action(self, name: str, tool_input: dict[str, Any]) -> None:
+        """Update exploration state before a camera movement executes."""
+        if name in {"look", "look_camera"}:
+            self._exploration.record_move(
+                tool_input.get("direction", "center"),
+                tool_input.get("degrees", 30),
+            )
+
+    def _register_device_capabilities(self, registry: ToolRegistry) -> None:
+        """Register capabilities backed by configured physical devices."""
         cameras = getattr(self, "_cameras", {})
         camera_labels = getattr(self, "_camera_labels", {})
-
-        def _record_embodied_action(name: str, tool_input: dict[str, Any]) -> None:
-            if name in {"look", "look_camera"}:
-                self._exploration.record_move(
-                    tool_input.get("direction", "center"),
-                    tool_input.get("degrees", 30),
-                )
 
         if self._camera:
             registry.register(
                 CameraCapability(
                     self._camera,
-                    before_call=_record_embodied_action,
+                    before_call=self._record_embodied_action,
                     gui_priority=self._camera_gui_priority,
                 )
             )
@@ -1239,7 +1259,7 @@ class EmbodiedAgent:
                 MultiCameraCapability(
                     cameras,
                     camera_labels,
-                    before_call=_record_embodied_action,
+                    before_call=self._record_embodied_action,
                     gui_priority=self._camera_gui_priority,
                 )
             )
@@ -1250,6 +1270,19 @@ class EmbodiedAgent:
         telegram_tool = getattr(self, "_telegram", None)
         if telegram_tool is not None:
             registry.register(TelegramCapability(telegram_tool))
+
+    @staticmethod
+    def _register_optional_capability(
+        registry: ToolRegistry,
+        tool: Any,
+        capability_factory: Callable[[Any], Any],
+    ) -> None:
+        """Register a one-tool capability when its backing tool is available."""
+        if tool is not None:
+            registry.register(capability_factory(tool))
+
+    def _register_core_capabilities(self, registry: ToolRegistry) -> None:
+        """Register memory, cognition, and optional local service tools."""
         registry.register(
             MemoryCapability(
                 self._memory_tool,
@@ -1258,31 +1291,42 @@ class EmbodiedAgent:
         )
         registry.register(ToMCapability(self._tom_tool))
         registry.register(CodingCapability(self._coding))
-        art_critique_tool = getattr(self, "_art_critique_tool", None)
-        if art_critique_tool is not None:
-            registry.register(ArtCritiqueCapability(art_critique_tool))
-        commitment_tool = getattr(self, "_commitment_tool", None)
-        if commitment_tool is not None:
-            registry.register(CommitmentCapability(commitment_tool))
-        delegation_tool = getattr(self, "_delegation_tool", None)
-        if delegation_tool is not None:
-            registry.register(DelegationCapability(delegation_tool))
-        identity_tool = getattr(self, "_identity_tool", None)
-        if identity_tool is not None:
-            registry.register(IdentityCapability(identity_tool))
+
+        optional_capabilities = (
+            (getattr(self, "_art_critique_tool", None), ArtCritiqueCapability),
+            (getattr(self, "_commitment_tool", None), CommitmentCapability),
+            (getattr(self, "_delegation_tool", None), DelegationCapability),
+            (getattr(self, "_identity_tool", None), IdentityCapability),
+        )
+        for tool, capability_factory in optional_capabilities:
+            self._register_optional_capability(registry, tool, capability_factory)
+
         self_ledger_tool = getattr(self, "_self_ledger_tool", None)
         if self_ledger_tool is not None:
             ledger_names = set(DEFAULT_SELF_LEDGER_TOOLS)
             if getattr(self.config, "experience_ledger", False):
                 ledger_names |= {"ledger_commit", "ledger_review"}
             registry.register(SelfLedgerCapability(self_ledger_tool, names=ledger_names))
-        routine_tool = getattr(self, "_routine_tool", None)
-        if routine_tool is not None:
-            registry.register(RoutineCapability(routine_tool))
+
+        self._register_optional_capability(
+            registry,
+            getattr(self, "_routine_tool", None),
+            RoutineCapability,
+        )
+
+    def _register_mcp_capability(self, registry: ToolRegistry) -> None:
+        """Register MCP as both a named provider and unknown-tool fallback."""
         if self._mcp:
             provider = MCPCapability(self._mcp)
             registry.register(provider)
             registry.register_fallback(provider)
+
+    def _build_tool_registry(self) -> ToolRegistry:
+        """Build the per-turn tool registry from configured providers."""
+        registry = ToolRegistry()
+        self._register_device_capabilities(registry)
+        self._register_core_capabilities(registry)
+        self._register_mcp_capability(registry)
         return registry
 
     async def _execute_tool(self, name: str, tool_input: dict) -> tuple[str, list[str]]:
@@ -1498,17 +1542,19 @@ class EmbodiedAgent:
         body_inner = "\n".join(parts)
         return f"(body\n{body_inner})"
 
-    def _self_ledger_carryover_context(self) -> str:
-        """First-turn carryover: last session's metacognitive thread plus
-        corrected interpretations, so a restart resumes a self, not a blank."""
-        lines: list[str] = []
+    def _previous_metacognitive_thread(self) -> str:
+        """Return the previous session's metacognitive summary, when available."""
         meta = getattr(self, "_meta_monitor", None)
         previous = getattr(meta, "previous_session_summary", None)
         if callable(previous):
             carried = previous()
             # Strict str check: mocked monitors in tests return truthy mocks.
             if isinstance(carried, str) and carried:
-                lines.append(f"[Last session's metacognitive thread]\n{carried}")
+                return f"[Last session's metacognitive thread]\n{carried}"
+        return ""
+
+    def _interpretation_shift_context(self) -> str:
+        """Render recent interpretation corrections that should survive restart."""
         recall = getattr(getattr(self, "_memory", None), "recall_interpretation_shifts", None)
         if callable(recall):
             try:
@@ -1520,25 +1566,40 @@ class EmbodiedAgent:
                 shift_lines.extend(
                     f'- {s["entity_key"]}: now read as "{s["new_text"][:120]}"' for s in shifts
                 )
-                lines.append("\n".join(shift_lines))
-        if getattr(self.config, "experience_ledger", False):
-            lister = getattr(getattr(self, "_memory", None), "list_experience_lessons", None)
-            if callable(lister):
-                try:
-                    lessons = lister()
-                except Exception:  # noqa: BLE001
-                    lessons = []
-                if isinstance(lessons, list) and lessons:
-                    proposed = sum(1 for e in lessons if e.get("tier") == "auto_proposed")
-                    note = f"[Experience ledger] {len(lessons)} lessons held"
-                    if proposed:
-                        note += (
-                            f" ({proposed} proposed overnight — inspect with ledger_review; "
-                            "promoting one adds it to your standing context from the "
-                            "next session)"
-                        )
-                    lines.append(note)
-        return "\n\n".join(lines)
+                return "\n".join(shift_lines)
+        return ""
+
+    def _experience_ledger_carryover_note(self) -> str:
+        """Summarize held and overnight-proposed experience lessons."""
+        if not getattr(self.config, "experience_ledger", False):
+            return ""
+        lister = getattr(getattr(self, "_memory", None), "list_experience_lessons", None)
+        if not callable(lister):
+            return ""
+        try:
+            lessons = lister()
+        except Exception:  # noqa: BLE001
+            return ""
+        if not isinstance(lessons, list) or not lessons:
+            return ""
+
+        proposed = sum(1 for entry in lessons if entry.get("tier") == "auto_proposed")
+        note = f"[Experience ledger] {len(lessons)} lessons held"
+        if proposed:
+            note += (
+                f" ({proposed} proposed overnight — inspect with ledger_review; "
+                "promoting one adds it to your standing context from the next session)"
+            )
+        return note
+
+    def _self_ledger_carryover_context(self) -> str:
+        """Render first-turn continuity so a restart resumes a self, not a blank."""
+        blocks = (
+            self._previous_metacognitive_thread(),
+            self._interpretation_shift_context(),
+            self._experience_ledger_carryover_note(),
+        )
+        return "\n\n".join(block for block in blocks if block)
 
     def _post_compact_recovery_context(self) -> str:
         """Re-anchor right after context compaction.
@@ -1640,6 +1701,20 @@ class EmbodiedAgent:
         self._constitution_block = "\n".join(lines)
         return self._constitution_block
 
+    def _workspace_prompt_blocks(self, workspace_ctx: str) -> list[str]:
+        """Return workspace context, falling back to direct world-model state."""
+        if workspace_ctx:
+            return [workspace_ctx]
+
+        blocks: list[str] = []
+        exploration_ctx = self._exploration_context()
+        if exploration_ctx:
+            blocks.append(exploration_ctx)
+        scene_ctx = self._scene.context_for_prompt() if self._scene else ""
+        if scene_ctx:
+            blocks.append(scene_ctx)
+        return blocks
+
     def _system_prompt(
         self,
         feelings_ctx: str = "",
@@ -1714,17 +1789,8 @@ class EmbodiedAgent:
                 + plan_ctx
             )
 
-        # Global Workspace: replaces individual exploration + scene context blocks.
-        # If nothing ignited this turn, fall back to direct module context.
-        if workspace_ctx:
-            variable_parts.append(workspace_ctx)
-        else:
-            exploration_ctx = self._exploration_context()
-            if exploration_ctx:
-                variable_parts.append(exploration_ctx)
-            scene_ctx = self._scene.context_for_prompt() if self._scene else ""
-            if scene_ctx:
-                variable_parts.append(scene_ctx)
+        # Global Workspace replaces individual exploration + scene context blocks.
+        variable_parts.extend(self._workspace_prompt_blocks(workspace_ctx))
 
         variable = "\n\n---\n\n".join(variable_parts)
         return stable, variable
@@ -3514,45 +3580,41 @@ class EmbodiedAgent:
         except Exception as e:
             logger.warning("Could not write today's self narrative: %s", e)
 
-    async def close(self) -> None:
-        """Clean up resources. Bounded by timeouts to avoid hanging on exit."""
+    def _close_cameras(self) -> None:
+        """Close each configured camera once, including the default alias."""
         closed_cameras: set[int] = set()
         for camera in getattr(self, "_cameras", {}).values():
             if id(camera) not in closed_cameras:
                 camera.close()
                 closed_cameras.add(id(camera))
-        if self._camera and id(self._camera) not in closed_cameras:
-            self._camera.close()
+        default_camera = getattr(self, "_camera", None)
+        if default_camera and id(default_camera) not in closed_cameras:
+            default_camera.close()
 
-        await self._drain_background_tasks()
+    async def _refresh_day_summary_on_shutdown(self) -> None:
+        """Refresh today's summary when a dedicated utility backend is available."""
+        if self._utility_backend is self.backend:
+            return
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            await asyncio.to_thread(self._memory.delete_day_summaries_for_date, today)
+            await self._generate_day_summary(today)
+        except Exception as exc:
+            logger.warning("Failed to generate today's day summary on shutdown: %s", exc)
 
-        # Write today's self-narrative before shutting down.
-        await self._write_today_narrative()
+    @staticmethod
+    async def _stop_async_resource(resource: Any, method_name: str, timeout: float) -> None:
+        """Best-effort stop one async resource within a bounded timeout."""
+        if resource is None:
+            return
+        try:
+            stop = getattr(resource, method_name)
+            await asyncio.wait_for(stop(), timeout=timeout)
+        except (asyncio.TimeoutError, Exception):
+            pass
 
-        # Generate (or refresh) today's day summary before shutting down.
-        # Skipped when no separate utility backend is configured.
-        if self._utility_backend is not self.backend:
-            try:
-                today = datetime.now().strftime("%Y-%m-%d")
-                await asyncio.to_thread(self._memory.delete_day_summaries_for_date, today)
-                await self._generate_day_summary(today)
-            except Exception as e:
-                logger.warning("Failed to generate today's day summary on shutdown: %s", e)
-        memory_worker = getattr(self, "_memory_worker", None)
-        if memory_worker:
-            try:
-                await asyncio.wait_for(memory_worker.stop(), timeout=1.5)
-            except (asyncio.TimeoutError, Exception):
-                pass
-        inner_loop = getattr(self, "_inner_loop", None)
-        if inner_loop is not None:
-            try:
-                await asyncio.wait_for(inner_loop.stop(), timeout=1.5)
-            except (asyncio.TimeoutError, Exception):
-                pass
-        # Dense recurrence defers disk writes — persist any backlog AFTER all
-        # producers (background pipelines, inner-loop ticks) have stopped, or
-        # a late nudge would re-dirty the stores past the flush and be lost.
+    def _flush_deferred_state(self) -> None:
+        """Persist state deferred by dense recurrence after producers stop."""
         for store_name in ("_self_state", "_attention_schema"):
             store = getattr(self, store_name, None)
             if store is not None and hasattr(store, "flush"):
@@ -3560,27 +3622,16 @@ class EmbodiedAgent:
                     store.flush()
                 except Exception:  # noqa: BLE001
                     pass
-        if self._mcp:
-            try:
-                await asyncio.wait_for(self._mcp.stop(), timeout=2.0)
-            except (asyncio.TimeoutError, Exception):
-                pass
-        telegram_transport = getattr(self, "_telegram_transport", None)
-        if telegram_transport is not None:
-            try:
-                await asyncio.wait_for(telegram_transport.close(), timeout=2.0)
-            except (asyncio.TimeoutError, Exception):
-                pass
+
+    async def _close_memory(self) -> None:
+        """Close the synchronous memory store without blocking the event loop."""
         try:
             await asyncio.wait_for(asyncio.to_thread(self._memory.close), timeout=1.0)
         except (asyncio.TimeoutError, Exception):
             pass
-        delegation_runner = getattr(self, "_delegation_runner", None)
-        if delegation_runner is not None:
-            try:
-                await asyncio.wait_for(delegation_runner.shutdown(), timeout=2.0)
-            except (asyncio.TimeoutError, Exception):
-                pass
+
+    def _close_sync_resources(self) -> None:
+        """Best-effort close the remaining synchronous stores."""
         for closable in (
             getattr(self, "_person_model", None),
             getattr(self, "_commitment_store", None),
@@ -3590,6 +3641,30 @@ class EmbodiedAgent:
                     closable.close()
                 except Exception:
                     pass
+
+    async def close(self) -> None:
+        """Clean up resources in producer-to-store order with bounded waits."""
+        self._close_cameras()
+
+        await self._drain_background_tasks()
+
+        # Write today's self-narrative before shutting down.
+        await self._write_today_narrative()
+
+        await self._refresh_day_summary_on_shutdown()
+        await self._stop_async_resource(getattr(self, "_memory_worker", None), "stop", 1.5)
+        await self._stop_async_resource(getattr(self, "_inner_loop", None), "stop", 1.5)
+
+        # Dense recurrence defers disk writes — persist any backlog AFTER all
+        # producers (background pipelines, inner-loop ticks) have stopped, or
+        # a late nudge would re-dirty the stores past the flush and be lost.
+        self._flush_deferred_state()
+
+        await self._stop_async_resource(getattr(self, "_mcp", None), "stop", 2.0)
+        await self._stop_async_resource(getattr(self, "_telegram_transport", None), "close", 2.0)
+        await self._close_memory()
+        await self._stop_async_resource(getattr(self, "_delegation_runner", None), "shutdown", 2.0)
+        self._close_sync_resources()
 
     async def _stream_with_retry(
         self,
