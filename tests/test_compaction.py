@@ -125,6 +125,26 @@ class TestShouldCompact:
         assert isinstance(default, int)
         assert default > 0
 
+    def test_managed_claude_context_uses_high_local_fallback(self):
+        """Claude Code gets room to auto-compact before familiar-ai intervenes."""
+        agent = _make_agent()
+        agent.backend.manages_context = True
+        agent._last_context_tokens = 100_000
+        assert agent._should_compact(threshold_tokens=60_000) is False
+        agent._last_context_tokens = 180_001
+        assert agent._should_compact(threshold_tokens=60_000) is True
+
+
+def test_clear_history_resets_backend_managed_session():
+    agent = _make_agent()
+    agent.messages = [_make_msg("user", "hello")]
+    agent.backend.reset_session = MagicMock()
+
+    agent.clear_history()
+
+    assert agent.messages == []
+    agent.backend.reset_session.assert_called_once_with()
+
 
 # ── _compact_messages ──────────────────────────────────────────────────────
 

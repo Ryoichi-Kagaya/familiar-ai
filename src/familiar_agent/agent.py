@@ -3293,7 +3293,14 @@ class EmbodiedAgent:
         In normal use _last_context_tokens is 0 until after the first turn,
         so an empty conversation naturally returns False.
         """
-        return threshold_tokens > 0 and self._last_context_tokens > threshold_tokens
+        if threshold_tokens <= 0:
+            return False
+        if getattr(self.backend, "manages_context", False) is True:
+            # Claude Code auto-compacts its managed session near the model's
+            # context limit. Keep a high local fallback for desync/recovery,
+            # where the complete app-owned transcript may need to be resent.
+            threshold_tokens = max(threshold_tokens, 180_000)
+        return self._last_context_tokens > threshold_tokens
 
     async def _compact_messages(self, keep_last: int = 6) -> None:
         """Summarise old messages and trim the history.
@@ -3726,6 +3733,9 @@ class EmbodiedAgent:
     def clear_history(self) -> None:
         """Clear conversation history (start fresh)."""
         self.messages = []
+        reset_session = getattr(self.backend, "reset_session", None)
+        if callable(reset_session):
+            reset_session()
 
     async def clear_history_exclusive(self, *, source: str = "command") -> None:
         """Clear history after any in-flight channel turn has completed."""

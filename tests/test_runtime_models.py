@@ -8,6 +8,7 @@ deferred inside the test so a missing optional SDK fails that test only.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -510,10 +511,12 @@ def test_create_backend_uses_safe_claude_default_for_cli() -> None:
         "--safe-mode",
         "--tools",
         "",
-        "--no-session-persistence",
         "--system-prompt",
         "",
+        "--autocompact",
+        "auto",
     ]
+    assert backend.manages_context is True
 
 
 def test_claude_cli_command_enables_only_read_for_image_turns() -> None:
@@ -538,7 +541,9 @@ def test_claude_cli_command_enables_only_read_for_image_turns() -> None:
 async def test_claude_cli_stages_images_for_read_and_cleans_them_up() -> None:
     from familiar_runtime.models import ClaudeCodeCLIBackend, ImageAttachment, UserTurn
 
-    backend = ClaudeCodeCLIBackend(["claude", "-p", "--tools", "", "{}"])
+    backend = ClaudeCodeCLIBackend(
+        ["claude", "-p", "--tools", "", "--no-session-persistence", "{}"]
+    )
     messages = [
         backend.make_user_message(
             UserTurn(
@@ -556,9 +561,9 @@ async def test_claude_cli_stages_images_for_read_and_cleans_them_up() -> None:
             "-p",
             "--tools",
             "Read",
+            "--no-session-persistence",
             "--allowedTools",
             "Read",
-            "{}",
         ]
         assert cwd is not None
         captured_path = Path(cwd) / "image-1.png"
@@ -579,7 +584,9 @@ async def test_claude_cli_stages_images_for_read_and_cleans_them_up() -> None:
 async def test_claude_cli_stages_tool_result_images_for_read() -> None:
     from familiar_runtime.models import ClaudeCodeCLIBackend, ToolCall
 
-    backend = ClaudeCodeCLIBackend(["claude", "-p", "--tools", "", "{}"])
+    backend = ClaudeCodeCLIBackend(
+        ["claude", "-p", "--tools", "", "--no-session-persistence", "{}"]
+    )
     messages = [
         backend.make_tool_results(
             [ToolCall(id="t", name="see", input={})],
@@ -606,13 +613,83 @@ async def test_claude_cli_stages_tool_result_images_for_read() -> None:
 async def test_claude_cli_text_turn_keeps_original_command_path() -> None:
     from familiar_runtime.models import ClaudeCodeCLIBackend
 
-    backend = ClaudeCodeCLIBackend(["claude", "-p", "--tools", "", "{}"])
+    backend = ClaudeCodeCLIBackend(
+        ["claude", "-p", "--tools", "", "--no-session-persistence", "{}"]
+    )
 
     with patch.object(backend, "_run", new=AsyncMock(return_value="reply")) as run:
         await backend.stream_turn("system", [backend.make_user_message("hello")], [], 100, None)
 
     run.assert_awaited_once()
     assert run.call_args.kwargs == {}
+
+
+@pytest.mark.asyncio
+async def test_claude_cli_managed_session_resumes_delta_and_rebuilds_on_context_change() -> None:
+    from familiar_runtime.models import ClaudeCodeCLIBackend
+
+    backend = ClaudeCodeCLIBackend(["claude", "-p"])
+    calls: list[tuple[str, list[str]]] = []
+    usage_keys = (
+        "input_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+        "output_tokens",
+    )
+    usages = iter(
+        dict(zip(usage_keys, values)) for values in ((10, 20, 30, 4), (5, 0, 60, 3), (0, 0, 0, 1))
+    )
+
+    async def fake_run(prompt: str, *, command=None, cwd=None) -> str:
+        assert cwd is None
+        calls.append((prompt, command))
+        return json.dumps(
+            {"result": f"reply {len(calls)}", "session_id": command[-1], "usage": next(usages)}
+        )
+
+    messages = []
+    tools = [{"name": "ping", "description": "ping", "input_schema": {"type": "object"}}]
+
+    async def turn(state: str, user: str, turn_tools: list[dict]):
+        messages.append(backend.make_user_message(user))
+        result, raw = await backend.stream_turn(
+            ("stable rules", f"turn state {state}"), messages, turn_tools, 100, None
+        )
+        messages.append(raw)
+        return result
+
+    with patch.object(backend, "_run", side_effect=fake_run):
+        first = await turn("one", "hello", tools)
+        second = await turn("two", "next question", tools)
+        await turn("three", "third question", [{**tools[0], "name": "new_tool"}])
+
+    first_prompt, first_command = calls[0]
+    second_prompt, second_command = calls[1]
+    third_prompt, third_command = calls[2]
+    assert all(text in first_prompt for text in ("stable rules", "hello"))
+    assert "--session-id" in first_command
+    assert first_command[-4:-2] == ["--output-format", "json"]
+    assert all(text not in second_prompt for text in ("stable rules", "hello", "reply 1"))
+    assert all(text in second_prompt for text in ("turn state two", "next question"))
+    assert second_command[-2:] == ["--resume", first_command[-1]]
+    assert "--session-id" in third_command
+    assert third_command[-1] != first_command[-1]
+    assert all(text in third_prompt for text in ("stable rules", "hello"))
+    usage = (first.input_tokens, first.output_tokens, second.input_tokens, second.output_tokens)
+    assert usage == (60, 4, 65, 3)
+
+
+@pytest.mark.asyncio
+async def test_claude_cli_complete_is_not_added_to_managed_session() -> None:
+    from familiar_runtime.models import ClaudeCodeCLIBackend
+
+    backend = ClaudeCodeCLIBackend(["claude", "-p", "--tools", ""])
+    with patch.object(backend, "_run", new=AsyncMock(return_value="utility reply")) as run:
+        reply = await backend.complete("utility prompt", 20)
+
+    assert reply == "utility reply"
+    assert run.call_args.kwargs["command"][-1] == "--no-session-persistence"
+    assert backend._session.session_id is None
 
 
 @pytest.mark.asyncio

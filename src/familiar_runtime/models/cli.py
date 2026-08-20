@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import base64
+import contextlib
+import json
 import logging
 import os
 import tempfile
+import uuid
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +25,45 @@ from .base import ModelTurnResult, ToolCall
 from .content import UserTurn, compact_image_blocks
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _CLIInvocation:
+    """Text plus optional provider-reported usage from one CLI invocation."""
+
+    text: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
+@dataclass(slots=True)
+class _ClaudeSessionState:
+    """App-side mirror used to decide whether a Claude session can be resumed."""
+
+    enabled: bool
+    session_id: str | None = None
+    context_key: str | None = None
+    messages: list[Any] = field(default_factory=list)
+
+    def reset(self) -> None:
+        self.session_id = None
+        self.context_key = None
+        self.messages.clear()
+
+    def can_resume(self, context_key: str, messages: list[Any]) -> bool:
+        return (
+            self.session_id is not None
+            and self.context_key == context_key
+            and len(messages) >= len(self.messages)
+            and messages[: len(self.messages)] == self.messages
+        )
+
+    def remember(self, context_key: str, messages: list[Any], raw: dict[str, Any]) -> None:
+        self.context_key = context_key
+        # History entries are append-only. A shallow snapshot avoids copying
+        # large image payloads; image compaction replaces entries wholesale,
+        # which deliberately fails the next prefix check and rebuilds context.
+        self.messages = [*messages, raw]
 
 
 def _estimate_cli_tokens(text: str) -> int:
@@ -210,16 +252,14 @@ class CLIBackend:
 
     # ── backend interface ─────────────────────────────────────────
 
-    async def stream_turn(
-        self,
-        system: str | tuple[str, str],
-        messages: list,
-        tools: list[dict],
-        max_tokens: int,  # noqa: ARG002
+    @staticmethod
+    def _normalize_turn(
+        prompt: str,
+        invocation: _CLIInvocation,
         on_text: Callable[[str], None] | None,
-    ) -> tuple[ModelTurnResult, Any]:
-        prompt = self._serialize(system, messages, tools)
-        text = await self._run(prompt)
+    ) -> tuple[ModelTurnResult, dict[str, Any]]:
+        """Parse prompt-tool markup and attach measured or estimated usage."""
+        text = invocation.text
         tool_calls, spans = _extract_tool_calls_from_text(text)
         clean_text = _strip_tool_calls_from_text(text, spans)
         stop = "tool_use" if tool_calls else "end_turn"
@@ -232,11 +272,31 @@ class CLIBackend:
                 stop_reason=stop,
                 text=clean_text,
                 tool_calls=tool_calls,
-                input_tokens=_estimate_cli_tokens(prompt),
-                output_tokens=_estimate_cli_tokens(text),
+                input_tokens=(
+                    invocation.input_tokens
+                    if invocation.input_tokens is not None
+                    else _estimate_cli_tokens(prompt)
+                ),
+                output_tokens=(
+                    invocation.output_tokens
+                    if invocation.output_tokens is not None
+                    else _estimate_cli_tokens(text)
+                ),
             ),
             raw,
         )
+
+    async def stream_turn(
+        self,
+        system: str | tuple[str, str],
+        messages: list,
+        tools: list[dict],
+        max_tokens: int,  # noqa: ARG002
+        on_text: Callable[[str], None] | None,
+    ) -> tuple[ModelTurnResult, Any]:
+        prompt = self._serialize(system, messages, tools)
+        text = await self._run(prompt)
+        return self._normalize_turn(prompt, _CLIInvocation(text), on_text)
 
     async def complete(self, prompt: str, max_tokens: int) -> str:  # noqa: ARG002
         return await self._run(prompt)
@@ -258,6 +318,35 @@ class ClaudeCodeCLIBackend(CLIBackend):
         "image/webp": ".webp",
     }
 
+    _SESSION_CONFLICT_FLAGS = {
+        "--no-session-persistence",
+        "--continue",
+        "-c",
+        "--resume",
+        "-r",
+        "--session-id",
+        "--fork-session",
+    }
+
+    def __init__(self, command: list[str], *, timeout_seconds: float = 120.0) -> None:
+        super().__init__(command, timeout_seconds=timeout_seconds)
+        self._session = _ClaudeSessionState(
+            enabled=not any(
+                token in self._SESSION_CONFLICT_FLAGS
+                or token.startswith(("--no-session-persistence=", "--resume=", "--session-id="))
+                for token in command
+            )
+        )
+
+    @property
+    def manages_context(self) -> bool:
+        """Whether Claude Code owns the live history and auto-compaction."""
+        return self._session.enabled
+
+    def reset_session(self) -> None:
+        """Forget the resumable Claude session without touching app history."""
+        self._session.reset()
+
     async def _run(
         self,
         prompt: str,
@@ -269,6 +358,97 @@ class ClaudeCodeCLIBackend(CLIBackend):
         selected_command = command or self._cmd
         stdin_command = [token for token in selected_command if token != "{}"]
         return await super()._run(prompt, command=stdin_command, cwd=cwd)
+
+    @staticmethod
+    def _without_option(command: list[str], names: set[str]) -> list[str]:
+        """Remove value-taking CLI options in either ``--flag x`` or ``--flag=x`` form."""
+        result: list[str] = []
+        index = 0
+        while index < len(command):
+            token = command[index]
+            if token in names:
+                index += 2
+                continue
+            if any(token.startswith(f"{name}=") for name in names):
+                index += 1
+                continue
+            result.append(token)
+            index += 1
+        return result
+
+    @classmethod
+    def _session_command(cls, command: list[str], session_id: str, *, resume: bool) -> list[str]:
+        """Build a JSON print-mode command for a new or resumed managed session."""
+        result = [token for token in command if token != "{}"]
+        result = cls._without_option(
+            result,
+            {"--output-format", "--session-id", "--resume", "-r"},
+        )
+        result.extend(["--output-format", "json"])
+        result.extend(["--resume" if resume else "--session-id", session_id])
+        return result
+
+    @classmethod
+    def _one_shot_command(cls, command: list[str]) -> list[str]:
+        """Keep utility completions out of the managed conversation session."""
+        result = [token for token in command if token != "{}"]
+        if "--no-session-persistence" not in result:
+            result.append("--no-session-persistence")
+        return result
+
+    async def complete(self, prompt: str, max_tokens: int) -> str:  # noqa: ARG002
+        return await self._run(prompt, command=self._one_shot_command(self._cmd))
+
+    @staticmethod
+    def _usage_tokens(payload: dict[str, Any], key: str) -> int:
+        usage = payload.get("usage")
+        if not isinstance(usage, dict):
+            return 0
+        value = usage.get(key, 0)
+        return int(value) if isinstance(value, int | float) else 0
+
+    async def _run_managed(
+        self,
+        prompt: str,
+        *,
+        command: list[str],
+        cwd: Path | None,
+        resume: bool,
+    ) -> _CLIInvocation:
+        """Run one Claude Code query and recover its exact JSON usage metadata."""
+        session_id = self._session.session_id if resume else str(uuid.uuid4())
+        if session_id is None:  # defensive: ``resume`` is only true with an active id
+            raise RuntimeError("Claude Code managed session is not initialized.")
+        selected = self._session_command(command, session_id, resume=resume)
+        raw = await self._run(prompt, command=selected, cwd=cwd)
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Claude Code returned invalid JSON session output.") from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("result"), str):
+            raise RuntimeError("Claude Code JSON session output did not contain a result.")
+
+        returned_session_id = payload.get("session_id")
+        if isinstance(returned_session_id, str) and returned_session_id:
+            session_id = returned_session_id
+        self._session.session_id = session_id
+
+        # Claude reports cache reads/creation separately from uncached input.
+        # Their sum is the useful approximation of the current context size.
+        input_tokens = sum(
+            self._usage_tokens(payload, key)
+            for key in (
+                "input_tokens",
+                "cache_creation_input_tokens",
+                "cache_read_input_tokens",
+            )
+        )
+        output_tokens = self._usage_tokens(payload, "output_tokens")
+        return _CLIInvocation(
+            payload["result"].strip(),
+            input_tokens or None,
+            output_tokens or None,
+        )
 
     def make_user_message(self, content: str | list | UserTurn) -> dict:
         if isinstance(content, UserTurn):
@@ -429,16 +609,43 @@ class ClaudeCodeCLIBackend(CLIBackend):
         parts.append("Assistant:")
         return "\n\n".join(parts)
 
-    async def stream_turn(
+    @staticmethod
+    def _context_parts(system: str | tuple[str, str]) -> tuple[str, str]:
+        if isinstance(system, tuple):
+            return system
+        return system, ""
+
+    @classmethod
+    def _context_key(cls, system: str | tuple[str, str], tools: list[dict]) -> str:
+        """Key the context Claude must retain verbatim for delta-only turns."""
+        stable, _ = cls._context_parts(system)
+        return json.dumps(
+            [stable, tools],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+
+    def _serialize_continuation(
         self,
         system: str | tuple[str, str],
         messages: list,
-        tools: list[dict],
-        max_tokens: int,  # noqa: ARG002
-        on_text: Callable[[str], None] | None,
-    ) -> tuple[ModelTurnResult, Any]:
-        messages = compact_image_blocks(messages)
-        has_images = any(
+    ) -> str:
+        """Serialize only state and messages not already held by Claude Code."""
+        _, variable = self._context_parts(system)
+        parts: list[str] = []
+        if variable:
+            parts.append(f"<turn-context>\n{variable}\n</turn-context>")
+        for entry in messages:
+            batch = entry if isinstance(entry, list) else [entry]
+            parts.extend(self._fmt_msg(item) for item in batch if isinstance(item, dict))
+        parts.append("Assistant:")
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _has_images(messages: list[Any]) -> bool:
+        return any(
             isinstance(message, dict)
             and isinstance(message.get("content"), list)
             and any(
@@ -448,29 +655,70 @@ class ClaudeCodeCLIBackend(CLIBackend):
             for entry in messages
             for message in (entry if isinstance(entry, list) else [entry])
         )
-        if not has_images:
-            return await super().stream_turn(system, messages, tools, max_tokens, on_text)
 
+    async def _invoke_image_turn(
+        self,
+        system: str | tuple[str, str],
+        messages: list[Any],
+        tools: list[dict],
+    ) -> tuple[str, _CLIInvocation]:
+        """Run an image turn in a disposable directory and session."""
+        self.reset_session()
         with tempfile.TemporaryDirectory(prefix="familiar-ai-images-") as temp_dir:
             directory = Path(temp_dir)
             prompt = self._serialize_with_images(system, messages, tools, directory)
-            command = self._command_with_read(self._cmd)
+            command = self._one_shot_command(self._command_with_read(self._cmd))
             text = await self._run(prompt, command=command, cwd=directory)
+        return prompt, _CLIInvocation(text)
 
-        tool_calls, spans = _extract_tool_calls_from_text(text)
-        clean_text = _strip_tool_calls_from_text(text, spans)
-        stop = "tool_use" if tool_calls else "end_turn"
-        if on_text and clean_text:
-            on_text(clean_text)
-        raw_text = _canonical_tool_call_text(tool_calls) if tool_calls else clean_text
-        raw: dict[str, Any] = {"role": "assistant", "content": raw_text}
-        return (
-            ModelTurnResult(
-                stop_reason=stop,
-                text=clean_text,
-                tool_calls=tool_calls,
-                input_tokens=_estimate_cli_tokens(prompt),
-                output_tokens=_estimate_cli_tokens(text),
-            ),
-            raw,
+    async def _invoke_managed_text_turn(
+        self,
+        system: str | tuple[str, str],
+        messages: list[Any],
+        tools: list[dict],
+    ) -> tuple[str, _CLIInvocation, str]:
+        """Run a text turn from either a matching delta or a rebuilt transcript."""
+        context_key = self._context_key(system, tools)
+        resume = self._session.can_resume(context_key, messages)
+        if resume:
+            delta = messages[len(self._session.messages) :]
+            prompt = self._serialize_continuation(system, delta)
+        else:
+            self.reset_session()
+            prompt = self._serialize(system, messages, tools)
+        invocation = await self._run_managed(
+            prompt,
+            command=self._cmd,
+            cwd=None,
+            resume=resume,
         )
+        return prompt, invocation, context_key
+
+    async def stream_turn(
+        self,
+        system: str | tuple[str, str],
+        messages: list,
+        tools: list[dict],
+        max_tokens: int,  # noqa: ARG002
+        on_text: Callable[[str], None] | None,
+    ) -> tuple[ModelTurnResult, Any]:
+        messages = compact_image_blocks(messages)
+        has_images = self._has_images(messages)
+        if not self._session.enabled and not has_images:
+            return await super().stream_turn(system, messages, tools, max_tokens, on_text)
+
+        if has_images:
+            # Image paths live under an invocation-scoped cwd. Do not bind a
+            # resumable session to that soon-to-be-deleted directory; process
+            # the image as a one-shot and rebuild the text session next time.
+            prompt, invocation = await self._invoke_image_turn(system, messages, tools)
+            context_key = None
+        else:
+            prompt, invocation, context_key = await self._invoke_managed_text_turn(
+                system, messages, tools
+            )
+
+        result, raw = self._normalize_turn(prompt, invocation, on_text)
+        if context_key is not None:
+            self._session.remember(context_key, messages, raw)
+        return result, raw

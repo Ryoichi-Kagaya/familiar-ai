@@ -247,21 +247,26 @@ AGENT_NAME=Yukine
 **CLI tool `.env` example:**
 ```env
 PLATFORM=cli
-# MODEL may be omitted to use Claude Code in isolated print mode:
-# claude -p --safe-mode --tools "" --no-session-persistence --system-prompt ""
+# MODEL may be omitted to use Claude Code with managed context:
+# claude -p --safe-mode --tools "" --system-prompt "" --autocompact auto
+# To opt out of local Claude session persistence, set the stateless command explicitly:
+# MODEL=claude -p --safe-mode --tools "" --no-session-persistence --system-prompt ""
 # MODEL=llm -m gemma3 {}        # llm CLI (https://llm.datasette.io) — {} = prompt arg
 # MODEL=ollama run gemma3:27b   # Ollama — no {}, prompt goes via stdin
 ```
 
 The CLI backend does not require `API_KEY`; it uses the CLI tool's own authentication. For
 Claude Code, run `claude -p "Reply with OK"` once before starting familiar-ai to confirm that
-the CLI is installed and authenticated. Claude Code's built-in tools, project customizations,
-and session persistence are disabled by the default command so familiar-ai remains the only
-tool executor and conversation owner. Set `MODEL` explicitly to override this command.
-Claude Code prompts are sent over stdin, including for legacy `MODEL` values containing `{}`,
-so long conversation history does not run into the operating system's argument-size limit.
-Because CLI tools do not report exact token usage, familiar-ai estimates it from the serialized
-multilingual prompt and compacts older turns into a summary after approximately 60k input tokens.
+the CLI is installed and authenticated. Claude Code's built-in tools and project customizations
+are disabled by the default command, so familiar-ai remains the only tool executor and the source
+of truth for conversation history. Text turns use a private UUID session: the first request sends
+the complete context, while later requests use `--resume` and send only new messages plus the
+current turn state. This lets Claude Code reuse its prompt cache, auto-compact its context, and
+report exact usage through JSON. If app history, the stable prompt, or the available tool
+definitions diverge, familiar-ai safely starts a new Claude session from its own transcript.
+`/clear` does the same. Claude Code stores resumable transcripts in its normal local session
+storage; set the stateless `MODEL` shown above if that is undesirable. Other CLI tools continue
+to use multilingual token estimates and familiar-ai's approximately 60k-token compaction.
 
 ### Sending images
 
@@ -273,8 +278,10 @@ JPEG, PNG, and WebP images are supported, with up to three attachments per turn.
 validated, resized when necessary, and old raw image blocks are removed from conversation
 history while their captions remain. With the default `claude -p` command, familiar-ai writes
 attachments to an isolated temporary directory and enables Claude Code's read-only `Read` tool
-for that image invocation only. Other arbitrary CLI commands remain text-only unless their
-adapter explicitly supports images.
+for that image invocation only. Image requests stay one-shot because their isolated working
+directory is deleted immediately; the next text turn rebuilds a managed session from familiar-ai's
+transcript. Other arbitrary CLI commands remain text-only unless their adapter explicitly supports
+images.
 
 ---
 

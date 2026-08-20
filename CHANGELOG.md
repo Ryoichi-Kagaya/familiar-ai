@@ -37,6 +37,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   (including `chat.log`); only explicit `say()` output crosses that presentation boundary.
 
 ### Added
+- Managed Claude Code CLI context for default text conversations: familiar-ai now resumes a
+  private UUID session with delta-only prompts, delegates context compaction to Claude Code,
+  records exact JSON token usage, and falls back to its app-owned transcript on prompt/tool
+  changes; image and utility calls remain isolated one-shots, and explicit
+  `--no-session-persistence` commands retain the previous stateless behavior.
 - Persistent `~/.familiar_ai/cameras.json` multi-camera catalogs with stable `see_camera` and
   `look_camera` selector tools, a warm default camera, and lazy on-demand
   connections for additional or intermittently offline cameras.
