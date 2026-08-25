@@ -25,6 +25,7 @@ def _make_agent():
     agent._session_output_tokens = 0
     agent._last_context_tokens = 0
     agent._post_compact = False
+    agent._post_compact_recovery_pending = False
     agent._background_tasks = set()
     agent._cached_plan_ctx = ""
     agent._cached_workspace_ctx = ""
@@ -93,56 +94,45 @@ class TestShouldCompact:
 
         agent = _make_agent()
         agent._last_context_tokens = 30_000
-        assert agent._should_compact(threshold_tokens=60_000) is False
+        assert agent._should_compact() is False
 
     def test_false_when_equal_to_threshold(self):
         """At threshold → no compaction (strictly greater triggers)."""
 
         agent = _make_agent()
         agent._last_context_tokens = 60_000
-        assert agent._should_compact(threshold_tokens=60_000) is False
+        assert agent._should_compact() is False
 
     def test_true_when_above_threshold(self):
         """Above threshold → compaction needed."""
         agent = _make_agent()
         agent._last_context_tokens = 60_001
-        assert agent._should_compact(threshold_tokens=60_000) is True
-
-    def test_false_with_empty_messages(self):
-        """No messages → never compact."""
-        agent = _make_agent()
-        agent._last_context_tokens = 999_999
-        agent.messages = []
-        assert agent._should_compact(threshold_tokens=0) is False
-
-    def test_default_threshold_is_reasonable(self):
-        """Default threshold exists and is positive."""
-        import inspect
-        from familiar_agent.agent import EmbodiedAgent
-
-        sig = inspect.signature(EmbodiedAgent._should_compact)
-        default = sig.parameters["threshold_tokens"].default
-        assert isinstance(default, int)
-        assert default > 0
+        assert agent._should_compact() is True
 
     def test_managed_claude_context_keeps_local_safety_bound(self):
         """Managed sessions must not bypass familiar-ai's bounded history."""
         agent = _make_agent()
         agent.backend.manages_context = True
         agent._last_context_tokens = 60_000
-        assert agent._should_compact(threshold_tokens=60_000) is False
+        assert agent._should_compact() is False
         agent._last_context_tokens = 60_001
-        assert agent._should_compact(threshold_tokens=60_000) is True
+        assert agent._should_compact() is True
 
 
-def test_clear_history_resets_backend_managed_session():
+def test_clear_history_resets_all_context_state():
     agent = _make_agent()
     agent.messages = [_make_msg("user", "hello")]
+    agent._last_context_tokens = 60_001
+    agent._post_compact = True
+    agent._post_compact_recovery_pending = True
     agent.backend.reset_session = MagicMock()
 
     agent.clear_history()
 
     assert agent.messages == []
+    assert agent._last_context_tokens == 0
+    assert agent._post_compact is False
+    assert agent._post_compact_recovery_pending is False
     agent.backend.reset_session.assert_called_once_with()
 
 

@@ -11,7 +11,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 - Restore stateless Claude Code CLI conversations as the default and keep the 60k-token local
   compaction bound even for opt-in managed sessions, preventing changing turn-state snapshots and
-  image-heavy one-shot conversations from growing unchecked in provider context.
+  image-heavy one-shot conversations from growing unchecked in provider context; clearing history
+  now also resets local compaction and recovery state.
 - Redact RTSP usernames and passwords from camera startup and connection-error logs.
 - Limit `say` to one execution per user-input segment and end the model loop
   immediately after speaking, preventing slightly different second utterances

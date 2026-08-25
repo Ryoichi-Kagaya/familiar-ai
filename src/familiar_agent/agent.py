@@ -417,6 +417,8 @@ Write in third person. Be concise.
 
 Write just the summary paragraph."""
 
+_CONTEXT_COMPACTION_THRESHOLD_TOKENS = 60_000
+
 
 def _interoception(
     started_at: float,
@@ -3286,16 +3288,13 @@ class EmbodiedAgent:
         except Exception as exc:  # noqa: BLE001
             logger.debug("Companion thread capture failed: %s", exc)
 
-    def _should_compact(self, threshold_tokens: int = 60_000) -> bool:
+    def _should_compact(self) -> bool:
         """Return True when context is large enough to warrant compaction.
 
-        A threshold of 0 acts as a disabled sentinel — never compact.
         In normal use _last_context_tokens is 0 until after the first turn,
         so an empty conversation naturally returns False.
         """
-        if threshold_tokens <= 0:
-            return False
-        return self._last_context_tokens > threshold_tokens
+        return self._last_context_tokens > _CONTEXT_COMPACTION_THRESHOLD_TOKENS
 
     async def _compact_messages(self, keep_last: int = 6) -> None:
         """Summarise old messages and trim the history.
@@ -3728,6 +3727,9 @@ class EmbodiedAgent:
     def clear_history(self) -> None:
         """Clear conversation history (start fresh)."""
         self.messages = []
+        self._last_context_tokens = 0
+        self._post_compact = False
+        self._post_compact_recovery_pending = False
         reset_session = getattr(self.backend, "reset_session", None)
         if callable(reset_session):
             reset_session()

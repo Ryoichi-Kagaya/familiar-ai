@@ -518,6 +518,22 @@ def test_create_backend_uses_safe_claude_default_for_cli() -> None:
     assert backend.manages_context is False
 
 
+def test_create_backend_preserves_explicit_managed_claude_opt_in() -> None:
+    from familiar_agent.backend import create_backend
+    from familiar_runtime.models import ClaudeCodeCLIBackend
+
+    config = MagicMock(
+        platform="cli",
+        model='claude -p --tools "" --autocompact auto',
+    )
+
+    backend = create_backend(config)
+
+    assert isinstance(backend, ClaudeCodeCLIBackend)
+    assert backend._cmd == ["claude", "-p", "--tools", "", "--autocompact", "auto"]
+    assert backend.manages_context is True
+
+
 def test_claude_cli_command_enables_only_read_for_image_turns() -> None:
     from familiar_runtime.models import ClaudeCodeCLIBackend
 

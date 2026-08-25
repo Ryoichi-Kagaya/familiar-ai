@@ -40,7 +40,14 @@ TurnResult = ModelTurnResult
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CLAUDE_CLI_COMMAND = (
-    'claude -p --safe-mode --tools "" --no-session-persistence --system-prompt ""'
+    "claude",
+    "-p",
+    "--safe-mode",
+    "--tools",
+    "",
+    "--no-session-persistence",
+    "--system-prompt",
+    "",
 )
 
 __all__ = [
@@ -128,8 +135,9 @@ def create_backend(
         logger.info("Using GLM backend: %s", model)
         return GLMBackend(api_key=config.api_key, model=model)
     if config.platform == "cli":
-        raw_cmd = config.model.strip() if config.model else _DEFAULT_CLAUDE_CLI_COMMAND
-        cmd = shlex.split(raw_cmd)
+        cmd = (
+            shlex.split(config.model.strip()) if config.model else list(_DEFAULT_CLAUDE_CLI_COMMAND)
+        )
         logger.info("Using CLI backend: %s", " ".join(cmd))
         executable = Path(cmd[0]).name.lower() if cmd else ""
         backend_type = (
