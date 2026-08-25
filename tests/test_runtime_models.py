@@ -511,12 +511,11 @@ def test_create_backend_uses_safe_claude_default_for_cli() -> None:
         "--safe-mode",
         "--tools",
         "",
+        "--no-session-persistence",
         "--system-prompt",
         "",
-        "--autocompact",
-        "auto",
     ]
-    assert backend.manages_context is True
+    assert backend.manages_context is False
 
 
 def test_claude_cli_command_enables_only_read_for_image_turns() -> None:

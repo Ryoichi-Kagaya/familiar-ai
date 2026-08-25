@@ -40,7 +40,7 @@ TurnResult = ModelTurnResult
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CLAUDE_CLI_COMMAND = (
-    'claude -p --safe-mode --tools "" --system-prompt "" --autocompact auto'
+    'claude -p --safe-mode --tools "" --no-session-persistence --system-prompt ""'
 )
 
 __all__ = [

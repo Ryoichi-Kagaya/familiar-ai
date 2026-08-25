@@ -247,10 +247,10 @@ AGENT_NAME=Yukine
 **CLI tool `.env` example:**
 ```env
 PLATFORM=cli
-# MODEL may be omitted to use Claude Code with managed context:
-# claude -p --safe-mode --tools "" --system-prompt "" --autocompact auto
-# To opt out of local Claude session persistence, set the stateless command explicitly:
+# MODEL may be omitted to use Claude Code in stateless mode (the default):
 # MODEL=claude -p --safe-mode --tools "" --no-session-persistence --system-prompt ""
+# To opt in to Claude Code managed context, set the persistent command explicitly:
+# MODEL=claude -p --safe-mode --tools "" --system-prompt "" --autocompact auto
 # MODEL=llm -m gemma3 {}        # llm CLI (https://llm.datasette.io) — {} = prompt arg
 # MODEL=ollama run gemma3:27b   # Ollama — no {}, prompt goes via stdin
 ```
@@ -259,14 +259,12 @@ The CLI backend does not require `API_KEY`; it uses the CLI tool's own authentic
 Claude Code, run `claude -p "Reply with OK"` once before starting familiar-ai to confirm that
 the CLI is installed and authenticated. Claude Code's built-in tools and project customizations
 are disabled by the default command, so familiar-ai remains the only tool executor and the source
-of truth for conversation history. Text turns use a private UUID session: the first request sends
-the complete context, while later requests use `--resume` and send only new messages plus the
-current turn state. This lets Claude Code reuse its prompt cache, auto-compact its context, and
-report exact usage through JSON. If app history, the stable prompt, or the available tool
-definitions diverge, familiar-ai safely starts a new Claude session from its own transcript.
-`/clear` does the same. Claude Code stores resumable transcripts in its normal local session
-storage; set the stateless `MODEL` shown above if that is undesirable. Other CLI tools continue
-to use multilingual token estimates and familiar-ai's approximately 60k-token compaction.
+of truth for conversation history. The default is stateless and uses familiar-ai's approximately
+60k-token compaction, avoiding persistent copies of changing turn state. Managed context remains
+available as an explicit opt-in: text turns then use a private UUID session, later requests resume
+it with delta-only prompts, and familiar-ai retains the same 60k local compaction safety bound.
+Image and utility calls remain isolated one-shots. Claude Code stores opt-in managed transcripts
+in its normal local session storage; `/clear` resets the active managed session.
 
 ### Sending images
 

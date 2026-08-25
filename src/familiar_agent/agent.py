@@ -3295,11 +3295,6 @@ class EmbodiedAgent:
         """
         if threshold_tokens <= 0:
             return False
-        if getattr(self.backend, "manages_context", False) is True:
-            # Claude Code auto-compacts its managed session near the model's
-            # context limit. Keep a high local fallback for desync/recovery,
-            # where the complete app-owned transcript may need to be resent.
-            threshold_tokens = max(threshold_tokens, 180_000)
         return self._last_context_tokens > threshold_tokens
 
     async def _compact_messages(self, keep_last: int = 6) -> None:

@@ -125,13 +125,13 @@ class TestShouldCompact:
         assert isinstance(default, int)
         assert default > 0
 
-    def test_managed_claude_context_uses_high_local_fallback(self):
-        """Claude Code gets room to auto-compact before familiar-ai intervenes."""
+    def test_managed_claude_context_keeps_local_safety_bound(self):
+        """Managed sessions must not bypass familiar-ai's bounded history."""
         agent = _make_agent()
         agent.backend.manages_context = True
-        agent._last_context_tokens = 100_000
+        agent._last_context_tokens = 60_000
         assert agent._should_compact(threshold_tokens=60_000) is False
-        agent._last_context_tokens = 180_001
+        agent._last_context_tokens = 60_001
         assert agent._should_compact(threshold_tokens=60_000) is True
 
 

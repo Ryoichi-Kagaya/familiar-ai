@@ -9,6 +9,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Restore stateless Claude Code CLI conversations as the default and keep the 60k-token local
+  compaction bound even for opt-in managed sessions, preventing changing turn-state snapshots and
+  image-heavy one-shot conversations from growing unchecked in provider context.
 - Redact RTSP usernames and passwords from camera startup and connection-error logs.
 - Limit `say` to one execution per user-input segment and end the model loop
   immediately after speaking, preventing slightly different second utterances
@@ -37,11 +40,10 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   (including `chat.log`); only explicit `say()` output crosses that presentation boundary.
 
 ### Added
-- Managed Claude Code CLI context for default text conversations: familiar-ai now resumes a
-  private UUID session with delta-only prompts, delegates context compaction to Claude Code,
-  records exact JSON token usage, and falls back to its app-owned transcript on prompt/tool
-  changes; image and utility calls remain isolated one-shots, and explicit
-  `--no-session-persistence` commands retain the previous stateless behavior.
+- Opt-in managed Claude Code CLI context for text conversations: when configured explicitly,
+  familiar-ai resumes a private UUID session with delta-only prompts, records exact JSON token
+  usage, and falls back to its app-owned transcript on prompt/tool changes; image and utility
+  calls remain isolated one-shots.
 - Persistent `~/.familiar_ai/cameras.json` multi-camera catalogs with stable `see_camera` and
   `look_camera` selector tools, a warm default camera, and lazy on-demand
   connections for additional or intermittently offline cameras.
