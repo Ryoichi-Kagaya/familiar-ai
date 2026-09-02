@@ -176,6 +176,59 @@ def test_kimi_backend_emits_reasoning_is_true() -> None:
     assert backend.emits_reasoning is True
 
 
+@pytest.mark.asyncio
+async def test_kimi_backend_uses_max_completion_tokens_for_streaming() -> None:
+    pytest.importorskip("openai")
+    from familiar_runtime.models import KimiBackend
+
+    class _EmptyStream:
+        def __aiter__(self):
+            async def gen():
+                if False:
+                    yield None
+
+            return gen()
+
+    backend = KimiBackend(api_key="k", model="kimi-k2.6")
+    backend.client.chat.completions.create = AsyncMock(return_value=_EmptyStream())  # type: ignore[method-assign]
+
+    await backend.stream_turn(
+        system="s",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+        max_tokens=321,
+    )
+
+    backend.client.chat.completions.create.assert_awaited_once_with(  # type: ignore[attr-defined]
+        model="kimi-k2.6",
+        max_completion_tokens=321,
+        messages=[
+            {"role": "system", "content": "s"},
+            {"role": "user", "content": "hi"},
+        ],
+        stream=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_kimi_backend_uses_max_completion_tokens_for_complete() -> None:
+    pytest.importorskip("openai")
+    from types import SimpleNamespace
+
+    from familiar_runtime.models import KimiBackend
+
+    response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=" done "))])
+    backend = KimiBackend(api_key="k", model="kimi-k2.6")
+    backend.client.chat.completions.create = AsyncMock(return_value=response)  # type: ignore[method-assign]
+
+    assert await backend.complete("prompt", max_tokens=654) == "done"
+    backend.client.chat.completions.create.assert_awaited_once_with(  # type: ignore[attr-defined]
+        model="kimi-k2.6",
+        max_completion_tokens=654,
+        messages=[{"role": "user", "content": "prompt"}],
+    )
+
+
 @pytest.mark.parametrize(
     "base_url,expected",
     [

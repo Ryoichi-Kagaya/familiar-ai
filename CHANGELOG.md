@@ -9,6 +9,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Send Kimi generation limits with the current `max_completion_tokens` API parameter instead of
+  the deprecated `max_tokens` parameter for both conversational and utility completions.
 - Restore stateless Claude Code CLI conversations as the default and keep the 60k-token local
   compaction bound even for opt-in managed sessions, preventing changing turn-state snapshots and
   image-heavy one-shot conversations from growing unchecked in provider context; clearing history

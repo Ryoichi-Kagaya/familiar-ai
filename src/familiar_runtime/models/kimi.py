@@ -130,7 +130,7 @@ class KimiBackend:
 
         kwargs: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": max_tokens,
+            "max_completion_tokens": max_tokens,
             "messages": flat_messages,
             "stream": True,
         }
@@ -213,7 +213,7 @@ class KimiBackend:
         try:
             resp = await self.client.chat.completions.create(
                 model=self.model,
-                max_tokens=max_tokens,
+                max_completion_tokens=max_tokens,
                 messages=[{"role": "user", "content": prompt}],
             )
             return (resp.choices[0].message.content or "").strip()
