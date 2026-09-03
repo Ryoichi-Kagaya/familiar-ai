@@ -62,7 +62,6 @@ from ._ui_helpers import (
     DESIRE_COOLDOWN,
     IDLE_CHECK_INTERVAL,
     TurnOutputState,
-    collapse_exact_repetition,
     commitment_reminder_prompt,
     format_action,
     format_tool_result,
@@ -70,6 +69,7 @@ from ._ui_helpers import (
     should_fire_idle_desire,
     should_run_sleep_consolidation,
 )
+from .response_normalization import collapse_exact_repetition
 from .bootstrap import resolve_env_path
 from .drive_executor import DriveActionExecutor
 from .user_profile import UserRegistry

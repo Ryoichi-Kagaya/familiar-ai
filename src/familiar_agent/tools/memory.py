@@ -946,8 +946,6 @@ class ObservationMemory:
         query: str,
         n: int = 3,
         kind: str | None = None,
-        *,
-        _user_id: str | None = None,
     ) -> list[dict]:
         """Recall by vector similarity. Fallback to LIKE + recency.
 
@@ -957,8 +955,17 @@ class ObservationMemory:
         turn context, working memory, and DMN seeding as ordinary memories
         (and self-amplify across nights).
         """
+        return self._recall_for_user(current_user_id(), query, n, kind)
+
+    def _recall_for_user(
+        self,
+        user_id: str,
+        query: str,
+        n: int = 3,
+        kind: str | None = None,
+    ) -> list[dict]:
+        """Recall observations belonging to one known user ID."""
         try:
-            user_id = _user_id or current_user_id()
             kind_filter = "AND kind = ?" if kind else "AND kind != 'dream'"
             kind_params: list[Any] = [user_id, kind] if kind else [user_id]
 
@@ -1068,7 +1075,7 @@ class ObservationMemory:
 
     def recall_unattributed(self, query: str, n: int = 1) -> list[dict]:
         """Return relevant pre-partition memories whose owner is still unknown."""
-        candidates = self.recall(query, n=max(3, n), _user_id=LEGACY_USER_ID)
+        candidates = self._recall_for_user(LEGACY_USER_ID, query, n=max(3, n))
         relevant = [
             item
             for item in candidates
@@ -1488,7 +1495,7 @@ class ObservationMemory:
         self, user_id: str, query: str, n: int = 3, kind: str | None = None
     ) -> list[dict]:
         """Recall one explicitly selected user's observations without changing task identity."""
-        return await asyncio.to_thread(self.recall, query, n, kind, _user_id=user_id)
+        return await asyncio.to_thread(self._recall_for_user, user_id, query, n, kind)
 
     async def recall_unattributed_async(self, query: str, n: int = 1) -> list[dict]:
         return await asyncio.to_thread(self.recall_unattributed, query, n)

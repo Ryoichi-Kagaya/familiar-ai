@@ -50,6 +50,7 @@ from .mental_state import (
 )
 from .relationship import RelationshipTracker
 from .user_profile import UserProfile, UserRegistry
+from .user_references import resolve_cross_user_memory_targets
 from .user_context import (
     allowed_cross_user_ids,
     cross_user_memory_scope,
@@ -858,52 +859,14 @@ class EmbodiedAgent:
 
     def _cross_user_memory_targets(self, text: str, current_user_id: str) -> frozenset[str]:
         """Resolve explicitly asked-about people to one-turn memory-search grants."""
-        normalized = text.strip()
-        if not normalized:
-            return frozenset()
-        inquiry = re.search(
-            r"(?:[?？]|何|なに|どう|どこ|いつ|誰|元気|最近|近頃|様子|予定|"
-            r"してる|している|してた|知ってる|覚えてる|聞いた|教えて|"
-            r"(?i:\b(?:what|how|where|when|who|recently|doing|know|remember)\b))",
-            normalized,
-        )
-        if inquiry is None:
-            return frozenset()
-
         registry = getattr(self, "_user_registry", None)
         if registry is None:
             return frozenset()
-        targets: set[str] = set()
-        for profile in registry.list_users():
-            if profile.id == current_user_id:
-                continue
-            references = profile.references_from(current_user_id)
-            if any(
-                self._person_reference_matches(reference, normalized) for reference in references
-            ):
-                targets.add(profile.id)
-        return frozenset(targets)
-
-    @staticmethod
-    def _person_reference_matches(reference: str, text: str) -> bool:
-        """Match ASCII profile names as tokens and Japanese names as ordinary text."""
-        if not reference:
-            return False
-        if re.fullmatch(r"[A-Za-z0-9_-]+", reference):
-            return (
-                re.search(
-                    rf"(?i)(?<![a-z0-9_-]){re.escape(reference)}(?![a-z0-9_-])",
-                    text,
-                )
-                is not None
-            )
-        return reference in text
+        return resolve_cross_user_memory_targets(text, current_user_id, registry.list_users())
 
     def _should_surface_unattributed_memory(self) -> bool:
         """Surface at most one legacy candidate on the first and every fifth full turn."""
-        counts = getattr(self, "_unattributed_recall_counts_by_user", None)
-        if counts is None:
-            counts = self._unattributed_recall_counts_by_user = {}
+        counts = self._per_user_store("_unattributed_recall_counts_by_user")
         user_id = self._history_user_id()
         count = counts.get(user_id, 0) + 1
         counts[user_id] = count
@@ -917,44 +880,53 @@ class EmbodiedAgent:
         profile = getattr(self, "_current_user", None)
         return str(getattr(profile, "id", "default"))
 
+    def _per_user_store(self, attribute: str) -> dict[str, Any]:
+        """Return a lazily initialized per-user mapping.
+
+        Lazy initialization keeps lightweight ``__new__`` test doubles working
+        while giving all task-local agent state one partitioning path.
+        """
+        store = getattr(self, attribute, None)
+        if store is None:
+            store = {}
+            setattr(self, attribute, store)
+        return store
+
+    def _per_user_value(self, attribute: str) -> Any:
+        """Return the current user's value, preserving normal attribute semantics."""
+        try:
+            store = getattr(self, attribute)
+            return store[self._history_user_id()]
+        except (AttributeError, KeyError) as exc:
+            raise AttributeError(attribute) from exc
+
     @property
     def _relationship(self) -> RelationshipTracker:
-        return self._relationships_by_user[self._history_user_id()]
+        return cast(RelationshipTracker, self._per_user_value("_relationships_by_user"))
 
     @_relationship.setter
     def _relationship(self, value: RelationshipTracker) -> None:
-        stores = getattr(self, "_relationships_by_user", None)
-        if stores is None:
-            stores = self._relationships_by_user = {}
-        stores[self._history_user_id()] = value
+        self._per_user_store("_relationships_by_user")[self._history_user_id()] = value
 
     @property
     def _self_narrative(self) -> SelfNarrative:
-        return self._self_narratives_by_user[self._history_user_id()]
+        return cast(SelfNarrative, self._per_user_value("_self_narratives_by_user"))
 
     @_self_narrative.setter
     def _self_narrative(self, value: SelfNarrative) -> None:
-        stores = getattr(self, "_self_narratives_by_user", None)
-        if stores is None:
-            stores = self._self_narratives_by_user = {}
-        stores[self._history_user_id()] = value
+        self._per_user_store("_self_narratives_by_user")[self._history_user_id()] = value
 
     @property
     def _mental_state_bus(self) -> MentalStateBus:
-        return self._mental_state_buses_by_user[self._history_user_id()]
+        return cast(MentalStateBus, self._per_user_value("_mental_state_buses_by_user"))
 
     @_mental_state_bus.setter
     def _mental_state_bus(self, value: MentalStateBus) -> None:
-        stores = getattr(self, "_mental_state_buses_by_user", None)
-        if stores is None:
-            stores = self._mental_state_buses_by_user = {}
-        stores[self._history_user_id()] = value
+        self._per_user_store("_mental_state_buses_by_user")[self._history_user_id()] = value
 
     def _turn_cache(self) -> dict[str, Any]:
-        caches = getattr(self, "_turn_caches_by_user", None)
-        if caches is None:
-            caches = self._turn_caches_by_user = {}
-        return caches.setdefault(self._history_user_id(), {})
+        cache = self._per_user_store("_turn_caches_by_user").setdefault(self._history_user_id(), {})
+        return cast(dict[str, Any], cache)
 
     @property
     def _cached_plan_ctx(self) -> str:
@@ -992,17 +964,12 @@ class EmbodiedAgent:
     @property
     def messages(self) -> list[Any]:
         """Conversation history isolated to the task-local user."""
-        histories = getattr(self, "_messages_by_user", None)
-        if histories is None:
-            histories = self._messages_by_user = {}
-        return histories.setdefault(self._history_user_id(), [])
+        messages = self._per_user_store("_messages_by_user").setdefault(self._history_user_id(), [])
+        return cast(list[Any], messages)
 
     @messages.setter
     def messages(self, value: list[Any]) -> None:
-        histories = getattr(self, "_messages_by_user", None)
-        if histories is None:
-            histories = self._messages_by_user = {}
-        histories[self._history_user_id()] = value
+        self._per_user_store("_messages_by_user")[self._history_user_id()] = value
 
     def _tape_backend(self):
         """Return the backend used for extra planning/replanning checks.

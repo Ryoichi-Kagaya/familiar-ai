@@ -12,8 +12,8 @@ from familiar_neighbor.mind.social_policy import SocialPolicyDecision
 from familiar_runtime.models import ImageAttachment, UserTurn, coerce_user_turn
 
 from .meta_monitor import MetaGateDecision
+from .response_normalization import collapse_exact_repetition
 from .turn_coordinator import TurnRequest
-from ._ui_helpers import collapse_exact_repetition
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,53 @@ class TurnFinalizer:
                 if isinstance(block, dict) and block.get("type") == "text":
                     block["text"] = text
                     return
+
+    async def _retry_empty_response(
+        self,
+        *,
+        prep: PreparedTurn,
+        final_text: str,
+        on_text: Callable[[str], None] | None,
+    ) -> str:
+        """Retry once without tools when a turn produced no visible response."""
+        if final_text.strip() not in {"", "(no response)"} or prep.say_used:
+            return final_text
+
+        agent = self._agent
+        logger.warning("Model returned an empty visible response; retrying once without tools")
+        agent.messages.append(
+            agent.backend.make_user_message(
+                "Your previous response had no visible text. Reply to the original user now, "
+                "directly and concisely. Do not call tools."
+            )
+        )
+        retry_result, raw = await agent._stream_with_retry(
+            system=agent._system_prompt(
+                feelings_ctx=prep.feelings_ctx,
+                morning_ctx=prep.morning_ctx,
+                plan_ctx=prep.plan_ctx,
+                companion_mood=prep.companion_mood,
+                continuity_ctx=prep.continuity_ctx,
+                workspace_ctx=prep.workspace_ctx,
+                mental_ctx=prep.mental_ctx,
+            ),
+            messages=agent.messages,
+            tools=[],
+            max_tokens=max(prep.turn_max_tokens, agent.config.max_tokens),
+            on_text=on_text,
+        )
+        retried_text = retry_result.text.strip()
+        if not retried_text:
+            raise RuntimeError("Model returned an empty response twice")
+        agent.messages.append(agent.backend.make_assistant_message(retry_result, raw))
+        return retried_text
+
+    def _normalize_response(self, text: str) -> str:
+        """Normalize visible text and keep the last history entry in sync."""
+        normalized = collapse_exact_repetition(text)
+        if normalized != text.strip():
+            self._replace_last_assistant_text(normalized)
+        return normalized
 
     def _check_identity_response(
         self,
@@ -179,38 +226,12 @@ class TurnFinalizer:
     ) -> str:
         """Repair, surface, and commit a successful end-turn response."""
         agent = self._agent
-        if (not final_text.strip() or final_text == "(no response)") and not prep.say_used:
-            logger.warning("Model returned an empty visible response; retrying once without tools")
-            agent.messages.append(
-                agent.backend.make_user_message(
-                    "Your previous response had no visible text. Reply to the original user now, "
-                    "directly and concisely. Do not call tools."
-                )
-            )
-            retry_result, raw = await agent._stream_with_retry(
-                system=agent._system_prompt(
-                    feelings_ctx=prep.feelings_ctx,
-                    morning_ctx=prep.morning_ctx,
-                    plan_ctx=prep.plan_ctx,
-                    companion_mood=prep.companion_mood,
-                    continuity_ctx=prep.continuity_ctx,
-                    workspace_ctx=prep.workspace_ctx,
-                    mental_ctx=prep.mental_ctx,
-                ),
-                messages=agent.messages,
-                tools=[],
-                max_tokens=max(prep.turn_max_tokens, agent.config.max_tokens),
-                on_text=on_text,
-            )
-            final_text = retry_result.text.strip()
-            if not final_text:
-                raise RuntimeError("Model returned an empty response twice")
-            agent.messages.append(agent.backend.make_assistant_message(retry_result, raw))
-
-        normalized_text = collapse_exact_repetition(final_text)
-        if normalized_text != final_text.strip():
-            self._replace_last_assistant_text(normalized_text)
-        final_text = normalized_text
+        final_text = await self._retry_empty_response(
+            prep=prep,
+            final_text=final_text,
+            on_text=on_text,
+        )
+        final_text = self._normalize_response(final_text)
         identity, identity_violations = self._check_identity_response(
             user_text=user_input,
             candidate_response=final_text,
@@ -275,8 +296,8 @@ class TurnFinalizer:
             max_tokens=prep.turn_max_tokens,
             on_text=on_text,
         )
-        final_text = collapse_exact_repetition(result.text)
-        if final_text:
+        raw_text = result.text
+        if raw_text.strip():
             agent.messages.append(agent.backend.make_assistant_message(result, raw))
-            return final_text
+            return self._normalize_response(raw_text)
         raise RuntimeError("Model returned an empty final response")

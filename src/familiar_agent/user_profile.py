@@ -24,6 +24,26 @@ def _slugify(name: str) -> str:
     return slug[:32]
 
 
+def _normalize_aliases(value: object) -> tuple[str, ...]:
+    """Return unique, non-empty aliases from persisted or API input."""
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(
+        dict.fromkeys(alias.strip() for alias in value if isinstance(alias, str) and alias.strip())
+    )
+
+
+def _normalize_scoped_aliases(value: object) -> dict[str, tuple[str, ...]]:
+    """Normalize aliases whose meaning depends on the speaking user."""
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        str(viewer_id): aliases
+        for viewer_id, raw_aliases in value.items()
+        if (aliases := _normalize_aliases(raw_aliases))
+    }
+
+
 @dataclass
 class UserProfile:
     id: str
@@ -81,35 +101,13 @@ class UserRegistry:
 
     def _to_profile(self, entry: dict) -> UserProfile:
         uid = entry["id"]
-        raw_aliases = entry.get("aliases", [])
-        aliases = (
-            tuple(
-                alias.strip() for alias in raw_aliases if isinstance(alias, str) and alias.strip()
-            )
-            if isinstance(raw_aliases, list)
-            else ()
-        )
-        raw_scoped_aliases = entry.get("aliases_by_user", {})
-        aliases_by_user = (
-            {
-                str(viewer_id): tuple(
-                    alias.strip()
-                    for alias in viewer_aliases
-                    if isinstance(alias, str) and alias.strip()
-                )
-                for viewer_id, viewer_aliases in raw_scoped_aliases.items()
-                if isinstance(viewer_aliases, list)
-            }
-            if isinstance(raw_scoped_aliases, dict)
-            else {}
-        )
         return UserProfile(
             id=uid,
             name=entry.get("name") or _default_display_name(),
             dir=self._ensure_dir(uid),
             telegram_id=entry.get("telegram_id"),
-            aliases=aliases,
-            aliases_by_user=aliases_by_user,
+            aliases=_normalize_aliases(entry.get("aliases")),
+            aliases_by_user=_normalize_scoped_aliases(entry.get("aliases_by_user")),
         )
 
     # ── public API ────────────────────────────────────────────────────
@@ -143,14 +141,10 @@ class UserRegistry:
         """Add or update a user entry with an explicit display name."""
         user_id = user_id.strip()
         name = name.strip()
-        normalized_aliases = list(
-            dict.fromkeys(alias.strip() for alias in aliases or () if alias.strip())
-        )
+        normalized_aliases = list(_normalize_aliases(aliases))
         normalized_scoped_aliases = {
-            str(viewer_id): list(
-                dict.fromkeys(alias.strip() for alias in viewer_aliases if alias.strip())
-            )
-            for viewer_id, viewer_aliases in (aliases_by_user or {}).items()
+            viewer_id: list(viewer_aliases)
+            for viewer_id, viewer_aliases in _normalize_scoped_aliases(aliases_by_user).items()
         }
         entries = self._read()
         for e in entries:

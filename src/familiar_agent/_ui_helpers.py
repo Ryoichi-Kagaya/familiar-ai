@@ -25,39 +25,6 @@ if TYPE_CHECKING:
     from .desires import DesireSystem
 
 
-# ---------------------------------------------------------------------------
-# Turn output visibility
-# ---------------------------------------------------------------------------
-
-
-def collapse_exact_repetition(text: str) -> str:
-    """Collapse a response made of two to four identical complete copies.
-
-    This deliberately ignores near-duplicates: only an exact whole-response
-    repetition (apart from whitespace at copy boundaries) is changed.
-    """
-    stripped = text.strip()
-    if not stripped:
-        return stripped
-    for copies in range(4, 1, -1):
-        width = len(stripped) // copies
-        for offset in range(-2, 3):
-            unit_width = width + offset
-            if unit_width <= 0:
-                continue
-            unit = stripped[:unit_width].strip()
-            if len(unit) < 20:
-                continue
-            remainder = stripped
-            matched = 0
-            while matched < copies and remainder.startswith(unit):
-                remainder = remainder[len(unit) :].lstrip()
-                matched += 1
-            if matched == copies and not remainder:
-                return unit
-    return stripped
-
-
 @dataclass(slots=True)
 class TurnOutputState:
     """Track whether raw model text may cross a local UI boundary.
