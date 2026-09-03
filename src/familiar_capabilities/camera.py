@@ -126,7 +126,7 @@ class MultiCameraCapability:
         )
         return ToolExecutionResult(
             text=f"[{label}] {text}",
-            image_b64=image,
+            image_b64=image[0] if image else None,
             success=success,
             error=None if success else "camera_unavailable",
             metadata={"camera_id": camera_id, "camera_label": label},

@@ -124,6 +124,7 @@ class RealtimeSttSession:
         self.on_partial: Callable[[str], None] | None = None
         self.on_committed: Callable[[str], None] | None = None
         self.on_watchdog_restart: Callable[[str], None] | None = None
+        self.make_user_turn: Callable[[str], UserTurn] = UserTurn
 
     @property
     def active(self) -> bool:
@@ -305,7 +306,7 @@ class RealtimeSttSession:
             self._last_time = now
             if self.on_committed:
                 self.on_committed(text)
-            await self._committed_queue.put(UserTurn(text=text))
+            await self._committed_queue.put(self.make_user_turn(text))
 
     async def _partial_relay(self) -> None:
         while True:
@@ -330,6 +331,7 @@ class RealtimeSttController:
         self.on_partial: Callable[[str], None] | None = None
         self.on_committed: Callable[[str], None] | None = None
         self.on_restart: Callable[[str], None] | None = None
+        self.make_user_turn: Callable[[str], UserTurn] = UserTurn
 
     @property
     def active(self) -> bool:
@@ -353,6 +355,7 @@ class RealtimeSttController:
         self._session.on_partial = self.on_partial
         self._session.on_committed = self.on_committed
         self._session.on_watchdog_restart = self.on_restart
+        self._session.make_user_turn = self.make_user_turn
         await self._session.start(loop, committed_queue)
 
     async def stop(self) -> None:
@@ -365,6 +368,7 @@ class RealtimeSttController:
         self._session.on_partial = self.on_partial
         self._session.on_committed = self.on_committed
         self._session.on_watchdog_restart = self.on_restart
+        self._session.make_user_turn = self.make_user_turn
         return await self._session.restart(reason)
 
 

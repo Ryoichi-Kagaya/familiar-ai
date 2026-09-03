@@ -414,6 +414,7 @@ def test_chatlog_accepts_legacy_you_agent_markers_with_custom_labels() -> None:
 
 def test_gui_on_send_uses_companion_display_name() -> None:
     win = _make_window_stub()
+    win._current_user_id = "honoruru"
     win._input = MagicMock()
     win._input.text.return_value = "hello"
     win._input.clear = MagicMock()
@@ -422,6 +423,7 @@ def test_gui_on_send_uses_companion_display_name() -> None:
 
     assert isinstance(win._log, MagicMock)
     win._log.append_line.assert_called_once_with("[Kota] hello")
+    assert win._input_queue.get_nowait().user_id == "honoruru"
 
 
 def test_gui_on_send_queues_images_atomically_with_text() -> None:

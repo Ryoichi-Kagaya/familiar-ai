@@ -17,6 +17,7 @@ import re
 import sqlite3
 import threading
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -29,6 +30,12 @@ from collections import OrderedDict
 
 import numpy as np
 from ..sqlite_migrations import apply_migrations, default_migration_dir
+from ..user_context import (
+    LEGACY_USER_ID,
+    allowed_cross_user_ids,
+    current_user_id,
+    user_scope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -452,9 +459,11 @@ class ObservationMemory:
     ) -> None:
         now_iso = self._now_iso()
         confidence = max(0.0, min(1.0, float(confidence)))
+        user_id = current_user_id()
         existing = db.execute(
-            "SELECT id, fact_text, confidence FROM semantic_facts WHERE fact_key = ?",
-            (fact_key,),
+            "SELECT id, fact_text, confidence FROM semantic_facts "
+            "WHERE user_id = ? AND fact_key = ?",
+            (user_id, fact_key),
         ).fetchone()
         if existing:
             prev_text = str(existing["fact_text"])
@@ -464,7 +473,7 @@ class ObservationMemory:
                 "UPDATE semantic_facts "
                 "SET fact_text = ?, source_memory_id = COALESCE(?, source_memory_id), "
                 "confidence = MAX(confidence, ?), tags = ?, last_seen_at = ?, updated_at = ? "
-                "WHERE fact_key = ?",
+                "WHERE user_id = ? AND fact_key = ?",
                 (
                     fact_text,
                     source_memory_id,
@@ -472,6 +481,7 @@ class ObservationMemory:
                     tags,
                     now_iso,
                     now_iso,
+                    user_id,
                     fact_key,
                 ),
             )
@@ -489,8 +499,8 @@ class ObservationMemory:
             return
         db.execute(
             "INSERT INTO semantic_facts "
-            "(id, fact_key, fact_text, source_memory_id, confidence, tags, last_seen_at, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, fact_key, fact_text, source_memory_id, confidence, tags, last_seen_at, "
+            "created_at, updated_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 str(uuid.uuid4()),
                 fact_key,
@@ -501,6 +511,7 @@ class ObservationMemory:
                 now_iso,
                 now_iso,
                 now_iso,
+                user_id,
             ),
         )
 
@@ -516,9 +527,11 @@ class ObservationMemory:
     ) -> None:
         now_iso = self._now_iso()
         confidence = max(0.0, min(1.0, float(confidence)))
+        user_id = current_user_id()
         existing = db.execute(
-            "SELECT id, policy_text, confidence FROM behavior_policies WHERE policy_key = ?",
-            (policy_key,),
+            "SELECT id, policy_text, confidence FROM behavior_policies "
+            "WHERE user_id = ? AND policy_key = ?",
+            (user_id, policy_key),
         ).fetchone()
         if existing:
             prev_text = str(existing["policy_text"])
@@ -529,7 +542,7 @@ class ObservationMemory:
                 "SET policy_text = ?, trigger_context = ?, action_hint = ?, "
                 "source_memory_id = COALESCE(?, source_memory_id), "
                 "confidence = MAX(confidence, ?), last_seen_at = ?, updated_at = ? "
-                "WHERE policy_key = ?",
+                "WHERE user_id = ? AND policy_key = ?",
                 (
                     policy_text,
                     trigger_context,
@@ -538,6 +551,7 @@ class ObservationMemory:
                     confidence,
                     now_iso,
                     now_iso,
+                    user_id,
                     policy_key,
                 ),
             )
@@ -556,8 +570,8 @@ class ObservationMemory:
         db.execute(
             "INSERT INTO behavior_policies "
             "(id, policy_key, policy_text, trigger_context, action_hint, source_memory_id, confidence, "
-            "last_seen_at, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "last_seen_at, created_at, updated_at, user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 str(uuid.uuid4()),
                 policy_key,
@@ -569,6 +583,7 @@ class ObservationMemory:
                 now_iso,
                 now_iso,
                 now_iso,
+                user_id,
             ),
         )
 
@@ -587,8 +602,8 @@ class ObservationMemory:
         db.execute(
             "INSERT INTO memory_revisions "
             "(id, entity_type, entity_key, previous_text, new_text, previous_confidence, "
-            "new_confidence, source_memory_id, reason, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "new_confidence, source_memory_id, reason, created_at, user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 str(uuid.uuid4()),
                 entity_type,
@@ -600,6 +615,7 @@ class ObservationMemory:
                 source_memory_id,
                 reason,
                 self._now_iso(),
+                current_user_id(),
             ),
         )
 
@@ -615,9 +631,12 @@ class ObservationMemory:
         delta: float,
         reason: str,
     ) -> float | None:
+        scoped_projection = table in {"semantic_facts", "behavior_policies"}
+        scope_clause = "user_id = ? AND " if scoped_projection else ""
+        scope_params: tuple[str, ...] = (current_user_id(),) if scoped_projection else ()
         row = db.execute(
-            f"SELECT {text_column}, confidence FROM {table} WHERE {key_column} = ?",
-            (entity_key,),
+            f"SELECT {text_column}, confidence FROM {table} WHERE {scope_clause}{key_column} = ?",
+            (*scope_params, entity_key),
         ).fetchone()
         if row is None:
             return None
@@ -631,8 +650,8 @@ class ObservationMemory:
         now_iso = self._now_iso()
         db.execute(
             f"UPDATE {table} SET confidence = ?, last_seen_at = ?, updated_at = ? "
-            f"WHERE {key_column} = ?",
-            (new_conf, now_iso, now_iso, entity_key),
+            f"WHERE {scope_clause}{key_column} = ?",
+            (new_conf, now_iso, now_iso, *scope_params, entity_key),
         )
         self._insert_revision_locked(
             db,
@@ -777,6 +796,7 @@ class ObservationMemory:
         emotion = str(payload.get("emotion", "neutral"))
         image_path = payload.get("image_path")
         override_date = payload.get("override_date")
+        user_id = str(payload.get("user_id") or LEGACY_USER_ID)
 
         # Compute embedding and thumbnail outside lock (CPU/IO)
         image_data = _encode_image(image_path) if image_path else None
@@ -802,8 +822,8 @@ class ObservationMemory:
                 return True
             db.execute(
                 "INSERT INTO observations "
-                "(id, content, timestamp, date, time, direction, kind, emotion, image_path, image_data) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(id, content, timestamp, date, time, direction, kind, emotion, image_path, "
+                "image_data, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     event_id,
                     content,
@@ -815,19 +835,21 @@ class ObservationMemory:
                     emotion,
                     image_path,
                     image_data,
+                    user_id,
                 ),
             )
             db.execute(
                 "INSERT INTO obs_embeddings (obs_id, vector) VALUES (?, ?)",
                 (event_id, blob),
             )
-            self._project_memory_locked(
-                db,
-                source_memory_id=event_id,
-                content=content,
-                kind=kind,
-                emotion=emotion,
-            )
+            with user_scope(user_id):
+                self._project_memory_locked(
+                    db,
+                    source_memory_id=event_id,
+                    content=content,
+                    kind=kind,
+                    emotion=emotion,
+                )
             db.commit()
         return True
 
@@ -889,6 +911,7 @@ class ObservationMemory:
                 "emotion": emotion,
                 "image_path": image_path,
                 "override_date": override_date,
+                "user_id": current_user_id(),
             }
             try:
                 event_id, created_new = self.append_memory_event(
@@ -918,7 +941,14 @@ class ObservationMemory:
             logger.warning("Failed to save memory: %s", e)
             return False
 
-    def recall(self, query: str, n: int = 3, kind: str | None = None) -> list[dict]:
+    def recall(
+        self,
+        query: str,
+        n: int = 3,
+        kind: str | None = None,
+        *,
+        _user_id: str | None = None,
+    ) -> list[dict]:
         """Recall by vector similarity. Fallback to LIKE + recency.
 
         Dreams are an opt-in provenance lane: general recall (``kind=None``)
@@ -928,13 +958,18 @@ class ObservationMemory:
         (and self-amplify across nights).
         """
         try:
+            user_id = _user_id or current_user_id()
             kind_filter = "AND kind = ?" if kind else "AND kind != 'dream'"
-            kind_params: list[Any] = [kind] if kind else []
+            kind_params: list[Any] = [user_id, kind] if kind else [user_id]
 
             # Fetch rows under lock, then compute similarity outside lock
             with self._db_lock:
                 db = self._ensure_connected()
-                count = db.execute("SELECT COUNT(*) FROM obs_embeddings").fetchone()[0]
+                count = db.execute(
+                    "SELECT COUNT(*) FROM obs_embeddings e JOIN observations o ON o.id = e.obs_id "
+                    "WHERE o.user_id = ?",
+                    (user_id,),
+                ).fetchone()[0]
 
                 if count > 0:
                     rows = db.execute(
@@ -942,7 +977,7 @@ class ObservationMemory:
                         f"o.direction, o.kind, o.emotion, o.image_path, "
                         f"COALESCE(o.importance, 1.0) AS importance, e.vector "
                         f"FROM observations o JOIN obs_embeddings e ON o.id = e.obs_id "
-                        f"WHERE o.superseded_by IS NULL {kind_filter}",
+                        f"WHERE o.user_id = ? AND o.superseded_by IS NULL {kind_filter}",
                         kind_params,
                     ).fetchall()
                 else:
@@ -958,25 +993,27 @@ class ObservationMemory:
                         if kind:
                             fallback_rows = db.execute(
                                 f"SELECT id, content, timestamp, date, time, direction, kind, emotion, image_path "
-                                f"FROM observations WHERE ({conditions}) AND kind = ? "
+                                f"FROM observations WHERE user_id = ? AND ({conditions}) AND kind = ? "
                                 f"AND superseded_by IS NULL "
                                 f"ORDER BY timestamp DESC LIMIT ?",
-                                params_like + [kind, n],
+                                [user_id, *params_like, kind, n],
                             ).fetchall()
                         else:
                             fallback_rows = db.execute(
                                 f"SELECT id, content, timestamp, date, time, direction, kind, emotion, image_path "
-                                f"FROM observations WHERE ({conditions}) AND superseded_by IS NULL "
+                                f"FROM observations WHERE user_id = ? AND ({conditions}) "
+                                f"AND superseded_by IS NULL "
                                 f"AND kind != 'dream' "
                                 f"ORDER BY timestamp DESC LIMIT ?",
-                                params_like + [n],
+                                [user_id, *params_like, n],
                             ).fetchall()
                     if not fallback_rows:
                         fallback_rows = db.execute(
                             "SELECT id, content, timestamp, date, time, direction, kind, emotion, image_path "
-                            "FROM observations WHERE superseded_by IS NULL AND kind != 'dream' "
+                            "FROM observations WHERE user_id = ? AND superseded_by IS NULL "
+                            "AND kind != 'dream' "
                             "ORDER BY timestamp DESC LIMIT ?",
-                            (n,),
+                            (user_id, n),
                         ).fetchall()
 
             # Compute embeddings and similarity outside the lock
@@ -1029,6 +1066,43 @@ class ObservationMemory:
             logger.warning("Failed to recall memories: %s", e)
             return []
 
+    def recall_unattributed(self, query: str, n: int = 1) -> list[dict]:
+        """Return relevant pre-partition memories whose owner is still unknown."""
+        candidates = self.recall(query, n=max(3, n), _user_id=LEGACY_USER_ID)
+        relevant = [
+            item
+            for item in candidates
+            if item.get("retrieval_method") != "recency"
+            and (float(item.get("score", 0.0)) >= 0.55 or item.get("retrieval_method") == "keyword")
+        ]
+        for item in relevant:
+            item["ownership"] = "unverified"
+        return relevant[:n]
+
+    def format_unattributed_for_context(
+        self,
+        memories: list[dict],
+        user_profiles: list[tuple[str, str]],
+    ) -> str:
+        """Render legacy candidates as uncertain prompts, never as user facts."""
+        if not memories:
+            return ""
+        profiles = ", ".join(f"{user_id}={name}" for user_id, name in user_profiles)
+        lines = [
+            "[持ち主未確認の古い記憶 — 現在のユーザーの記憶だと断定しない]",
+            "関連がある時だけ『誰の記憶だったっけ？』と自然に確認してよい。"
+            "ユーザーが持ち主を示したら attribute_memory_owner を呼ぶこと。",
+            f"登録ユーザー: {profiles or '(unknown)'}",
+        ]
+        for memory in memories:
+            memory_id = str(memory.get("memory_id", ""))[:8] or "?"
+            confidence = float(memory.get("confidence", 0.0))
+            lines.append(
+                f"- owner:unverified id:{memory_id} conf:{confidence:.2f}: "
+                f"{str(memory.get('summary', ''))[:140]}"
+            )
+        return "\n".join(lines)
+
     def recent_feelings(self, n: int = 5) -> list[dict]:
         """Return the most recent emotional memories."""
         try:
@@ -1036,9 +1110,9 @@ class ObservationMemory:
                 db = self._ensure_connected()
                 rows = db.execute(
                     "SELECT content, date, time, emotion FROM observations "
-                    "WHERE kind IN ('feeling', 'conversation') "
+                    "WHERE user_id = ? AND kind IN ('feeling', 'conversation') "
                     "ORDER BY timestamp DESC LIMIT ?",
-                    (n,),
+                    (current_user_id(), n),
                 ).fetchall()
             return [
                 {
@@ -1091,9 +1165,9 @@ class ObservationMemory:
                 db = self._ensure_connected()
                 rows = db.execute(
                     "SELECT content, date, time, emotion FROM observations "
-                    "WHERE kind = 'self_model' "
+                    "WHERE user_id = ? AND kind = 'self_model' "
                     "ORDER BY timestamp DESC LIMIT ?",
-                    (n,),
+                    (current_user_id(), n),
                 ).fetchall()
             return [
                 {
@@ -1115,9 +1189,9 @@ class ObservationMemory:
                 db = self._ensure_connected()
                 rows = db.execute(
                     "SELECT content, date, time FROM observations "
-                    "WHERE kind = 'curiosity' "
+                    "WHERE user_id = ? AND kind = 'curiosity' "
                     "ORDER BY timestamp DESC LIMIT ?",
-                    (n,),
+                    (current_user_id(), n),
                 ).fetchall()
             return [
                 {
@@ -1156,10 +1230,10 @@ class ObservationMemory:
                 rows = db.execute(
                     "SELECT fact_key, fact_text, source_memory_id, confidence, tags, last_seen_at "
                     "FROM semantic_facts "
-                    "WHERE (? = '%' OR fact_text LIKE ? OR tags LIKE ?) "
+                    "WHERE user_id = ? AND (? = '%' OR fact_text LIKE ? OR tags LIKE ?) "
                     "ORDER BY CASE WHEN fact_text LIKE ? THEN 0 ELSE 1 END, last_seen_at DESC "
                     "LIMIT ?",
-                    (like, like, like, like, n),
+                    (current_user_id(), like, like, like, like, n),
                 ).fetchall()
             return [
                 {
@@ -1186,10 +1260,11 @@ class ObservationMemory:
                     "SELECT policy_key, policy_text, trigger_context, action_hint, "
                     "source_memory_id, confidence, last_seen_at "
                     "FROM behavior_policies "
-                    "WHERE (? = '%' OR policy_text LIKE ? OR trigger_context LIKE ? OR action_hint LIKE ?) "
+                    "WHERE user_id = ? AND "
+                    "(? = '%' OR policy_text LIKE ? OR trigger_context LIKE ? OR action_hint LIKE ?) "
                     "ORDER BY CASE WHEN policy_text LIKE ? THEN 0 ELSE 1 END, last_seen_at DESC "
                     "LIMIT ?",
-                    (like, like, like, like, like, n),
+                    (current_user_id(), like, like, like, like, like, n),
                 ).fetchall()
             return [
                 {
@@ -1236,8 +1311,8 @@ class ObservationMemory:
     ) -> list[dict]:
         """Return recent revision records for semantic/policy memory."""
         try:
-            clauses: list[str] = []
-            params: list[Any] = []
+            clauses: list[str] = ["user_id = ?"]
+            params: list[Any] = [current_user_id()]
             if entity_type:
                 clauses.append("entity_type = ?")
                 params.append(entity_type)
@@ -1331,6 +1406,7 @@ class ObservationMemory:
                 "emotion": emotion,
                 "image_path": image_path,
                 "override_date": override_date,
+                "user_id": current_user_id(),
             }
             try:
                 event_id, created_new = self.append_memory_event(
@@ -1407,6 +1483,15 @@ class ObservationMemory:
 
     async def recall_async(self, query: str, n: int = 3, kind: str | None = None) -> list[dict]:
         return await asyncio.to_thread(self.recall, query, n, kind)
+
+    async def recall_for_user_async(
+        self, user_id: str, query: str, n: int = 3, kind: str | None = None
+    ) -> list[dict]:
+        """Recall one explicitly selected user's observations without changing task identity."""
+        return await asyncio.to_thread(self.recall, query, n, kind, _user_id=user_id)
+
+    async def recall_unattributed_async(self, query: str, n: int = 1) -> list[dict]:
+        return await asyncio.to_thread(self.recall_unattributed, query, n)
 
     async def recall_divergent_async(
         self, query: str, n: int = 5, max_depth: int = 2, max_branches: int = 2
@@ -1488,8 +1573,8 @@ class ObservationMemory:
             try:
                 cur = db.execute(
                     "UPDATE observations SET importance = importance * ? "
-                    "WHERE date < ? AND superseded_by IS NULL",
-                    (factor, before_date),
+                    "WHERE user_id = ? AND date < ? AND superseded_by IS NULL",
+                    (factor, current_user_id(), before_date),
                 )
                 db.commit()
                 return cur.rowcount
@@ -1513,8 +1598,8 @@ class ObservationMemory:
         with self._db_lock:
             db = self._ensure_connected()
             db.execute(
-                "UPDATE observations SET superseded_by = ? WHERE id = ?",
-                (new_id, old_id),
+                "UPDATE observations SET superseded_by = ? WHERE user_id = ? AND id = ?",
+                (new_id, current_user_id(), old_id),
             )
             db.commit()
 
@@ -1538,11 +1623,11 @@ class ObservationMemory:
                 SELECT o.id, o.timestamp, e.vector
                 FROM observations o
                 JOIN obs_embeddings e ON o.id = e.obs_id
-                WHERE o.superseded_by IS NULL AND o.kind != 'dream'
+                WHERE o.user_id = ? AND o.superseded_by IS NULL AND o.kind != 'dream'
                 ORDER BY o.timestamp DESC
                 LIMIT ?
                 """,
-                (max_candidates,),
+                (current_user_id(), max_candidates),
             ).fetchall()
 
         if len(rows) < 2:
@@ -1674,9 +1759,9 @@ class ObservationMemory:
             db = self._ensure_connected()
             rows = db.execute(
                 "SELECT content, date, time, emotion FROM observations "
-                "WHERE kind = 'day_summary' "
+                "WHERE user_id = ? AND kind = 'day_summary' "
                 "ORDER BY timestamp DESC LIMIT ?",
-                (n,),
+                (current_user_id(), n),
             ).fetchall()
             return [
                 {
@@ -1702,11 +1787,17 @@ class ObservationMemory:
         md = f"{month:02d}-{day:02d}"
         try:
             db = self._ensure_connected()
+            has_user_id = any(
+                str(row[1]) == "user_id"
+                for row in db.execute("PRAGMA table_info(observations)").fetchall()
+            )
+            scope = "user_id = ? AND " if has_user_id else ""
+            params: tuple[Any, ...] = (current_user_id(), md, n) if has_user_id else (md, n)
             rows = db.execute(
                 "SELECT content, date, emotion, kind FROM observations "
-                "WHERE strftime('%m-%d', date) = ? AND date < date('now') "
+                f"WHERE {scope}strftime('%m-%d', date) = ? AND date < date('now') "
                 "ORDER BY date DESC LIMIT ?",
-                (md, n),
+                params,
             ).fetchall()
             return [dict(r) for r in rows]
         except Exception as e:
@@ -1720,7 +1811,17 @@ class ObservationMemory:
         """Return the earliest date in the observations table, or None if empty."""
         try:
             db = self._ensure_connected()
-            row = db.execute("SELECT MIN(date) AS earliest FROM observations").fetchone()
+            has_user_id = any(
+                str(column[1]) == "user_id"
+                for column in db.execute("PRAGMA table_info(observations)").fetchall()
+            )
+            if has_user_id:
+                row = db.execute(
+                    "SELECT MIN(date) AS earliest FROM observations WHERE user_id = ?",
+                    (current_user_id(),),
+                ).fetchone()
+            else:
+                row = db.execute("SELECT MIN(date) AS earliest FROM observations").fetchone()
             return row["earliest"] if row and row["earliest"] else None
         except Exception as e:
             logger.warning("get_earliest_date failed: %s", e)
@@ -1735,9 +1836,9 @@ class ObservationMemory:
             db = self._ensure_connected()
             rows = db.execute(
                 "SELECT DISTINCT date FROM observations "
-                "WHERE kind IN ('observation', 'conversation') "
+                "WHERE user_id = ? AND kind IN ('observation', 'conversation') "
                 "ORDER BY date DESC LIMIT ?",
-                (limit,),
+                (current_user_id(), limit),
             ).fetchall()
             return [r["date"] for r in rows]
         except Exception as e:
@@ -1750,8 +1851,9 @@ class ObservationMemory:
             with self._db_lock:
                 db = self._ensure_connected()
                 cursor = db.execute(
-                    "DELETE FROM observations WHERE kind = 'day_summary' AND date = ?",
-                    (date,),
+                    "DELETE FROM observations "
+                    "WHERE user_id = ? AND kind = 'day_summary' AND date = ?",
+                    (current_user_id(), date),
                 )
                 db.commit()
                 count = cursor.rowcount
@@ -1768,7 +1870,9 @@ class ObservationMemory:
             with self._db_lock:
                 db = self._ensure_connected()
                 rows = db.execute(
-                    "SELECT DISTINCT date FROM observations WHERE kind = 'day_summary'"
+                    "SELECT DISTINCT date FROM observations "
+                    "WHERE user_id = ? AND kind = 'day_summary'",
+                    (current_user_id(),),
                 ).fetchall()
             return {r["date"] for r in rows}
         except Exception as e:
@@ -1782,9 +1886,10 @@ class ObservationMemory:
                 db = self._ensure_connected()
                 rows = db.execute(
                     "SELECT content, time, kind, emotion FROM observations "
-                    "WHERE date = ? AND kind IN ('observation', 'conversation') "
+                    "WHERE user_id = ? AND date = ? "
+                    "AND kind IN ('observation', 'conversation') "
                     "ORDER BY timestamp ASC LIMIT ?",
-                    (date, limit),
+                    (current_user_id(), date, limit),
                 ).fetchall()
             return [
                 {
@@ -1827,8 +1932,8 @@ class ObservationMemory:
                 db = self._ensure_connected()
                 db.execute(
                     "INSERT INTO episodes "
-                    "(id, title, summary, participants, status, opened_from_memory_id, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, 'open', ?, ?, ?)",
+                    "(id, title, summary, participants, status, opened_from_memory_id, created_at, "
+                    "updated_at, user_id) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?)",
                     (
                         episode_id,
                         title[:200],
@@ -1837,6 +1942,7 @@ class ObservationMemory:
                         opened_from_memory_id,
                         now,
                         now,
+                        current_user_id(),
                     ),
                 )
                 db.commit()
@@ -1851,18 +1957,35 @@ class ObservationMemory:
                 db = self._ensure_connected()
                 row = db.execute(
                     "SELECT COALESCE(MAX(position), -1) + 1 AS next_pos "
-                    "FROM episode_memories WHERE episode_id = ?",
-                    (episode_id,),
+                    "FROM episode_memories em JOIN episodes e ON e.id = em.episode_id "
+                    "WHERE em.episode_id = ? AND e.user_id = ?",
+                    (episode_id, current_user_id()),
                 ).fetchone()
                 position = int(row["next_pos"]) if row and row["next_pos"] is not None else 0
-                db.execute(
+                inserted = db.execute(
                     "INSERT OR IGNORE INTO episode_memories "
-                    "(id, episode_id, memory_id, position, added_at) VALUES (?, ?, ?, ?, ?)",
-                    (str(uuid.uuid4()), episode_id, memory_id, position, self._now_iso()),
+                    "(id, episode_id, memory_id, position, added_at) "
+                    "SELECT ?, ?, ?, ?, ? "
+                    "WHERE EXISTS (SELECT 1 FROM episodes WHERE id = ? AND user_id = ?) "
+                    "AND EXISTS (SELECT 1 FROM observations WHERE id = ? AND user_id = ?)",
+                    (
+                        str(uuid.uuid4()),
+                        episode_id,
+                        memory_id,
+                        position,
+                        self._now_iso(),
+                        episode_id,
+                        current_user_id(),
+                        memory_id,
+                        current_user_id(),
+                    ),
                 )
+                if inserted.rowcount != 1:
+                    db.commit()
+                    return False
                 db.execute(
-                    "UPDATE episodes SET updated_at = ? WHERE id = ?",
-                    (self._now_iso(), episode_id),
+                    "UPDATE episodes SET updated_at = ? WHERE id = ? AND user_id = ?",
+                    (self._now_iso(), episode_id, current_user_id()),
                 )
                 db.commit()
             return True
@@ -1876,8 +1999,9 @@ class ObservationMemory:
             row = db.execute(
                 "SELECT e.id, e.title, e.summary, e.participants "
                 "FROM episode_memories em JOIN episodes e ON e.id = em.episode_id "
-                "WHERE em.memory_id = ? ORDER BY em.added_at DESC LIMIT 1",
-                (memory_id,),
+                "WHERE em.memory_id = ? AND e.user_id = ? "
+                "ORDER BY em.added_at DESC LIMIT 1",
+                (memory_id, current_user_id()),
             ).fetchone()
         return dict(row) if row else None
 
@@ -1921,8 +2045,8 @@ class ObservationMemory:
                     "SELECT ma.memory_id, ma.activation, ma.source, ma.context, ma.episode_id, "
                     "o.content, o.kind, o.timestamp "
                     "FROM memory_activation ma JOIN observations o ON o.id = ma.memory_id "
-                    "ORDER BY ma.activated_at DESC LIMIT ?",
-                    (n,),
+                    "WHERE o.user_id = ? ORDER BY ma.activated_at DESC LIMIT ?",
+                    (current_user_id(), n),
                 ).fetchall()
             return [
                 {
@@ -1956,9 +2080,9 @@ class ObservationMemory:
             db = self._ensure_connected()
             rows = db.execute(
                 "SELECT id, content, timestamp, date, kind FROM observations "
-                "WHERE kind = ? AND superseded_by IS NULL "
+                "WHERE user_id = ? AND kind = ? AND superseded_by IS NULL "
                 "ORDER BY timestamp DESC LIMIT ?",
-                (kind, n),
+                (current_user_id(), kind, n),
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -2219,8 +2343,8 @@ class ObservationMemory:
                 db = self._ensure_connected()
                 db.execute(
                     "INSERT INTO unfinished_business "
-                    "(id, summary, status, source, related_memory_id, metadata_json, created_at, resolved_at) "
-                    "VALUES (?, ?, 'open', ?, ?, ?, ?, NULL)",
+                    "(id, summary, status, source, related_memory_id, metadata_json, created_at, "
+                    "resolved_at, user_id) VALUES (?, ?, 'open', ?, ?, ?, ?, NULL, ?)",
                     (
                         business_id,
                         summary[:400],
@@ -2228,6 +2352,7 @@ class ObservationMemory:
                         related_memory_id,
                         json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
                         self._now_iso(),
+                        current_user_id(),
                     ),
                 )
                 db.commit()
@@ -2242,8 +2367,9 @@ class ObservationMemory:
                 db = self._ensure_connected()
                 rows = db.execute(
                     "SELECT id, summary, status, source, related_memory_id, metadata_json, created_at "
-                    "FROM unfinished_business WHERE status = ? ORDER BY created_at DESC LIMIT ?",
-                    (status, limit),
+                    "FROM unfinished_business WHERE user_id = ? AND status = ? "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (current_user_id(), status, limit),
                 ).fetchall()
             return [
                 {
@@ -2274,8 +2400,9 @@ class ObservationMemory:
             with self._db_lock:
                 db = self._ensure_connected()
                 updated = db.execute(
-                    "UPDATE unfinished_business SET status = 'resolved', resolved_at = ? WHERE id = ?",
-                    (self._now_iso(), business_id),
+                    "UPDATE unfinished_business SET status = 'resolved', resolved_at = ? "
+                    "WHERE user_id = ? AND id = ?",
+                    (self._now_iso(), current_user_id(), business_id),
                 )
                 if updated.rowcount != 1:
                     escaped = (
@@ -2283,22 +2410,129 @@ class ObservationMemory:
                     )
                     rows = db.execute(
                         "SELECT id FROM unfinished_business "
-                        "WHERE id LIKE ? ESCAPE '\\' AND status = 'open'",
-                        (escaped + "%",),
+                        "WHERE user_id = ? AND id LIKE ? ESCAPE '\\' AND status = 'open'",
+                        (current_user_id(), escaped + "%"),
                     ).fetchall()
                     if len(rows) != 1:
                         db.commit()
                         return False
                     updated = db.execute(
                         "UPDATE unfinished_business SET status = 'resolved', resolved_at = ? "
-                        "WHERE id = ?",
-                        (self._now_iso(), rows[0]["id"]),
+                        "WHERE user_id = ? AND id = ?",
+                        (self._now_iso(), current_user_id(), rows[0]["id"]),
                     )
                 db.commit()
             return updated.rowcount == 1
         except Exception as e:
             logger.warning("resolve_unfinished_business failed: %s", e)
             return False
+
+    def attribute_memory_owner(
+        self,
+        memory_id: str,
+        owner_user_id: str,
+        *,
+        allowed_user_ids: set[str],
+    ) -> tuple[bool, str | None]:
+        """Assign an unverified/current-user memory to a registered user.
+
+        Memories already owned by a different user are deliberately out of
+        reach. This lets a user correct their own attribution without exposing
+        or moving another person's established memories.
+        """
+        owner_user_id = owner_user_id.strip()
+        if owner_user_id not in allowed_user_ids:
+            return False, None
+        candidate = str(memory_id).strip()
+        if len(candidate) < 4:
+            return False, None
+        source_owners = (LEGACY_USER_ID, current_user_id())
+        try:
+            with self._db_lock:
+                db = self._ensure_connected()
+                if len(candidate) == 36:
+                    rows = db.execute(
+                        "SELECT id, user_id FROM observations WHERE id = ? AND user_id IN (?, ?)",
+                        (candidate, *source_owners),
+                    ).fetchall()
+                else:
+                    escaped = (
+                        candidate.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                    )
+                    rows = db.execute(
+                        "SELECT id, user_id FROM observations "
+                        "WHERE id LIKE ? ESCAPE '\\' AND user_id IN (?, ?) LIMIT 2",
+                        (escaped + "%", *source_owners),
+                    ).fetchall()
+                if len(rows) != 1:
+                    return False, None
+
+                resolved_id = str(rows[0]["id"])
+                old_owner = str(rows[0]["user_id"])
+                for table, key_column in (
+                    ("semantic_facts", "fact_key"),
+                    ("behavior_policies", "policy_key"),
+                ):
+                    projections = db.execute(
+                        f"SELECT id, {key_column} FROM {table} "
+                        "WHERE source_memory_id = ? AND user_id = ?",
+                        (resolved_id, old_owner),
+                    ).fetchall()
+                    for projection in projections:
+                        conflict = db.execute(
+                            f"SELECT id FROM {table} WHERE user_id = ? AND {key_column} = ?",
+                            (owner_user_id, projection[key_column]),
+                        ).fetchone()
+                        if conflict and str(conflict["id"]) != str(projection["id"]):
+                            db.execute(f"DELETE FROM {table} WHERE id = ?", (projection["id"],))
+                        else:
+                            db.execute(
+                                f"UPDATE {table} SET user_id = ? WHERE id = ?",
+                                (owner_user_id, projection["id"]),
+                            )
+
+                db.execute(
+                    "UPDATE observations SET user_id = ? WHERE id = ? AND user_id IN (?, ?)",
+                    (owner_user_id, resolved_id, *source_owners),
+                )
+                db.execute(
+                    "UPDATE unfinished_business SET user_id = ? "
+                    "WHERE related_memory_id = ? AND user_id IN (?, ?)",
+                    (owner_user_id, resolved_id, *source_owners),
+                )
+                db.execute(
+                    "UPDATE episodes SET user_id = ? WHERE user_id IN (?, ?) AND "
+                    "(opened_from_memory_id = ? OR id IN "
+                    "(SELECT episode_id FROM episode_memories WHERE memory_id = ?))",
+                    (owner_user_id, *source_owners, resolved_id, resolved_id),
+                )
+                db.execute(
+                    "UPDATE memory_revisions SET user_id = ? "
+                    "WHERE source_memory_id = ? AND user_id IN (?, ?)",
+                    (owner_user_id, resolved_id, *source_owners),
+                )
+                db.commit()
+                return True, resolved_id
+        except Exception as e:
+            with self._db_lock:
+                if self._db is not None:
+                    self._db.rollback()
+            logger.warning("attribute_memory_owner failed: %s", e)
+            return False, None
+
+    async def attribute_memory_owner_async(
+        self,
+        memory_id: str,
+        owner_user_id: str,
+        *,
+        allowed_user_ids: set[str],
+    ) -> tuple[bool, str | None]:
+        return await asyncio.to_thread(
+            self.attribute_memory_owner,
+            memory_id,
+            owner_user_id,
+            allowed_user_ids=allowed_user_ids,
+        )
 
     # ── Identity assertions (load-bearing values / boundaries / commitments) ──
 
@@ -2538,8 +2772,9 @@ class ObservationMemory:
                 db = self._ensure_connected()
                 updated = db.execute(
                     "UPDATE unfinished_business SET status = 'expired', resolved_at = ? "
-                    "WHERE source = 'companion_thread' AND status = 'open' AND created_at < ?",
-                    (self._now_iso(), cutoff),
+                    "WHERE user_id = ? AND source = 'companion_thread' "
+                    "AND status = 'open' AND created_at < ?",
+                    (self._now_iso(), current_user_id(), cutoff),
                 )
                 db.commit()
             return updated.rowcount
@@ -2656,13 +2891,16 @@ class ObservationMemory:
         candidate = str(candidate).strip()
         if len(candidate) < 4:
             return None
-        row = db.execute("SELECT id FROM observations WHERE id = ?", (candidate,)).fetchone()
+        row = db.execute(
+            "SELECT id FROM observations WHERE user_id = ? AND id = ?",
+            (current_user_id(), candidate),
+        ).fetchone()
         if row:
             return str(row["id"])
         escaped = candidate.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         rows = db.execute(
-            "SELECT id FROM observations WHERE id LIKE ? ESCAPE '\\' LIMIT 2",
-            (escaped + "%",),
+            "SELECT id FROM observations WHERE user_id = ? AND id LIKE ? ESCAPE '\\' LIMIT 2",
+            (current_user_id(), escaped + "%"),
         ).fetchall()
         if len(rows) == 1:
             return str(rows[0]["id"])
@@ -2732,8 +2970,10 @@ class ObservationMemory:
                     "       ml.link_type, ml.note "
                     "FROM memory_links ml "
                     "JOIN observations o ON o.id = ml.target_id "
-                    "WHERE ml.source_id = ? AND o.superseded_by IS NULL",
-                    (memory_id,),
+                    "WHERE ml.source_id = ? AND o.user_id = ? AND o.superseded_by IS NULL "
+                    "AND EXISTS (SELECT 1 FROM observations origin "
+                    "WHERE origin.id = ml.source_id AND origin.user_id = ?)",
+                    (memory_id, current_user_id(), current_user_id()),
                 ).fetchall()
                 results.extend({**dict(r), "link_direction": "→"} for r in rows)
 
@@ -2743,8 +2983,10 @@ class ObservationMemory:
                     "       ml.link_type, ml.note "
                     "FROM memory_links ml "
                     "JOIN observations o ON o.id = ml.source_id "
-                    "WHERE ml.target_id = ? AND o.superseded_by IS NULL",
-                    (memory_id,),
+                    "WHERE ml.target_id = ? AND o.user_id = ? AND o.superseded_by IS NULL "
+                    "AND EXISTS (SELECT 1 FROM observations origin "
+                    "WHERE origin.id = ml.target_id AND origin.user_id = ?)",
+                    (memory_id, current_user_id(), current_user_id()),
                 ).fetchall()
                 results.extend({**dict(r), "link_direction": "←"} for r in rows)
             return results
@@ -2791,9 +3033,23 @@ class MemoryTool:
 
     def __init__(self, store: ObservationMemory) -> None:
         self._store = store
+        self._user_profiles: Callable[[], list[tuple[str, str]]] = lambda: []
+
+    def set_user_profiles(self, provider: Callable[[], list[tuple[str, str]]]) -> None:
+        """Provide the registered IDs accepted by memory attribution."""
+        self._user_profiles = provider
 
     def get_tool_definitions(self) -> list[dict]:
-        return [
+        profiles = self._user_profiles()
+        profile_names = dict(profiles)
+        cross_user_ids = allowed_cross_user_ids()
+        owner_schema: dict[str, Any] = {
+            "type": "string",
+            "description": "The registered ID of the owner identified by the user.",
+        }
+        if profiles:
+            owner_schema["enum"] = [user_id for user_id, _name in profiles]
+        definitions = [
             {
                 "name": "remember",
                 "description": (
@@ -2892,7 +3148,65 @@ class MemoryTool:
                     "required": ["id"],
                 },
             },
+            {
+                "name": "attribute_memory_owner",
+                "description": (
+                    "Assign a surfaced owner:unverified memory to its correct registered user. "
+                    "Call only after the user explicitly identifies or corrects who the memory "
+                    "belongs to. The valid user IDs are: "
+                    + ", ".join(f"{user_id} ({name})" for user_id, name in profiles)
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "memory_id": {
+                            "type": "string",
+                            "description": "The surfaced memory id or unique 8-character prefix.",
+                        },
+                        "owner_user_id": owner_schema,
+                    },
+                    "required": ["memory_id", "owner_user_id"],
+                },
+            },
         ]
+        if cross_user_ids:
+            allowed_profiles = [
+                (user_id, profile_names.get(user_id, user_id)) for user_id in sorted(cross_user_ids)
+            ]
+            definitions.append(
+                {
+                    "name": "recall_user_memory",
+                    "description": (
+                        "Search memories assigned to another person explicitly mentioned in the "
+                        "current user's question. This permission lasts for this turn only. Treat "
+                        "results as dated recollections about that person, not proof of what they "
+                        "are doing right now, and say whose memory record the information came from."
+                    ),
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "user_id": {
+                                "type": "string",
+                                "enum": [user_id for user_id, _name in allowed_profiles],
+                                "description": "The explicitly referenced person's user ID: "
+                                + ", ".join(
+                                    f"{user_id} ({name})" for user_id, name in allowed_profiles
+                                ),
+                            },
+                            "query": {
+                                "type": "string",
+                                "description": "What to look for in that person's memories.",
+                            },
+                            "n": {
+                                "type": "integer",
+                                "description": "Number of memories to return (default 3).",
+                            },
+                        },
+                        "required": ["user_id", "query"],
+                    },
+                }
+            )
+        return definitions
 
     async def call(self, tool_name: str, tool_input: dict) -> tuple[str, list[str]]:
         if tool_name == "remember":
@@ -2959,6 +3273,38 @@ class MemoryTool:
 
             return "\n".join(lines), []
 
+        if tool_name == "recall_user_memory":
+            target_user_id = str(tool_input.get("user_id", "")).strip()
+            if target_user_id not in allowed_cross_user_ids():
+                return (
+                    "Error: cross-user memory search is available only for a person explicitly "
+                    "asked about in the current turn.",
+                    [],
+                )
+            query = str(tool_input.get("query", "")).strip()
+            if not query:
+                return "Error: a memory search query is required.", []
+            n = max(1, min(int(tool_input.get("n", 3)), 10))
+            profiles = dict(self._user_profiles())
+            owner_name = profiles.get(target_user_id, target_user_id)
+            memories = await self._store.recall_for_user_async(target_user_id, query, n=n)
+            if not memories:
+                return f"No relevant memories found for {owner_name} ({target_user_id}).", []
+
+            lines = [
+                f"[Memories assigned to {owner_name} ({target_user_id}); historical, not live status]"
+            ]
+            for memory in memories:
+                memory_id = str(memory.get("memory_id", ""))
+                short_id = memory_id[:8] if memory_id else "?"
+                score = f" score:{float(memory['score']):.2f}" if "score" in memory else ""
+                lines.append(
+                    f"- {memory.get('date', '')} {memory.get('time', '')} id:{short_id}"
+                    f" conf:{float(memory.get('confidence', 0.0)):.2f}{score}: "
+                    f"{str(memory.get('summary', ''))[:180]}"
+                )
+            return "\n".join(lines), []
+
         if tool_name == "recall_divergent":
             query = tool_input["query"]
             n = int(tool_input.get("n", 5))
@@ -2992,5 +3338,22 @@ class MemoryTool:
             if resolved:
                 return f"✓ Resolved unfinished business [{business_id[:8]}]", []
             return f"Error: unfinished business not found: {business_id[:8]}", []
+
+        if tool_name == "attribute_memory_owner":
+            memory_id = str(tool_input.get("memory_id", "")).strip()
+            owner_user_id = str(tool_input.get("owner_user_id", "")).strip()
+            profiles = dict(self._user_profiles())
+            attributed, resolved_id = await self._store.attribute_memory_owner_async(
+                memory_id,
+                owner_user_id,
+                allowed_user_ids=set(profiles),
+            )
+            if attributed:
+                owner_name = profiles.get(owner_user_id, owner_user_id)
+                return (
+                    f"✓ Memory [{str(resolved_id)[:8]}] now belongs to "
+                    f"{owner_name} ({owner_user_id})"
+                ), []
+            return "Error: memory is unavailable, ambiguous, or the user ID is invalid.", []
 
         return f"Unknown memory tool: {tool_name}", []

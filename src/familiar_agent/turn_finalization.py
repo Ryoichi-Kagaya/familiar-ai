@@ -13,6 +13,7 @@ from familiar_runtime.models import ImageAttachment, UserTurn, coerce_user_turn
 
 from .meta_monitor import MetaGateDecision
 from .turn_coordinator import TurnRequest
+from ._ui_helpers import collapse_exact_repetition
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ def coerce_request_user_turn(request: TurnRequest) -> UserTurn:
         text=user_turn.text,
         images=(*user_turn.images, *legacy_images),
         sent_at=user_turn.sent_at,
+        user_id=user_turn.user_id,
     )
 
 
@@ -46,6 +48,24 @@ class TurnFinalizer:
 
     def __init__(self, agent: Any) -> None:
         self._agent = agent
+
+    def _replace_last_assistant_text(self, text: str) -> None:
+        """Keep persisted provider history aligned with a normalized reply."""
+        messages = self._agent.messages
+        if not messages or not isinstance(messages[-1], dict):
+            return
+        message = messages[-1]
+        if message.get("role") != "assistant":
+            return
+        content = message.get("content")
+        if isinstance(content, str) or content is None:
+            message["content"] = text
+            return
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    block["text"] = text
+                    return
 
     def _check_identity_response(
         self,
@@ -155,9 +175,42 @@ class TurnFinalizer:
         final_text: str,
         desires: Any,
         on_action: Callable[[str, dict], None] | None,
+        on_text: Callable[[str], None] | None = None,
     ) -> str:
         """Repair, surface, and commit a successful end-turn response."""
         agent = self._agent
+        if (not final_text.strip() or final_text == "(no response)") and not prep.say_used:
+            logger.warning("Model returned an empty visible response; retrying once without tools")
+            agent.messages.append(
+                agent.backend.make_user_message(
+                    "Your previous response had no visible text. Reply to the original user now, "
+                    "directly and concisely. Do not call tools."
+                )
+            )
+            retry_result, raw = await agent._stream_with_retry(
+                system=agent._system_prompt(
+                    feelings_ctx=prep.feelings_ctx,
+                    morning_ctx=prep.morning_ctx,
+                    plan_ctx=prep.plan_ctx,
+                    companion_mood=prep.companion_mood,
+                    continuity_ctx=prep.continuity_ctx,
+                    workspace_ctx=prep.workspace_ctx,
+                    mental_ctx=prep.mental_ctx,
+                ),
+                messages=agent.messages,
+                tools=[],
+                max_tokens=max(prep.turn_max_tokens, agent.config.max_tokens),
+                on_text=on_text,
+            )
+            final_text = retry_result.text.strip()
+            if not final_text:
+                raise RuntimeError("Model returned an empty response twice")
+            agent.messages.append(agent.backend.make_assistant_message(retry_result, raw))
+
+        normalized_text = collapse_exact_repetition(final_text)
+        if normalized_text != final_text.strip():
+            self._replace_last_assistant_text(normalized_text)
+        final_text = normalized_text
         identity, identity_violations = self._check_identity_response(
             user_text=user_input,
             candidate_response=final_text,
@@ -209,7 +262,7 @@ class TurnFinalizer:
                 "Please summarize what you found and provide your final answer now."
             )
         )
-        result, _ = await agent._stream_with_retry(
+        result, raw = await agent._stream_with_retry(
             system=agent._system_prompt(
                 morning_ctx=prep.morning_ctx,
                 plan_ctx=prep.plan_ctx,
@@ -222,4 +275,8 @@ class TurnFinalizer:
             max_tokens=prep.turn_max_tokens,
             on_text=on_text,
         )
-        return result.text or "(max iterations reached)"
+        final_text = collapse_exact_repetition(result.text)
+        if final_text:
+            agent.messages.append(agent.backend.make_assistant_message(result, raw))
+            return final_text
+        raise RuntimeError("Model returned an empty final response")

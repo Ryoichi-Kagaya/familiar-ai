@@ -181,9 +181,23 @@ class DesireSystem:
         self.curiosity_target: str | None = None  # What the agent wants to investigate next
         self._load()
         self._drive_specs = self._build_default_drive_specs()
-        self._drive_specs.update(self._load_external_drive_specs())
+        external_specs = self._load_external_drive_specs()
+        self._external_drive_names = set(external_specs)
+        self._drive_specs.update(external_specs)
         for name in self._drive_specs:
             self._desires.setdefault(name, DEFAULT_DESIRES.get(name, 0.0))
+
+    def set_companion_name(self, companion_name: str) -> None:
+        """Refresh default social prompts after the active user changes."""
+        resolved = companion_name.strip()
+        if not resolved or resolved == self._companion_name:
+            return
+        self._companion_name = resolved
+        defaults = self._build_default_drive_specs()
+        for name, spec in defaults.items():
+            if name in self._external_drive_names or name not in self._drive_specs:
+                continue
+            self._drive_specs[name].prompt_text = spec.prompt_text
 
     def _build_default_drive_specs(self) -> dict[str, DriveSpec]:
         return {

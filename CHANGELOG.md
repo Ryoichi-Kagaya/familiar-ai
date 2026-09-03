@@ -9,6 +9,15 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Bind queued GUI and speech turns to the selected user at send time, and isolate conversation
+  history, observations, semantic memory, unfinished threads, relationship state, mental state,
+  and deferred context by user; unattributable pre-migration memories remain in an unverified legacy
+  pool, where one relevant candidate may resurface on the first and every fifth substantive turn.
+  The agent can permanently assign a surfaced memory to a registered user after an explicit
+  ownership correction, without exposing or moving another user's established memories.
+- Retry an empty model reply once without tools and report a visible error if it remains empty;
+  record Kimi's finish reason and reasoning length for diagnosis, and collapse exact whole-response
+  repetitions before display, speech, persistence, and reuse as model history.
 - Send Kimi generation limits with the current `max_completion_tokens` API parameter instead of
   the deprecated `max_tokens` parameter for both conversational and utility completions.
 - Restore stateless Claude Code CLI conversations as the default and keep the 60k-token local
@@ -43,6 +52,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   (including `chat.log`); only explicit `say()` output crosses that presentation boundary.
 
 ### Added
+- Turn-scoped cross-user memory lookup for explicit questions about a registered person: profile
+  names and aliases (for example, `姉`) unlock only that person's dated memory search tool for the
+  current turn, while ordinary recall remains isolated to the current user.
 - Opt-in managed Claude Code CLI context for text conversations: when configured explicitly,
   familiar-ai resumes a private UUID session with delta-only prompts, records exact JSON token
   usage, and falls back to its app-owned transcript on prompt/tool changes; image and utility

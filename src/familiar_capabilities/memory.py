@@ -5,7 +5,14 @@ from __future__ import annotations
 from familiar_agent.tools.memory import MemoryTool
 from familiar_runtime.tools.legacy import LegacyToolProvider
 
-DEFAULT_MEMORY_TOOLS = {"remember", "recall", "recall_divergent", "get_working_memory"}
+DEFAULT_MEMORY_TOOLS = {
+    "remember",
+    "recall",
+    "recall_divergent",
+    "get_working_memory",
+    "attribute_memory_owner",
+    "recall_user_memory",
+}
 
 
 class MemoryCapability(LegacyToolProvider):

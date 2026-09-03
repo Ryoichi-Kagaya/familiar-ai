@@ -82,6 +82,7 @@ def test_migrates_legacy_observations_schema(tmp_path) -> None:
 
     for name in ("kind", "emotion", "image_path", "image_data"):
         assert name in cols
+    assert "user_id" in cols
     assert "2026-03-03-001_observations_baseline" in applied
 
 

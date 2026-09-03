@@ -50,6 +50,12 @@ from .mental_state import (
 )
 from .relationship import RelationshipTracker
 from .user_profile import UserProfile, UserRegistry
+from .user_context import (
+    allowed_cross_user_ids,
+    cross_user_memory_scope,
+    current_user_id as scoped_user_id,
+    user_scope,
+)
 from .routines import parse_schedule_config
 from .concern_engine import ConcernEngine
 from .self_state import SelfState
@@ -647,7 +653,7 @@ class EmbodiedAgent:
         self._utility_backend = create_utility_backend(config) or self.backend
         self._scene_backend = create_scene_backend(config) or self._utility_backend
         self._background_tasks: set[asyncio.Task[None]] = set()
-        self.messages: list = []
+        self._messages_by_user: dict[str, list[Any]] = {}
         self._started_at = time.time()
         self._turn_count = 0
         # All presentation surfaces share one agent. The coordinator owns
@@ -733,7 +739,13 @@ class EmbodiedAgent:
         self._mcp: MCPClientManager | None = None
         self._user_registry = UserRegistry()
         self._current_user = self._user_registry.get_active()
+        self._memory_tool.set_user_profiles(self._memory_owner_profiles)
         config.companion_name = self._current_user.name
+        self._relationships_by_user: dict[str, RelationshipTracker] = {}
+        self._self_narratives_by_user: dict[str, SelfNarrative] = {}
+        self._mental_state_buses_by_user: dict[str, MentalStateBus] = {}
+        self._turn_caches_by_user: dict[str, dict[str, Any]] = {}
+        self._unattributed_recall_counts_by_user: dict[str, int] = {}
         self._relationship = RelationshipTracker(user_id=self._current_user.id)
         self._self_state = SelfState()
         self._self_narrative = SelfNarrative(path=self._current_user.self_narrative_path)
@@ -812,17 +824,19 @@ class EmbodiedAgent:
         if user_id == self._current_user.id:
             return self._current_user.name
 
-        # Persist and close current user's relationship state before switching.
-        self._relationship.close()
-
         new_user = self._user_registry.get(user_id)
         self._current_user = new_user
         self.config.companion_name = new_user.name
 
-        self._relationship = RelationshipTracker(user_id=new_user.id)
-        self._self_narrative = SelfNarrative(path=new_user.self_narrative_path)
-        self._mental_state_bus = MentalStateBus(path=new_user.mental_state_path)
+        if new_user.id not in self._relationships_by_user:
+            self._relationship = RelationshipTracker(user_id=new_user.id)
+        if new_user.id not in self._self_narratives_by_user:
+            self._self_narrative = SelfNarrative(path=new_user.self_narrative_path)
+        if new_user.id not in self._mental_state_buses_by_user:
+            self._mental_state_bus = MentalStateBus(path=new_user.mental_state_path)
         self._tom_tool._default_person = new_user.name  # type: ignore[attr-defined]
+        if self._desires is not None:
+            self._desires.set_companion_name(new_user.name)
         return new_user.name
 
     @property
@@ -831,6 +845,164 @@ class EmbodiedAgent:
 
     def list_users(self) -> list[UserProfile]:
         return self._user_registry.list_users()
+
+    def _memory_owner_profiles(self) -> list[tuple[str, str]]:
+        """Return the registered owners accepted by memory attribution."""
+        registry = getattr(self, "_user_registry", None)
+        if registry is not None:
+            return [(profile.id, profile.name) for profile in registry.list_users()]
+        profile = getattr(self, "_current_user", None)
+        if profile is not None:
+            return [(str(profile.id), str(profile.name))]
+        return []
+
+    def _cross_user_memory_targets(self, text: str, current_user_id: str) -> frozenset[str]:
+        """Resolve explicitly asked-about people to one-turn memory-search grants."""
+        normalized = text.strip()
+        if not normalized:
+            return frozenset()
+        inquiry = re.search(
+            r"(?:[?？]|何|なに|どう|どこ|いつ|誰|元気|最近|近頃|様子|予定|"
+            r"してる|している|してた|知ってる|覚えてる|聞いた|教えて|"
+            r"(?i:\b(?:what|how|where|when|who|recently|doing|know|remember)\b))",
+            normalized,
+        )
+        if inquiry is None:
+            return frozenset()
+
+        registry = getattr(self, "_user_registry", None)
+        if registry is None:
+            return frozenset()
+        targets: set[str] = set()
+        for profile in registry.list_users():
+            if profile.id == current_user_id:
+                continue
+            references = profile.references_from(current_user_id)
+            if any(
+                self._person_reference_matches(reference, normalized) for reference in references
+            ):
+                targets.add(profile.id)
+        return frozenset(targets)
+
+    @staticmethod
+    def _person_reference_matches(reference: str, text: str) -> bool:
+        """Match ASCII profile names as tokens and Japanese names as ordinary text."""
+        if not reference:
+            return False
+        if re.fullmatch(r"[A-Za-z0-9_-]+", reference):
+            return (
+                re.search(
+                    rf"(?i)(?<![a-z0-9_-]){re.escape(reference)}(?![a-z0-9_-])",
+                    text,
+                )
+                is not None
+            )
+        return reference in text
+
+    def _should_surface_unattributed_memory(self) -> bool:
+        """Surface at most one legacy candidate on the first and every fifth full turn."""
+        counts = getattr(self, "_unattributed_recall_counts_by_user", None)
+        if counts is None:
+            counts = self._unattributed_recall_counts_by_user = {}
+        user_id = self._history_user_id()
+        count = counts.get(user_id, 0) + 1
+        counts[user_id] = count
+        return (count - 1) % 5 == 0
+
+    def _history_user_id(self) -> str:
+        """Resolve the history owner without consulting another task's switch."""
+        active = scoped_user_id(fallback="")
+        if active:
+            return active
+        profile = getattr(self, "_current_user", None)
+        return str(getattr(profile, "id", "default"))
+
+    @property
+    def _relationship(self) -> RelationshipTracker:
+        return self._relationships_by_user[self._history_user_id()]
+
+    @_relationship.setter
+    def _relationship(self, value: RelationshipTracker) -> None:
+        stores = getattr(self, "_relationships_by_user", None)
+        if stores is None:
+            stores = self._relationships_by_user = {}
+        stores[self._history_user_id()] = value
+
+    @property
+    def _self_narrative(self) -> SelfNarrative:
+        return self._self_narratives_by_user[self._history_user_id()]
+
+    @_self_narrative.setter
+    def _self_narrative(self, value: SelfNarrative) -> None:
+        stores = getattr(self, "_self_narratives_by_user", None)
+        if stores is None:
+            stores = self._self_narratives_by_user = {}
+        stores[self._history_user_id()] = value
+
+    @property
+    def _mental_state_bus(self) -> MentalStateBus:
+        return self._mental_state_buses_by_user[self._history_user_id()]
+
+    @_mental_state_bus.setter
+    def _mental_state_bus(self, value: MentalStateBus) -> None:
+        stores = getattr(self, "_mental_state_buses_by_user", None)
+        if stores is None:
+            stores = self._mental_state_buses_by_user = {}
+        stores[self._history_user_id()] = value
+
+    def _turn_cache(self) -> dict[str, Any]:
+        caches = getattr(self, "_turn_caches_by_user", None)
+        if caches is None:
+            caches = self._turn_caches_by_user = {}
+        return caches.setdefault(self._history_user_id(), {})
+
+    @property
+    def _cached_plan_ctx(self) -> str:
+        return str(self._turn_cache().get("plan", ""))
+
+    @_cached_plan_ctx.setter
+    def _cached_plan_ctx(self, value: str) -> None:
+        self._turn_cache()["plan"] = value
+
+    @property
+    def _cached_workspace_ctx(self) -> str:
+        return str(self._turn_cache().get("workspace", ""))
+
+    @_cached_workspace_ctx.setter
+    def _cached_workspace_ctx(self, value: str) -> None:
+        self._turn_cache()["workspace"] = value
+
+    @property
+    def _cached_temporal_ctx(self) -> str | None:
+        value = self._turn_cache().get("temporal")
+        return None if value is None else str(value)
+
+    @_cached_temporal_ctx.setter
+    def _cached_temporal_ctx(self, value: str | None) -> None:
+        self._turn_cache()["temporal"] = value
+
+    @property
+    def _cached_companion_mood(self) -> str:
+        return str(self._turn_cache().get("mood", "engaged"))
+
+    @_cached_companion_mood.setter
+    def _cached_companion_mood(self, value: str) -> None:
+        self._turn_cache()["mood"] = value
+
+    @property
+    def messages(self) -> list[Any]:
+        """Conversation history isolated to the task-local user."""
+        histories = getattr(self, "_messages_by_user", None)
+        if histories is None:
+            histories = self._messages_by_user = {}
+        return histories.setdefault(self._history_user_id(), [])
+
+    @messages.setter
+    def messages(self, value: list[Any]) -> None:
+        histories = getattr(self, "_messages_by_user", None)
+        if histories is None:
+            histories = self._messages_by_user = {}
+        histories[self._history_user_id()] = value
 
     def _tape_backend(self):
         """Return the backend used for extra planning/replanning checks.
@@ -850,6 +1022,12 @@ class EmbodiedAgent:
         DesireSystem is constructed independently in main.py/gui.py.
         """
         self._desires = desires
+        profile = getattr(self, "_current_user", None)
+        companion_name = str(
+            getattr(profile, "name", "") or getattr(self.config, "companion_name", "")
+        )
+        if companion_name:
+            desires.set_companion_name(companion_name)
 
     def start_mcp_early(self) -> None:
         """Kick off the MCP handshake in the background (issue #188).
@@ -1108,7 +1286,13 @@ class EmbodiedAgent:
         registry.register(
             MemoryCapability(
                 self._memory_tool,
-                names={"remember", "recall", "resolve_unfinished_business"},
+                names={
+                    "remember",
+                    "recall",
+                    "recall_user_memory",
+                    "resolve_unfinished_business",
+                    "attribute_memory_owner",
+                },
             )
         )
         registry.register(ToMCapability(self._tom_tool))
@@ -1237,7 +1421,14 @@ class EmbodiedAgent:
     ) -> list[dict]:
         tool_defs = self._all_tool_defs
         if brief_reply_mode:
-            tool_defs = [tool for tool in tool_defs if tool.get("name") in _BRIEF_REPLY_TOOL_NAMES]
+            allowed_names = set(_BRIEF_REPLY_TOOL_NAMES)
+            if allowed_cross_user_ids():
+                allowed_names.add("recall_user_memory")
+            if any("owner:unverified" in str(message) for message in self.messages[-6:]):
+                # Keep a short ownership correction actionable without opening
+                # the rest of the heavyweight memory surface on brief turns.
+                allowed_names.add("attribute_memory_owner")
+            tool_defs = [tool for tool in tool_defs if tool.get("name") in allowed_names]
         if excluded_tools:
             tool_defs = [tool for tool in tool_defs if tool.get("name") not in excluded_tools]
         return tool_defs
@@ -1274,16 +1465,27 @@ class EmbodiedAgent:
         if hasattr(self.backend, "thinking_effort"):
             self.backend.thinking_effort = thinking_effort
 
-    @staticmethod
     def _drain_interrupt_queue(
-        interrupt_queue: asyncio.Queue[str | UserTurn | None], max_items: int = 6
+        self, interrupt_queue: asyncio.Queue[str | UserTurn | None], max_items: int = 6
     ) -> list[UserTurn]:
-        """Drain pending user interrupts, preserving queue order."""
+        """Drain interrupts for this user, leaving other users' turns queued."""
         interrupts: list[UserTurn] = []
-        while len(interrupts) < max_items and not interrupt_queue.empty():
+        deferred: list[UserTurn] = []
+        items_to_scan = interrupt_queue.qsize()
+        for _ in range(items_to_scan):
+            if interrupt_queue.empty():
+                break
             item = interrupt_queue.get_nowait()
             if item:
-                interrupts.append(coerce_user_turn(item))
+                turn = coerce_user_turn(item)
+                if len(interrupts) >= max_items or (
+                    turn.user_id and turn.user_id != self._history_user_id()
+                ):
+                    deferred.append(turn)
+                else:
+                    interrupts.append(turn)
+        for turn in deferred:
+            interrupt_queue.put_nowait(turn)
         return interrupts
 
     def _memory_dedupe_key(
@@ -1296,7 +1498,7 @@ class EmbodiedAgent:
         """Build a stable dedupe key to avoid duplicate writes on retries."""
         digest = hashlib.sha1(content.encode("utf-8", errors="ignore")).hexdigest()[:12]
         resolved_scope_id = scope_id or str(self._turn_count)
-        return f"{scope}:{resolved_scope_id}:{kind}:{digest}"
+        return f"{self._history_user_id()}:{scope}:{resolved_scope_id}:{kind}:{digest}"
 
     def _load_me_md(self) -> str:
         """Load ME.md personality file if it exists."""
@@ -3448,10 +3650,12 @@ class EmbodiedAgent:
 
     def _close_sync_resources(self) -> None:
         """Best-effort close the remaining synchronous stores."""
-        for closable in (
+        closables: list[Any] = [
             getattr(self, "_person_model", None),
             getattr(self, "_commitment_store", None),
-        ):
+        ]
+        closables.extend(getattr(self, "_relationships_by_user", {}).values())
+        for closable in closables:
             if closable is not None:
                 try:
                     closable.close()
@@ -3544,10 +3748,16 @@ class EmbodiedAgent:
         turn_source: str = "local",
     ) -> str:
         """Submit one turn to the coordinator shared by every input channel."""
+        input_turn = coerce_user_turn(user_input)
+        turn_user_id = (
+            user_id
+            or input_turn.user_id
+            or str(getattr(getattr(self, "_current_user", None), "id", "default"))
+        )
         request = TurnRequest(
             user_input=user_input,
             source=turn_source,
-            user_id=user_id,
+            user_id=user_id or input_turn.user_id,
             on_action=on_action,
             on_text=on_text,
             on_image=on_image,
@@ -3559,7 +3769,9 @@ class EmbodiedAgent:
             excluded_tools=excluded_tools,
             user_images=user_images,
         )
-        return await self._get_turn_coordinator().run(request)
+        cross_user_ids = self._cross_user_memory_targets(input_turn.text, turn_user_id)
+        with user_scope(turn_user_id), cross_user_memory_scope(cross_user_ids):
+            return await self._get_turn_coordinator().run(request)
 
     def _get_turn_coordinator(self) -> TurnCoordinator:
         """Return the coordinator, including for lightweight ``__new__`` tests."""
@@ -3697,6 +3909,7 @@ class EmbodiedAgent:
                     final_text=run_result.final_text,
                     desires=desires,
                     on_action=on_action,
+                    on_text=on_text,
                 )
 
             # max_iterations (or an unexpected stop reason): force a final,

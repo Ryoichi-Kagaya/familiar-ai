@@ -488,6 +488,20 @@ class EmbodiedAgentHook(RuntimeHookBase):
                     memory_parts.append(
                         agent._memory.format_behavior_policies_for_context(behavior_policies)
                     )
+                if agent._should_surface_unattributed_memory():
+                    unattributed = await _call_optional_async(
+                        getattr(agent._memory, "recall_unattributed_async", None),
+                        user_input,
+                        n=1,
+                        fallback=[],
+                    )
+                    if unattributed:
+                        legacy_context = agent._memory.format_unattributed_for_context(
+                            unattributed,
+                            agent._memory_owner_profiles(),
+                        )
+                        if legacy_context:
+                            memory_parts.append(legacy_context)
                 if temporal_ctx:
                     memory_parts.append(temporal_ctx)
                 if memory_parts:

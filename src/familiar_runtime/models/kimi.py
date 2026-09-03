@@ -188,6 +188,14 @@ class KimiBackend:
         # string); omitting it when thinking is enabled triggers a 400 error.
         raw_assistant: dict[str, Any] = {"role": "assistant", "content": text or None}
         reasoning_str = "".join(reasoning_chunks)
+        if not text.strip() and not tool_calls:
+            logger.warning(
+                "Kimi returned no visible content (finish_reason=%s, reasoning_chars=%d, "
+                "max_tokens=%d)",
+                finish_reason,
+                len(reasoning_str),
+                max_tokens,
+            )
         if reasoning_str or (stop == "tool_use" and tool_calls):
             raw_assistant["reasoning_content"] = reasoning_str
         # Only include tool_calls when finish_reason is "tool_calls".

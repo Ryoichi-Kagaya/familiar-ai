@@ -739,15 +739,21 @@ async def test_maybe_adapt_values_updates_curiosity_and_support_policies():
 
 
 @pytest.mark.asyncio
-async def test_run_empty_text_returns_no_response_placeholder():
-    """When model returns no text, run() returns the placeholder string."""
+async def test_run_empty_text_retries_with_visible_response():
+    """When the first model result is empty, run() retries without tools."""
     agent = _make_agent()
-    agent.backend.stream_turn = AsyncMock(return_value=(_turn("end_turn", text=""), ""))
+    agent.backend.stream_turn = AsyncMock(
+        side_effect=[
+            (_turn("end_turn", text=""), ""),
+            (_turn("end_turn", text="やあ！"), "やあ！"),
+        ]
+    )
 
     with _patch_heavy():
         result = await agent.run("hi")
 
-    assert result == "(no response)"
+    assert result == "やあ！"
+    assert agent.backend.stream_turn.await_count == 2
 
 
 @pytest.mark.asyncio

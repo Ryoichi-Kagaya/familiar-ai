@@ -36,12 +36,40 @@ def test_registry_create_sets_display_name(tmp_path):
     assert user.name == "ボブ"
 
 
+def test_registry_create_round_trips_aliases(tmp_path):
+    reg = UserRegistry(users_dir=tmp_path)
+    user = reg.create("sister", "ほのるる", aliases=["姉", "お姉ちゃん", "姉"])
+
+    assert user.aliases == ("姉", "お姉ちゃん")
+    assert reg.get("sister").aliases == ("姉", "お姉ちゃん")
+
+
+def test_registry_scopes_relationship_aliases_to_the_speaker(tmp_path):
+    reg = UserRegistry(users_dir=tmp_path)
+    user = reg.create(
+        "sister",
+        "ほのるる",
+        aliases_by_user={"default": ["姉", "お姉ちゃん", "姉"]},
+    )
+
+    assert "姉" in user.references_from("default")
+    assert "姉" not in user.references_from("mom")
+
+
 def test_registry_create_updates_existing(tmp_path):
     reg = UserRegistry(users_dir=tmp_path)
     reg.create("carol", "キャロル")
     reg.create("carol", "キャロル改")
     assert reg.get("carol").name == "キャロル改"
     assert sum(1 for e in reg._read() if e["id"] == "carol") == 1
+
+
+def test_registry_name_update_preserves_aliases_when_omitted(tmp_path):
+    reg = UserRegistry(users_dir=tmp_path)
+    reg.create("sister", "ほのるる", aliases=["姉"])
+    reg.create("sister", "ほのるる改")
+
+    assert reg.get("sister").aliases == ("姉",)
 
 
 def test_registry_get_reads_from_json(tmp_path):

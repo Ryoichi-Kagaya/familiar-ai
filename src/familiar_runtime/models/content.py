@@ -62,11 +62,17 @@ class UserTurn:
     text: str
     images: tuple[ImageAttachment, ...] = ()
     sent_at: datetime = field(default_factory=lambda: datetime.now().astimezone())
+    user_id: str | None = None
 
     def with_text(self, text: str) -> "UserTurn":
         """Return the same attachments paired with context-enriched text."""
 
-        return UserTurn(text=text, images=self.images, sent_at=self.sent_at)
+        return UserTurn(
+            text=text,
+            images=self.images,
+            sent_at=self.sent_at,
+            user_id=self.user_id,
+        )
 
 
 def coerce_user_turn(value: str | UserTurn) -> UserTurn:

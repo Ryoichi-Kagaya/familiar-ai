@@ -62,6 +62,7 @@ from ._ui_helpers import (
     DESIRE_COOLDOWN,
     IDLE_CHECK_INTERVAL,
     TurnOutputState,
+    collapse_exact_repetition,
     commitment_reminder_prompt,
     format_action,
     format_tool_result,
@@ -1454,12 +1455,25 @@ class FamiliarWindow(QMainWindow):
     def _on_user_combo_changed(self, index: int) -> None:
         user_id = self._user_combo.itemData(index)
         if user_id and user_id != self._current_user_id:
-            self._create_task(self._switch_user_async(user_id))
+            # Capture the selection immediately. Queued messages carry this ID,
+            # even if the asynchronous agent switch has not completed yet.
+            self._current_user_id = user_id
+            selected_name = str(self._user_combo.itemText(index)).removeprefix("👤 ").strip()
+            if selected_name:
+                self._companion_display_name = selected_name
+                self._log.set_companion_label(selected_name)
+            self._user_switch_generation = getattr(self, "_user_switch_generation", 0) + 1
+            generation = self._user_switch_generation
+            self._create_task(self._switch_user_async(user_id, generation))
 
-    async def _switch_user_async(self, user_id: str) -> None:
+    async def _switch_user_async(self, user_id: str, generation: int | None = None) -> None:
         if self._agent is None:
             return
+        if generation is not None and generation != self._user_switch_generation:
+            return
         name = await self._agent.switch_user(user_id)
+        if generation is not None and generation != self._user_switch_generation:
+            return
         self._current_user_id = user_id
         self._companion_display_name = name
         self._log.set_companion_label(name)
@@ -1573,8 +1587,10 @@ class FamiliarWindow(QMainWindow):
         if not text:
             text = "この画像を見て。"
         self._input.clear()
-        user_input = coerce_user_turn(
-            UserTurn(text=text, images=pending_images) if pending_images else text
+        user_input = UserTurn(
+            text=text,
+            images=pending_images,
+            user_id=getattr(self, "_current_user_id", None),
         )
         if pending_images:
             self._pending_images.clear()
@@ -1693,6 +1709,10 @@ class FamiliarWindow(QMainWindow):
             self._realtime_stt.on_partial = self._on_realtime_stt_partial
             self._realtime_stt.on_committed = self._on_realtime_stt_committed
             self._realtime_stt.on_restart = self._on_realtime_stt_restart
+            self._realtime_stt.make_user_turn = lambda text: UserTurn(
+                text=text,
+                user_id=self._current_user_id,
+            )
             await self._realtime_stt.start(loop, self._input_queue)
             self._set_last_error(None)
             self._log.append_line("🎤 Realtime STT ON (ElevenLabs)")
@@ -1749,7 +1769,7 @@ class FamiliarWindow(QMainWindow):
             if text:
                 self._log.append_line(f"{self._companion_display_name} 🎙 {text}")
                 self._append_log(f"{self._companion_display_name} 🎙 {text}")
-                self._input_queue.put_nowait(coerce_user_turn(text))
+                self._input_queue.put_nowait(UserTurn(text=text, user_id=self._current_user_id))
         except Exception as exc:
             logger.warning("Batch STT error: %s", exc)
             self._log.append_line(f"[error] STT: {exc}")
@@ -1948,6 +1968,7 @@ class FamiliarWindow(QMainWindow):
             self._stream.set_status(self._startup_status)
             return
         user_turn = coerce_user_turn(user_input)
+        turn_user_id = user_turn.user_id or self._current_user_id
         turn_started = time.perf_counter()
         self._agent_running = True
         self._cancel_requested = False
@@ -2041,7 +2062,7 @@ class FamiliarWindow(QMainWindow):
                     desires=self._desires,
                     inner_voice=inner_voice,
                     interrupt_queue=self._input_queue,
-                    user_id=self._current_user_id,
+                    user_id=turn_user_id,
                     turn_source="gui-autonomous" if inner_voice else "gui",
                 )
             )
@@ -2051,7 +2072,7 @@ class FamiliarWindow(QMainWindow):
             # (clean, tags stripped). Suppress final_text to avoid the LLM's
             # post-say text echo (same content with raw audio tags) appearing again.
             if output_state.surface_model_text:
-                display = committed.strip() or final_text.strip()
+                display = collapse_exact_repetition(committed.strip() or final_text.strip())
                 if display and display != "(no response)":
                     self._log.append_line(f"[{self._agent_display_name}] {display}")
                     self._append_log(f"{self._agent_display_name} ▶ {display}")
